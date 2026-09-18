@@ -1,6 +1,6 @@
-# OmniCourt Analysis Architecture
+# Netoval Analysis Architecture
 
-OmniCourt treats the court floor as a calibrated plane and keeps two distinct coordinate systems. A projective transform maps pixel locations to 2D court meters for feet, recovery positions, coverage, and shot-origin summaries. A separate camera-pose estimate is required for true 3D reasoning; planar homography alone must not be presented as a complete reconstruction of shuttle height, racket depth, or joint depth.
+Netoval treats the court floor as a calibrated plane and keeps two distinct coordinate systems. A projective transform maps pixel locations to 2D court meters for feet, recovery positions, coverage, and shot-origin summaries. A separate camera-pose estimate is required for true 3D reasoning; planar homography alone must not be presented as a complete reconstruction of shuttle height, racket depth, or joint depth.
 
 | Product surface | Method | Validation rule |
 | --- | --- | --- |

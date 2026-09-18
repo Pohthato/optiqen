@@ -70,7 +70,7 @@ describe("analysis worker handoff", () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ input: request, policy: { executionTimeout: 900_000, ttl: 3_600_000 } });
   });
 
-  it("maps RunPod status responses to the OmniCourt lifecycle", async () => {
+  it("maps RunPod status responses to the Netoval lifecycle", async () => {
     vi.stubEnv("CV_WORKER_URL", "https://api.runpod.ai/v2/endpoint-1");
     const fetchMock = vi
       .fn()
@@ -124,7 +124,7 @@ describe("analysis worker handoff", () => {
     );
   });
 
-  it("maps RunPod timeout to a failed OmniCourt job", async () => {
+  it("maps RunPod timeout to a failed Netoval job", async () => {
     vi.stubEnv("CV_WORKER_URL", "https://api.runpod.ai/v2/endpoint-1");
     vi.stubGlobal(
       "fetch",

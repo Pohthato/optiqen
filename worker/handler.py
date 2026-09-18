@@ -1,4 +1,4 @@
-"""OmniCourt RunPod worker.
+"""Netoval RunPod worker.
 
 Pose and shuttle outputs are confidence-gated. Shot labels require observed
 contact plus a post-contact shuttle track. Warmup jobs load models without
@@ -28,7 +28,7 @@ from badminton import (
     court_width_m,
 )
 
-MODEL_DIR = Path(os.environ.get("MODEL_DIR", "/opt/omnicourt/models"))
+MODEL_DIR = Path(os.environ.get("MODEL_DIR", "/opt/netoval/models"))
 POSE_MODEL_PATH = MODEL_DIR / os.environ.get("POSE_MODEL_FILE", "badminton_pose.pt")
 SHUTTLE_MODEL_PATH = MODEL_DIR / os.environ.get("SHUTTLE_MODEL_FILE", "shuttlecock_yolov8n.pt")
 RACKET_MODEL_PATH = MODEL_DIR / os.environ.get("RACKET_MODEL_FILE", "badminton_racket.pt")
@@ -36,7 +36,7 @@ MAX_VIDEO_SECONDS = float(os.environ.get("MAX_VIDEO_SECONDS", "120"))
 POSE_SAMPLE_FPS = float(os.environ.get("POSE_SAMPLE_FPS", "12"))
 SHUTTLE_SAMPLE_FPS = float(os.environ.get("SHUTTLE_SAMPLE_FPS", "30"))
 MIN_CONFIDENCE = float(os.environ.get("MIN_DETECTION_CONFIDENCE", "0.55"))
-PROCESSING_VERSION = os.environ.get("PROCESSING_VERSION", "omnicourt-badminton-worker-2.0.0")
+PROCESSING_VERSION = os.environ.get("PROCESSING_VERSION", "netoval-badminton-worker-2.0.0")
 # RunPod workers handle one job per process by default. Setting concurrency lets
 # ONE warm GPU accept several small video analyses in parallel — the three YOLO
 # nano/medium-class models share a 12-24 GB card comfortably at 2-3 processes.
@@ -353,7 +353,7 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
         timings = {"download": 0.0, "decode": 0.0, "inference": 0.0, "render": 0.0, "total": 0.0}
         warnings = list(MODELS.warnings)
         requested = set(data["requestedLayers"])
-        with tempfile.TemporaryDirectory(prefix="omnicourt-") as temp:
+        with tempfile.TemporaryDirectory(prefix="netoval-") as temp:
             video_path = Path(temp) / "source.mp4"
             phase_start = time.perf_counter()
             download_source(data["sourceVideoUrl"], video_path)

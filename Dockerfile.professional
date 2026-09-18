@@ -1,4 +1,4 @@
-# Professional OmniCourt Dockerfile
+# Professional Netoval Dockerfile
 # Multi-stage build for optimized image size
 
 FROM nvidia/cuda:11.8.0-runtime-ubuntu22.04 AS base

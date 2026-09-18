@@ -1,8 +1,8 @@
-# OmniCourt Professional - Deployment Guide
+# Netoval Professional - Deployment Guide
 
 ## Architecture Overview
 
-OmniCourt Professional is a production-grade AI badminton analysis platform with:
+Netoval Professional is a production-grade AI badminton analysis platform with:
 - Advanced court detection (multiple strategies)
 - Real-time player skeleton tracking
 - Deep biomechanical analysis
@@ -35,7 +35,7 @@ OmniCourt Professional is a production-grade AI badminton analysis platform with
 
 ```bash
 git clone <repository-url>
-cd omnicourt_v5_flowfix
+cd netoval
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
@@ -67,7 +67,7 @@ FLASK_APP=app_professional.py
 REDIS_URL=redis://localhost:6379/0
 
 # Database
-DATABASE_URL=postgresql://user:password@localhost:5432/omnicourt
+DATABASE_URL=postgresql://user:password@localhost:5432/netoval
 
 # Security
 SECRET_KEY=your-secret-key-here
@@ -103,7 +103,7 @@ gunicorn -w 4 -b 0.0.0.0:5000 app_professional:app
 ### Build Image
 
 ```bash
-docker build -f Dockerfile.professional -t omnicourt:latest .
+docker build -f Dockerfile.professional -t netoval:latest .
 ```
 
 ### Run Container
@@ -115,8 +115,8 @@ docker run -d \
   -v $(pwd)/uploads:/app/uploads \
   -v $(pwd)/models:/app/models \
   --env-file .env \
-  --name omnicourt \
-  omnicourt:latest
+  --name netoval \
+  netoval:latest
 ```
 
 ### Docker Compose
@@ -225,10 +225,10 @@ curl http://localhost:5000/health
 
 ### Logging
 
-All activities logged to `omnicourt.log`:
+All activities logged to `netoval.log`:
 
 ```bash
-tail -f omnicourt.log
+tail -f netoval.log
 ```
 
 ### Performance Metrics
@@ -269,7 +269,7 @@ choco install ffmpeg
 
 Check logs:
 ```bash
-tail -f omnicourt.log | grep ERROR
+tail -f netoval.log | grep ERROR
 ```
 
 Common issues:
@@ -314,7 +314,7 @@ For large scale deployments:
 ```python
 from celery import Celery
 
-celery = Celery('omnicourt')
+celery = Celery('netoval')
 celery.conf.update(
   broker='redis://redis:6379/0',
   backend='redis://redis:6379/0'
@@ -359,7 +359,7 @@ Try manual calibration via `/calibrate-court` endpoint.
 
 ## License & Attribution
 
-OmniCourt Professional uses:
+Netoval Professional uses:
 - YOLOv8 (Ultralytics)
 - PyTorch (Meta)
 - OpenCV (BSD License)

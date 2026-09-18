@@ -2,7 +2,7 @@
 
 ## Observed request
 
-On 2026-09-04, OmniCourt analysis `BJsVYacki5DjEMlyLu` created worker job `7137478d-7c95-4627-af4e-4546543a14e4-e2`. The application repeatedly read the analysis as `status: queued`, with the last local record update at 21:05:56. A direct authenticated request to the RunPod status endpoint returned HTTP 200 with `{"id":"7137478d-7c95-4627-af4e-4546543a14e4-e2","status":"IN_QUEUE"}`.
+On 2026-09-04, Netoval analysis `BJsVYacki5DjEMlyLu` created worker job `7137478d-7c95-4627-af4e-4546543a14e4-e2`. The application repeatedly read the analysis as `status: queued`, with the last local record update at 21:05:56. A direct authenticated request to the RunPod status endpoint returned HTTP 200 with `{"id":"7137478d-7c95-4627-af4e-4546543a14e4-e2","status":"IN_QUEUE"}`.
 
 ## Interpretation
 
@@ -14,4 +14,4 @@ RunPod’s troubleshooting guidance recommends checking worker logs, verifying l
 
 ## Next diagnostic action
 
-Open the endpoint in RunPod Console → Serverless → endpoint `xaf4k97pm1jkj9`, inspect Workers and Logs for the initializing worker, then inspect Metrics for cold-start and delay values. If the worker never reaches running/ready, the issue is external to OmniCourt’s HTTP handoff and likely resides in the worker image, model download, dependency initialization, GPU compatibility, or endpoint capacity configuration.
+Open the endpoint in RunPod Console → Serverless → endpoint `xaf4k97pm1jkj9`, inspect Workers and Logs for the initializing worker, then inspect Metrics for cold-start and delay values. If the worker never reaches running/ready, the issue is external to Netoval’s HTTP handoff and likely resides in the worker image, model download, dependency initialization, GPU compatibility, or endpoint capacity configuration.

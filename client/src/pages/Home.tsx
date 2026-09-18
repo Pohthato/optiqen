@@ -321,7 +321,7 @@ export default function Home() {
       ? (sessionQuery.data.result as StoredAnalysisResult | null)
       : null;
   const annotatedVideoUrl = completedResult?.annotatedVideoStorageKey
-    ? `/manus-storage/${completedResult.annotatedVideoStorageKey}`
+    ? `/api/local-storage/${completedResult.annotatedVideoStorageKey}`
     : null;
   const verifiedOverlayFrames = getCompletedOverlayFrames({
     status: sessionQuery.data?.status,
@@ -390,7 +390,7 @@ export default function Home() {
       return;
     }
     toast.info(
-      "Local sign-in is not configured. Add VITE_OAUTH_PORTAL_URL and VITE_APP_ID to .env.local, or open the hosted OmniCourt app to sign in."
+      "Local sign-in is not configured. Add VITE_OAUTH_PORTAL_URL and VITE_APP_ID to .env.local, or open the hosted Netoval app to sign in."
     );
   };
 
@@ -423,7 +423,7 @@ export default function Home() {
         startLogin();
       } else {
         toast.info(
-          "Local sign-in is not configured. Add VITE_OAUTH_PORTAL_URL and VITE_APP_ID to .env.local, or open the hosted OmniCourt app to sign in."
+          "Local sign-in is not configured. Add VITE_OAUTH_PORTAL_URL and VITE_APP_ID to .env.local, or open the hosted Netoval app to sign in."
         );
       }
       return;
@@ -564,7 +564,7 @@ export default function Home() {
             </div>
             <div>
               <p className="text-[15px] font-extrabold tracking-[-0.045em] text-white">
-                OMNICOURT
+                NETOVAL
               </p>
               <p className="font-mono-data text-[9px] tracking-[0.18em] text-[#b7fa59]">
                 PERFORMANCE LAB

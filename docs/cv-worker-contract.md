@@ -1,4 +1,4 @@
-# OmniCourt Computer-Vision Worker Contract
+# Netoval Computer-Vision Worker Contract
 
 The web application accepts an uploaded source video, persists a calibrated session, and submits a worker request to `POST /v1/analysis-jobs`. The GPU worker is the only component permitted to claim that an observation was detected in a frame. It returns results through `GET /v1/analysis-jobs/{jobId}` or an authenticated callback that invokes the app’s result-acceptance procedure.
 

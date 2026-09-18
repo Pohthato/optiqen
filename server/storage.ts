@@ -1,8 +1,10 @@
-// Preconfigured storage helpers for Manus WebDev templates
+// Storage helpers for local development and production object storage.
 // Uploads via Forge Server presigned URL to S3 (PUT direct).
 // Downloads return /manus-storage/{key} paths served via 307 redirect.
 
 import { ENV } from "./_core/env";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 function getForgeConfig() {
   const forgeUrl = ENV.forgeApiUrl;
@@ -15,6 +17,46 @@ function getForgeConfig() {
   }
 
   return { forgeUrl: forgeUrl.replace(/\/+$/, ""), forgeKey };
+}
+
+function useLocalStorage() {
+  return process.env.LOCAL_STORAGE_ENABLED === "true";
+}
+
+function localStorageRoot() {
+  return path.resolve(process.env.LOCAL_STORAGE_DIR ?? "uploads");
+}
+
+function localStoragePath(key: string) {
+  const root = localStorageRoot();
+  const resolved = path.resolve(root, normalizeKey(key));
+  if (!resolved.startsWith(`${root}${path.sep}`)) throw new Error("Invalid storage key");
+  return resolved;
+}
+
+export function registerLocalStorageRoutes(app: { put: Function; get: Function }) {
+  if (!useLocalStorage()) return;
+  app.put("/api/local-storage/*", async (req: any, res: any) => {
+    try {
+      const destination = localStoragePath(req.params[0] as string);
+      await fs.mkdir(path.dirname(destination), { recursive: true });
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", async () => {
+        await fs.writeFile(destination, Buffer.concat(chunks));
+        res.status(200).json({ ok: true });
+      });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Upload failed" });
+    }
+  });
+  app.get("/api/local-storage/*", (req: any, res: any) => {
+    try {
+      res.sendFile(localStoragePath(req.params[0] as string));
+    } catch {
+      res.status(404).json({ error: "File not found" });
+    }
+  });
 }
 
 function normalizeKey(relKey: string): string {
@@ -32,6 +74,11 @@ export async function storageCreateUploadUrl(
   relKey: string,
   contentType = "application/octet-stream",
 ): Promise<{ key: string; uploadUrl: string; contentType: string }> {
+  if (useLocalStorage()) {
+    const key = appendHashSuffix(normalizeKey(relKey));
+    const baseUrl = (process.env.LOCAL_STORAGE_BASE_URL ?? process.env.PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+    return { key, uploadUrl: `${baseUrl}/api/local-storage/${key}`, contentType };
+  }
   const { forgeUrl, forgeKey } = getForgeConfig();
   const key = appendHashSuffix(normalizeKey(relKey));
   const presignUrl = new URL("v1/storage/presign/put", forgeUrl + "/");
@@ -99,6 +146,10 @@ export async function storageGet(relKey: string): Promise<{ key: string; url: st
 }
 
 export async function storageGetSignedUrl(relKey: string): Promise<string> {
+  if (useLocalStorage()) {
+    const baseUrl = (process.env.LOCAL_STORAGE_BASE_URL ?? process.env.PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+    return `${baseUrl}/api/local-storage/${normalizeKey(relKey)}`;
+  }
   const { forgeUrl, forgeKey } = getForgeConfig();
   const key = normalizeKey(relKey);
 

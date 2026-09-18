@@ -12,6 +12,7 @@ import crypto from "node:crypto";
 import { reconcileAnalysisWorkerJob } from "../analysisCompletion";
 import { getWorkerCallbackToken } from "../analysisWorker";
 import { startKeepWarmScheduler } from "../warmupScheduler";
+import { registerLocalStorageRoutes } from "../storage";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -41,6 +42,7 @@ async function startServer() {
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+  registerLocalStorageRoutes(app);
   app.post("/api/worker-complete/:analysisId", async (req, res) => {
     const expected = getWorkerCallbackToken(req.params.analysisId);
     const received = typeof req.query.token === "string" ? req.query.token : "";

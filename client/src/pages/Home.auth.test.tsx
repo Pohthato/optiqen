@@ -84,7 +84,7 @@ describe("Home authentication and calibration interactions", () => {
   it("starts hosted sign-in from the unauthenticated avatar when OAuth is configured", () => {
     authState.isAuthenticated = false;
     vi.stubEnv("VITE_OAUTH_PORTAL_URL", "https://auth.example.test");
-    vi.stubEnv("VITE_APP_ID", "omnicourt-local");
+    vi.stubEnv("VITE_APP_ID", "netoval-local");
     render(<Home />);
     fireEvent.click(screen.getByRole("button", { name: "Sign in to analyze" }));
     expect(startLoginMock).toHaveBeenCalledTimes(1);

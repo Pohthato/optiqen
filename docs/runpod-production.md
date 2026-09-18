@@ -1,6 +1,6 @@
 # RunPod production configuration
 
-OmniCourt uses a queue-based endpoint (`/run`) because a video analysis can
+Netoval uses a queue-based endpoint (`/run`) because a video analysis can
 take longer than an HTTP request. The web application sends a short-lived
 read-only source URL, never storage credentials. RunPod returns the job ID;
 the app polls `/status/{jobId}` and also registers a signed completion webhook.
@@ -20,8 +20,8 @@ waking GPU.
 2. Build and push from the repository root:
 
    ```bash
-   docker build -f worker/Dockerfile -t your-registry/omnicourt-worker:2.0.0 .
-   docker push your-registry/omnicourt-worker:2.0.0
+  docker build -f worker/Dockerfile -t pohthato/netoval-worker:2.0.0 .
+  docker push pohthato/netoval-worker:2.0.0
    ```
 
 3. Create a **queue-based** RunPod Serverless endpoint using that immutable
@@ -33,7 +33,7 @@ waking GPU.
    ```text
    CV_WORKER_URL=https://api.runpod.ai/v2/YOUR_ENDPOINT_ID
    CV_WORKER_TOKEN=RUNPOD_API_KEY
-   PUBLIC_APP_URL=https://your-omnicourt-domain
+  PUBLIC_APP_URL=https://your-netoval-domain
    WORKER_CALLBACK_SECRET=a-long-random-secret
    CV_WORKER_EXECUTION_TIMEOUT_MS=900000
    CV_WORKER_TTL_MS=3600000
@@ -44,7 +44,7 @@ waking GPU.
 
 ## Warm pool plus burst (one GPU ready, many users still cheap)
 
-RunPod workers process **one video at a time by default**. The OmniCourt worker
+RunPod workers process **one video at a time by default**. The Netoval worker
 now runs **two analysis processes per worker** (`HANDLER_CONCURRENCY=2`), so one
 warm GPU can serve two concurrent video analyses. Concurrent users beyond that
 are handled by a short queue on the warm workers, then extra workers only if the

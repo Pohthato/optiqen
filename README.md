@@ -1,4 +1,4 @@
-# OmniCourt Pro — Badminton AI Analyzer
+# Netoval — Badminton AI Analyzer
 
 ## Features
 - **Player Detection & Pose**: YOLOv8-Pose badminton action model with confident
