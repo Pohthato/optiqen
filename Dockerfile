@@ -1,23 +1,28 @@
-FROM python:3.12-slim
+FROM node:22-bookworm-slim AS build
 
 WORKDIR /app
 
-# Install system deps
-RUN apt-get update && apt-get install -y     libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender-dev     redis-tools ffmpeg     && rm -rf /var/lib/apt/lists/*
+RUN corepack enable
 
-# Install Python deps
-COPY requirements_v2.txt .
-RUN pip install --no-cache-dir -r requirements_v2.txt
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
 
-# Download YOLOv8-Pose model
-RUN python -c "from ultralytics import YOLO; YOLO('yolov8s-pose.pt')"
-
-# Copy app
 COPY . .
+RUN pnpm build
 
-# Create dirs
-RUN mkdir -p uploads static templates logs models
+FROM node:22-bookworm-slim AS production
 
-EXPOSE 5000
+WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=3000
 
-CMD ["python", "app_v2.py"]
+RUN corepack enable
+
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile --prod
+
+COPY --from=build /app/dist ./dist
+
+EXPOSE 3000
+
+CMD ["pnpm", "start"]
