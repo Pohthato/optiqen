@@ -43,6 +43,17 @@ export const analysisResultSchema = z.object({
     courtType: z.enum(["singles", "doubles"]).optional(),
   }),
   courtType: z.enum(["singles", "doubles"]).optional(),
+  camera: z.object({
+    cameraTier: z.enum(["validated", "approximate", "unavailable"]),
+    rmsPx: z.number().finite().nonnegative(),
+    focalPx: z.number().finite().positive(),
+    k1: z.number().finite(),
+    looFloorCm: z.number().finite().nonnegative().nullable(),
+    geometryTier: z.enum(["A", "B", "C"]),
+    elevationDeg: z.number().finite(),
+    visibleFraction: z.number().min(0).max(1),
+    reasons: z.array(z.string().min(1).max(300)).max(8),
+  }).nullable().optional(),
   quality: z.object({
     usableFrameRatio: z.number().min(0).max(1),
     poseTrackConfidence: z.number().min(0).max(1),
