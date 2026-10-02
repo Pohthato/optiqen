@@ -19,6 +19,27 @@ results/<clipId>.json    the worker's job output for the same clip
 Keep the source videos outside git (they are large and private); the labels and
 results are small and belong in the repo or the team drive.
 
+## The labeller
+
+`tools/labeller/index.html` is a zero-install browser tool that writes this schema
+directly — open the file in Chrome or Edge (no server needed). Open the clip, check
+the detected FPS against the phone's setting (keep the tab in front while it
+detects; press **Detect FPS** to retry, or type the value), then:
+
+- step with `,` and `.` (one frame) or `<` and `>` (ten); play at 0.25× with `[`;
+- press `C` at each contact, then `1`–`9`/`0` for the shot type
+  (serve clear drop net lift drive push smash block other);
+- press `R` at a rally's start and again at its end, then `N`/`F`/`U` for the
+  winner (near/far/unknown, as seen from the camera);
+- pick a court-point name and click it on a clear, paused frame;
+- **Save labels** downloads `<clipId>.json`. Work autosaves in the browser, and
+  **Load labels** resumes a saved file.
+
+To pre-label, run the clip through the worker first and use **Load worker
+result**: its detected contacts appear as `other`/verified-shot labels for you to
+correct, which is much faster than starting from nothing. Shuttle landing points
+are left `null` in this version.
+
 ## Labelling a clip
 
 1. **Court keypoints** — on one clear frame, click as many named court

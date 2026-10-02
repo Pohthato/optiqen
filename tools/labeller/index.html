@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Golden Set Labeller</title>
+<style>
+  :root { --bg:#f6f7f9; --panel:#fff; --ink:#15181d; --muted:#5d6672; --line:#d9dde3; --accent:#1f6feb; --ok:#1a7f37; --warn:#9a6700; --mark:#ffcc00; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1216; --panel:#171b21; --ink:#e8ebef; --muted:#9aa4b0; --line:#2a3039; --accent:#5aa2ff; --ok:#3fb950; --warn:#d29922; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.4 system-ui, sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:8px 12px; align-items:center; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line); }
+  header label.field { display:flex; gap:6px; align-items:center; color:var(--muted); }
+  input, select, button, .btn { font:inherit; color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:5px 9px; }
+  .btn, button { cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  input[type=number] { width:90px; }
+  main { display:grid; grid-template-columns:minmax(0,1fr) 360px; gap:16px; padding:16px; }
+  @media (max-width: 960px) { main { grid-template-columns:1fr; } }
+  #wrap { position:relative; display:inline-block; max-width:100%; background:#000; line-height:0; }
+  video { max-width:100%; max-height:70vh; display:block; }
+  canvas { position:absolute; left:0; top:0; cursor:crosshair; }
+  #readout { margin:8px 0; color:var(--muted); font-variant-numeric:tabular-nums; }
+  #status { color:var(--muted); }
+  #status.error { color:#cf222e; }
+  #warnings { color:var(--warn); margin:6px 0; }
+  aside section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:12px; }
+  h2 { margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  td, th { padding:3px 4px; text-align:left; border-bottom:1px solid var(--line); }
+  tr.selected { background:color-mix(in srgb, var(--accent) 16%, transparent); }
+  tr[data-index] { cursor:pointer; }
+  ul { list-style:none; margin:0; padding:0; }
+  li { display:flex; gap:8px; align-items:center; padding:2px 0; }
+  .hint { color:var(--muted); margin:6px 0 0; font-size:12px; }
+  kbd { background:var(--bg); border:1px solid var(--line); border-radius:4px; padding:0 5px; font:12px ui-monospace, monospace; }
+  .x { margin-left:auto; padding:0 7px; }
+</style>
+</head>
+<body>
+<header>
+  <label class="btn">Open video <input id="video-file" type="file" accept="video/*" hidden></label>
+  <label class="btn">Load labels <input id="labels-file" type="file" accept=".json,application/json" hidden></label>
+  <label class="btn">Load worker result <input id="result-file" type="file" accept=".json,application/json" hidden></label>
+  <label class="field">Clip ID <input id="clip-id" size="16" placeholder="clip-001"></label>
+  <label class="field">FPS <input id="fps" type="number" min="1" step="0.001" value="30"></label>
+  <button id="detect-fps" title="Play a moment of the clip to measure its frame rate">Detect FPS</button>
+  <button id="save" class="primary">Save labels</button>
+  <span id="status">Open a video to begin.</span>
+</header>
+<main>
+  <section>
+    <div id="wrap"><video id="video" muted playsinline></video><canvas id="overlay"></canvas></div>
+    <div id="readout">frame <b id="frame-no">0</b> · <b id="time-ms">0</b> ms · speed <b id="speed">1</b>×</div>
+    <div id="warnings"></div>
+  </section>
+  <aside>
+    <section>
+      <h2>Court points</h2>
+      <select id="kp-select"></select>
+      <p class="hint">Pick a name, then click that point on the paused frame. Use a frame where the court is clearly visible.</p>
+      <ul id="kp-list"></ul>
+    </section>
+    <section>
+      <h2>Contacts</h2>
+      <table><thead><tr><th>#</th><th>ms</th><th>frame</th><th>shot</th><th></th></tr></thead><tbody id="contacts"></tbody></table>
+    </section>
+    <section>
+      <h2>Rallies</h2>
+      <ul id="rallies"></ul>
+    </section>
+    <section>
+      <h2>Keys</h2>
+      <p class="hint"><kbd>Space</kbd> play/pause · <kbd>,</kbd> <kbd>.</kbd> step 1 frame · <kbd>&lt;</kbd> <kbd>&gt;</kbd> step 10 · <kbd>[</kbd> <kbd>]</kbd> slower/faster<br>
+      <kbd>C</kbd> mark contact · <kbd>1</kbd>–<kbd>9</kbd>,<kbd>0</kbd> shot: serve clear drop net lift drive push smash block other<br>
+      <kbd>R</kbd> start/end rally · <kbd>N</kbd> <kbd>F</kbd> <kbd>U</kbd> winner near/far/unknown · <kbd>Del</kbd> delete contact</p>
+    </section>
+  </aside>
+</main>
+<script src="labeller-core.js"></script>
+<script>
+(() => {
+  "use strict";
+  const C = window.LabellerCore;
+  const $ = id => document.getElementById(id);
+  const video = $("video");
+  const overlay = $("overlay");
+  const ctx = overlay.getContext("2d");
+  let state = C.emptyState("", 30, [0, 0]);
+  let selectedContact = -1;
+
+  const fps = () => {
+    const value = Number($("fps").value);
+    return Number.isFinite(value) && value > 0 ? value : 30;
+  };
+  const storageKey = () => `optiqen-labeller:${state.clipId}`;
+  const currentMs = () => C.frameTimeMs(C.frameIndexAt(video.currentTime, fps()), fps());
+
+  function say(message, isError = false) {
+    $("status").textContent = message;
+    $("status").className = isError ? "error" : "";
+  }
+
+  function persist() {
+    state.clipId = $("clip-id").value.trim();
+    state.fps = fps();
+    if (!state.clipId) return;
+    try { localStorage.setItem(storageKey(), JSON.stringify(state)); } catch { /* storage unavailable: manual save still works */ }
+  }
+
+  function seekToMs(ms) {
+    video.pause();
+    video.currentTime = C.frameCentreSeconds(C.frameIndexAt(ms / 1000, fps()), fps());
+  }
+
+  function step(frames) {
+    video.pause();
+    video.currentTime = C.stepSeconds(video.currentTime, frames, fps(), video.duration || 0);
+  }
+
+  function renderKeypoints() {
+    const select = $("kp-select");
+    if (!select.options.length) {
+      for (const name of C.KEYPOINT_NAMES) select.add(new Option(name, name));
+    }
+    for (const option of select.options) option.textContent = (state.keypoints[option.value] ? "✓ " : "") + option.value;
+    $("kp-list").innerHTML = Object.keys(state.keypoints)
+      .map(name => `<li><span>${name}</span><button class="x" data-remove-kp="${name}" title="Remove">×</button></li>`).join("");
+  }
+
+  function renderContacts() {
+    $("contacts").innerHTML = state.contacts.map((contact, index) => {
+      const options = C.SHOT_LABELS.map(label => `<option${label === contact.label ? " selected" : ""}>${label}</option>`).join("");
+      const frame = C.frameIndexAt(contact.timeMs / 1000, fps());
+      return `<tr data-index="${index}" class="${index === selectedContact ? "selected" : ""}"><td>${index + 1}</td><td>${contact.timeMs}</td><td>${frame}</td>` +
+        `<td><select data-label="${index}">${options}</select></td><td><button data-remove="${index}" title="Delete">×</button></td></tr>`;
+    }).join("");
+  }
+
+  function renderRallies() {
+    $("rallies").innerHTML = state.rallies.map((rally, index) => {
+      const options = ["near", "far", "unknown"].map(w => `<option${w === rally.winner ? " selected" : ""}>${w}</option>`).join("");
+      return `<li><span>${rally.startMs}–${rally.endMs === null ? "open" : rally.endMs} ms</span><select data-winner="${index}">${options}</select></li>`;
+    }).join("");
+  }
+
+  function drawOverlay() {
+    // Size the canvas from the video's exact (fractional) box so click positions map to
+    // video pixels without a rounding offset.
+    const box = video.getBoundingClientRect();
+    overlay.width = Math.round(box.width);
+    overlay.height = Math.round(box.height);
+    overlay.style.width = `${box.width}px`;
+    overlay.style.height = `${box.height}px`;
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    if (!video.videoWidth) return;
+    const scale = overlay.width / video.videoWidth;
+    ctx.font = "12px system-ui, sans-serif";
+    for (const [name, point] of Object.entries(state.keypoints)) {
+      const x = point.x * scale, y = point.y * scale;
+      ctx.strokeStyle = "#ffcc00"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x - 10, y); ctx.lineTo(x + 10, y); ctx.moveTo(x, y - 10); ctx.lineTo(x, y + 10); ctx.stroke();
+      ctx.fillStyle = "#ffcc00"; ctx.fillText(name, x + 9, y - 8);
+    }
+  }
+
+  function render() {
+    renderKeypoints(); renderContacts(); renderRallies(); drawOverlay();
+    $("warnings").innerHTML = C.buildGolden(state).warnings.map(w => `<div>⚠ ${w}</div>`).join("");
+    persist();
+  }
+
+  function updateReadout() {
+    $("frame-no").textContent = C.frameIndexAt(video.currentTime, fps());
+    $("time-ms").textContent = currentMs();
+    $("speed").textContent = video.playbackRate;
+  }
+
+  function download(name, text) {
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+    link.download = name;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  }
+
+  // Playback is the only way a browser exposes frame timestamps. Chrome refuses to play
+  // video in a hidden tab, so a failed detection must leave nothing behind that could
+  // pause or rewind the clip later: the pending frame callback is always cancelled.
+  let detectHandle = null;
+  function stopDetect() {
+    if (detectHandle !== null && video.cancelVideoFrameCallback) video.cancelVideoFrameCallback(detectHandle);
+    detectHandle = null;
+  }
+
+  function detectFps() {
+    if (!("requestVideoFrameCallback" in video)) { say("This browser cannot detect FPS — enter it manually.", true); return; }
+    if (!video.videoWidth) { say("Open a video first.", true); return; }
+    stopDetect();
+    const stamps = [];
+    const onFrame = (_now, meta) => {
+      stamps.push(meta.mediaTime);
+      if (stamps.length < 24) { detectHandle = video.requestVideoFrameCallback(onFrame); return; }
+      detectHandle = null;
+      video.pause();
+      const detected = C.fpsFromMediaTimes(stamps);
+      if (detected) { $("fps").value = detected; state.fps = detected; say(`Detected ${detected} fps — check it matches the phone's setting.`); }
+      else say("Could not detect FPS — enter it manually.", true);
+      video.currentTime = 0;
+      render();
+    };
+    detectHandle = video.requestVideoFrameCallback(onFrame);
+    video.currentTime = 0;
+    video.play().catch(() => {
+      stopDetect();
+      say("Could not play the clip to detect FPS (keep this tab in front and press Detect FPS) — or enter it manually.", true);
+    });
+  }
+
+  $("video-file").addEventListener("change", event => {
+    const file = event.target.files[0];
+    if (!file) return;
+    video.src = URL.createObjectURL(file);
+    $("clip-id").value = file.name.replace(/\.[^.]+$/, "");
+    video.addEventListener("loadedmetadata", () => {
+      state = C.emptyState($("clip-id").value, fps(), [video.videoWidth, video.videoHeight]);
+      try {
+        const saved = JSON.parse(localStorage.getItem(storageKey()) || "null");
+        if (saved && saved.clipId === state.clipId) { state = saved; state.imageSize = [video.videoWidth, video.videoHeight]; $("fps").value = state.fps; say(`Restored autosaved labels for ${state.clipId}.`); }
+      } catch { /* ignore a corrupt autosave */ }
+      selectedContact = -1;
+      render();
+      if (!state.contacts.length && !Object.keys(state.keypoints).length) detectFps();
+    }, { once: true });
+  });
+
+  $("labels-file").addEventListener("change", async event => {
+    const file = event.target.files[0];
+    if (!file) return;
+    try {
+      const doc = JSON.parse(await file.text());
+      if (doc.schemaVersion !== 1) throw new Error("not a schemaVersion 1 labels file");
+      state = C.stateFromGolden(doc);
+      $("clip-id").value = state.clipId;
+      $("fps").value = state.fps;
+      selectedContact = -1;
+      say(`Loaded ${state.contacts.length} contacts for ${state.clipId}.`);
+      render();
+    } catch (error) { say(`Could not load labels: ${error.message}`, true); }
+    event.target.value = "";
+  });
+
+  $("result-file").addEventListener("change", async event => {
+    const file = event.target.files[0];
+    if (!file) return;
+    try {
+      const added = C.importWorkerResult(state, JSON.parse(await file.text()));
+      say(`Imported ${added} contact(s) from the worker result — review each one before saving.`);
+      render();
+    } catch (error) { say(`Could not read the worker result: ${error.message}`, true); }
+    event.target.value = "";
+  });
+
+  $("save").addEventListener("click", () => {
+    const clipId = $("clip-id").value.trim();
+    if (!clipId) { say("Enter a clip ID first.", true); return; }
+    persist();
+    const { doc, warnings } = C.buildGolden(state);
+    download(`${clipId}.json`, JSON.stringify(doc, null, 2));
+    say(warnings.length ? `Saved with ${warnings.length} warning(s) — see below.` : `Saved ${clipId}.json`);
+  });
+
+  $("clip-id").addEventListener("change", persist);
+  $("detect-fps").addEventListener("click", detectFps);
+  $("fps").addEventListener("change", () => { state.fps = fps(); render(); });
+  overlay.addEventListener("click", event => {
+    if (!video.videoWidth) return;
+    const rect = overlay.getBoundingClientRect();
+    if (!rect.width || !rect.height) { say("The video has no visible size yet — make the window larger and try again.", true); return; }
+    try {
+      C.setKeypoint(state, $("kp-select").value, ((event.clientX - rect.left) * video.videoWidth) / rect.width, ((event.clientY - rect.top) * video.videoHeight) / rect.height);
+    } catch (error) { say(error.message, true); return; }
+    const next = C.KEYPOINT_NAMES.find(candidate => !state.keypoints[candidate]);
+    if (next) $("kp-select").value = next;
+    render();
+  });
+
+  $("kp-list").addEventListener("click", event => {
+    const name = event.target.dataset.removeKp;
+    if (name) { C.removeKeypoint(state, name); render(); }
+  });
+  $("contacts").addEventListener("click", event => {
+    const remove = event.target.dataset.remove;
+    if (remove !== undefined) { C.removeContact(state, Number(remove)); selectedContact = -1; render(); return; }
+    if (event.target.dataset.label !== undefined) return;
+    const row = event.target.closest("tr[data-index]");
+    if (row) { selectedContact = Number(row.dataset.index); seekToMs(state.contacts[selectedContact].timeMs); render(); }
+  });
+  $("contacts").addEventListener("change", event => {
+    const index = event.target.dataset.label;
+    if (index !== undefined) { C.setLabel(state, Number(index), event.target.value); render(); }
+  });
+  $("rallies").addEventListener("change", event => {
+    const index = event.target.dataset.winner;
+    if (index !== undefined) { state.rallies[Number(index)].winner = event.target.value; render(); }
+  });
+
+  document.addEventListener("keydown", event => {
+    if (event.target.closest("input, select, textarea") || event.ctrlKey || event.metaKey || event.altKey) return;
+    const key = event.key;
+    let handled = true;
+    try {
+      if (key === " ") { if (video.paused) video.play(); else video.pause(); }
+      else if (key === ",") step(-1);
+      else if (key === ".") step(1);
+      else if (key === "<") step(-10);
+      else if (key === ">") step(10);
+      else if (key === "[") video.playbackRate = Math.max(0.1, video.playbackRate / 2);
+      else if (key === "]") video.playbackRate = Math.min(2, video.playbackRate * 2);
+      else if (key === "c" || key === "C") { video.pause(); selectedContact = C.addContact(state, currentMs()); render(); }
+      else if (/^[0-9]$/.test(key)) {
+        if (selectedContact < 0) throw new Error("Select or mark a contact first (C).");
+        C.setLabel(state, selectedContact, key === "0" ? "other" : C.SHOT_LABELS[Number(key) - 1]); render();
+      }
+      else if (key === "r" || key === "R") {
+        if (state.rallies.some(rally => rally.endMs === null)) C.endRally(state, currentMs()); else C.startRally(state, currentMs());
+        render();
+      }
+      else if (key === "n" || key === "N") { C.setWinner(state, "near"); render(); }
+      else if (key === "f" || key === "F") { C.setWinner(state, "far"); render(); }
+      else if (key === "u" || key === "U") { C.setWinner(state, "unknown"); render(); }
+      else if (key === "Delete" || key === "Backspace") {
+        if (selectedContact >= 0) { C.removeContact(state, selectedContact); selectedContact = -1; render(); }
+      }
+      else handled = false;
+    } catch (error) { say(error.message, true); }
+    if (handled) event.preventDefault();
+    updateReadout();
+  });
+
+  video.addEventListener("seeked", updateReadout);
+  video.addEventListener("loadeddata", () => { drawOverlay(); updateReadout(); });
+  window.addEventListener("resize", drawOverlay);
+  setInterval(updateReadout, 100);
+  render();
+})();
+</script>
+</body>
+</html>
