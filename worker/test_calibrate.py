@@ -5,12 +5,21 @@ import numpy as np
 
 from geometry.calibrate import solve_camera
 from geometry.camera import Camera
-from geometry.court_model import COURT_LENGTH_M, KEYPOINTS, NET_Y_M, SINGLES_WIDTH_M
+from geometry.court_model import COURT_LENGTH_M, FLOOR_KEYPOINT_NAMES, KEYPOINTS, NET_Y_M, SINGLES_WIDTH_M
 from geometry.synthetic import LANDSCAPE, observe, standard_scenes
 
 GRID = np.array(
     [[x, y, 0.0] for x in np.linspace(0, SINGLES_WIDTH_M, 6) for y in np.linspace(0, COURT_LENGTH_M, 12)]
 )
+
+
+MIRROR_COLUMN = {"dl": "dr", "sl": "sr", "c": "c", "sr": "sl", "dr": "dl"}
+
+
+def mirrored_name(name: str) -> str:
+    """The same court point with left and right swapped, as a labelling mistake would produce."""
+    row, column = name.rsplit("_", 1)
+    return f"{row}_{MIRROR_COLUMN[column]}"
 
 
 def grid_error_cm(true_camera: Camera, solved_camera: Camera) -> np.ndarray:
@@ -121,6 +130,29 @@ class CalibrationSolverTests(unittest.TestCase):
         for name in names:
             self.assertNotIn(name, solution.inliers + solution.outliers)
         self.assertLess(np.median(grid_error_cm(camera, solution.camera)), 3.0)
+
+    def test_mirrored_floor_labels_are_never_trusted(self):
+        # Left/right swapped labels fit a camera reflected below the floor almost exactly.
+        for scene in ("behind_elevated", "corner_elevated", "side_elevated"):
+            camera, size = standard_scenes()[scene]
+            observed = observe(camera, size, names=list(FLOOR_KEYPOINT_NAMES), noise_px=1.0, seed=3)
+            mirrored = {mirrored_name(name): pixel for name, pixel in observed.items()}
+            solution = solve_camera(mirrored, size)
+            self.assertTrue(solution is None or solution.tier == "unavailable", (scene, solution and solution.tier))
+
+    def test_solves_when_the_court_origin_is_behind_the_camera(self):
+        placements = {
+            "side_near_net_far_half": Camera.look_at((-1.0, 6.7, 1.5), (2.59, 10.0, 0.0), 1300.0, LANDSCAPE),
+            "on_court_mid": Camera.look_at((2.59, 4.0, 1.6), (2.59, 11.0, 0.0), 1300.0, LANDSCAPE),
+        }
+        for name, camera in placements.items():
+            observed = observe(camera, LANDSCAPE, noise_px=1.0, seed=3)
+            self.assertNotIn("back0_sl", observed, name)
+            solution = solve_camera(observed, LANDSCAPE)
+            self.assertIsNotNone(solution, name)
+            self.assertIn(solution.tier, ("validated", "approximate"), name)
+            self.assertLess(float(np.linalg.norm(solution.camera.centre - camera.centre)), 0.25, name)
+            self.assertLess(abs(solution.camera.focal_px / 1300.0 - 1), 0.03, name)
 
     def test_identical_pixels_do_not_crash_or_validate(self):
         same = {name: (500.0, 500.0) for name in ("back0_sl", "back0_sr", "back1_sl", "back1_sr")}

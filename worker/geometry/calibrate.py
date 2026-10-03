@@ -66,11 +66,16 @@ def _focal_from_homography(homography: np.ndarray, cx: float, cy: float) -> floa
     return None
 
 
-def _pose_from_homography(homography: np.ndarray, focal: float, cx: float, cy: float) -> tuple[np.ndarray, np.ndarray]:
+def _pose_from_homography(
+    homography: np.ndarray, focal: float, cx: float, cy: float, floor_xy: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
     k = np.array([[focal, 0, cx], [0, focal, cy], [0, 0, 1.0]])
     m = np.linalg.inv(k) @ homography
     lam = 2.0 / (np.linalg.norm(m[:, 0]) + np.linalg.norm(m[:, 1]))
-    if m[2, 2] < 0:
+    # The homography fixes the pose only up to sign. Pick the sign that puts the observed
+    # points in front of the camera; the court origin itself may be behind it.
+    depths = np.column_stack([floor_xy, np.ones(len(floor_xy))]) @ m[2]
+    if np.median(depths) < 0:
         lam = -lam
     r1, r2, t = lam * m[:, 0], lam * m[:, 1], lam * m[:, 2]
     u, _, vt = np.linalg.svd(np.stack([r1, r2, np.cross(r1, r2)], axis=1))
@@ -136,7 +141,7 @@ def _fit(
     fit_k1 = len(names) >= MIN_K1_POINTS
     best: tuple[np.ndarray, float] | None = None
     for focal in seeds:
-        rvec, tvec = _pose_from_homography(homography, focal, cx, cy)
+        rvec, tvec = _pose_from_homography(homography, focal, cx, cy, world[floor, :2])
         start = _pack(Camera(focal, cx, cy, rvec, tvec), fit_k1)
         params, cost = _refine(start, world, pixels, cx, cy, focal_typical, fit_k1)
         if best is None or cost < best[1]:
@@ -200,6 +205,16 @@ def _leave_one_out_cm(
     return float(np.sqrt(np.mean(np.square(errors))))
 
 
+def _physically_plausible(camera: Camera, names: list[str]) -> bool:
+    """A real camera is above the floor and has every inlier in front of it. Mirrored
+    labels (left/right or near/far swapped) fit a camera reflected below the floor."""
+    if camera.centre[2] <= 0:
+        return False
+    world = np.array([KEYPOINTS[name] for name in names])
+    depth = world @ camera.rotation[2] + float(np.asarray(camera.tvec, dtype=np.float64).reshape(3)[2])
+    return bool(np.all(depth > 0))
+
+
 def _tier(rms_px: float, loo_floor_cm: float | None, redundancy: int) -> str:
     validated = (
         redundancy >= VALIDATED_MIN_REDUNDANCY
@@ -247,7 +262,7 @@ def solve_camera(
     redundancy = len(inliers) - MIN_KEYPOINTS
     return CameraSolution(
         camera=camera,
-        tier=_tier(rms_px, loo, redundancy),
+        tier=_tier(rms_px, loo, redundancy) if _physically_plausible(camera, inliers) else "unavailable",
         rms_px=rms_px,
         floor_rms_cm=floor_rms_cm,
         loo_floor_cm=loo,
