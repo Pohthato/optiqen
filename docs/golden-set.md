@@ -47,7 +47,10 @@ are left `null` in this version.
    sideline; rows `back0 long0 short0 short1 long1 back1`, columns
    `dl sl c sr dr`; net: `post_left_base post_left_top post_right_base
    post_right_top net_centre_top`). Pixel coordinates in the original video
-   resolution. More points give a tighter calibration check.
+   resolution. More points give a tighter calibration check. Each point
+   records `timeMs`, the frame it was clicked on (the labeller fills it in);
+   for handheld clips click all points on the same frame, since the camera
+   moves between frames and the evaluation solves one frame at a time.
 2. **Contacts** — the millisecond timestamp of every racket–shuttle contact,
    stepped frame by frame.
 3. **Shots** — for each contact: the stroke label (`serve clear drop net lift
@@ -66,8 +69,8 @@ are left `null` in this version.
   "sourceFps": 60,
   "imageSize": [1920, 1080],
   "courtKeypoints": [
-    { "name": "back1_sl", "x": 612.0, "y": 301.5 },
-    { "name": "back1_sr", "x": 1310.0, "y": 298.0 }
+    { "name": "back1_sl", "x": 612.0, "y": 301.5, "timeMs": 0 },
+    { "name": "back1_sr", "x": 1310.0, "y": 298.0, "timeMs": 0 }
   ],
   "contacts": [{ "timeMs": 1200 }, { "timeMs": 2100 }],
   "shots": [
@@ -91,6 +94,10 @@ python -m evaluation.evaluate --golden ../golden --results ../results --out ../b
 ```
 
 The report gives, per clip and in aggregate: contact precision/recall/F1 at ±33
-and ±100 ms, shot macro-F1 (missed and unverified predictions count as wrong),
-and calibration tier, pixel RMS and leave-one-out floor error. Commit the
-baseline report before changing any model so every later phase can show lift.
+and ±100 ms, and shot macro-F1. Missed and unverified predictions count as wrong,
+and a verified shot with no labelled shot near it counts as a false claim. The
+aggregate numbers pool the counts over all clips rather than averaging per-clip
+scores. Each clip also shows the camera solved from your labelled points
+(`calibration`: tier, pixel RMS, leave-one-out floor error) next to the worker's
+own camera summary (`workerCamera`). Commit the baseline report before changing
+any model so every later phase can show lift.

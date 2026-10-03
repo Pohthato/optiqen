@@ -61,6 +61,12 @@ class ValidateGoldenTests(unittest.TestCase):
         del broken["contacts"]
         self.assertTrue(any("contacts" in error for error in validate_golden(broken)))
 
+    def test_keypoint_frame_time_is_optional_but_must_be_valid(self):
+        with_time = corrupted(courtKeypoints=[{"name": "back1_sl", "x": 612.0, "y": 301.5, "timeMs": 4000}])
+        self.assertEqual(validate_golden(with_time), [])
+        negative = corrupted(courtKeypoints=[{"name": "back1_sl", "x": 612.0, "y": 301.5, "timeMs": -1}])
+        self.assertTrue(any("timeMs" in error for error in validate_golden(negative)))
+
     def test_bool_and_nan_are_not_numbers(self):
         self.assertTrue(validate_golden(corrupted(sourceFps=True)))
         self.assertTrue(validate_golden(corrupted(contacts=[{"timeMs": float("nan")}])))

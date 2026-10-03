@@ -23,13 +23,23 @@ SHOT_MATCH_TOLERANCE_MS = 100
 
 
 def evaluate_calibration(golden: dict[str, Any]) -> dict[str, Any] | None:
+    """Solve the camera from the golden keypoints of one frame (the frame with the most points).
+    Handheld clips move the camera, so points clicked on different frames cannot be mixed."""
     size = (golden["imageSize"][0], golden["imageSize"][1])
-    observations = {item["name"]: (item["x"], item["y"]) for item in golden.get("courtKeypoints", [])}
+    frames: dict[Any, list[dict[str, Any]]] = {}
+    for item in golden.get("courtKeypoints", []):
+        frames.setdefault(item.get("timeMs"), []).append(item)
+    if not frames:
+        return None
+    frame_time, keypoints = max(frames.items(), key=lambda entry: len(entry[1]))
+    observations = {item["name"]: (item["x"], item["y"]) for item in keypoints}
     solution = solve_camera(observations, size)
     if solution is None:
         return None
     quality = assess_geometry(solution.camera, size)
     return {
+        "source": "golden keypoints",
+        "frameTimeMs": frame_time,
         "tier": solution.tier,
         "rmsPx": round(solution.rms_px, 3),
         "floorRmsCm": round(solution.floor_rms_cm, 2),
@@ -53,11 +63,10 @@ def _contact_report(predicted: list[float], truth: list[float], tolerance_ms: fl
     }
 
 
-def evaluate_clip(golden: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
-    predicted_contacts = [event["timeMs"] for event in result.get("events", []) if event.get("type") == "contact"]
-    truth_contacts = [contact["timeMs"] for contact in golden["contacts"]]
-    contacts = {f"tol{tol}ms": _contact_report(predicted_contacts, truth_contacts, tol) for tol in CONTACT_TOLERANCES_MS}
-
+def _shot_labels(golden: dict[str, Any], result: dict[str, Any]) -> tuple[list[str], list[str], int, int]:
+    """Aligned (truth, prediction) labels. Missed truth shots score as "missed"; a verified
+    prediction with no labelled shot near it scores against "none", so false claims lower
+    that label's precision instead of vanishing from the report."""
     predicted_shots = result.get("shots", [])
     truth_shots = golden["shots"]
     match = match_events(
@@ -73,14 +82,31 @@ def evaluate_clip(golden: dict[str, Any], result: dict[str, Any]) -> dict[str, A
             continue
         shot = predicted_shots[predicted_index]
         y_pred.append(shot["label"] if shot.get("verified") else "unverified")
+    matched_predictions = set(matched.values())
+    unmatched = 0
+    for predicted_index, shot in enumerate(predicted_shots):
+        if predicted_index not in matched_predictions and shot.get("verified"):
+            y_true.append("none")
+            y_pred.append(shot["label"])
+            unmatched += 1
+    return y_true, y_pred, len(match.pairs), unmatched
+
+
+def evaluate_clip(golden: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    predicted_contacts = [event["timeMs"] for event in result.get("events", []) if event.get("type") == "contact"]
+    truth_contacts = [contact["timeMs"] for contact in golden["contacts"]]
+    contacts = {f"tol{tol}ms": _contact_report(predicted_contacts, truth_contacts, tol) for tol in CONTACT_TOLERANCES_MS}
+    y_true, y_pred, matched, unmatched = _shot_labels(golden, result)
     scored = macro_f1(y_true, y_pred, GOLDEN_SHOT_LABELS)
     return {
         "clipId": golden["clipId"],
         "calibration": evaluate_calibration(golden),
+        "workerCamera": result.get("camera"),
         "contacts": contacts,
         "shots": {
-            "matched": len(match.pairs),
-            "truthCount": len(truth_shots),
+            "matched": matched,
+            "truthCount": len(golden["shots"]),
+            "unmatchedVerifiedPredictions": unmatched,
             "macroF1": round(scored["macroF1"], 4),
             "perLabel": scored["perLabel"],
         },
@@ -89,12 +115,18 @@ def evaluate_clip(golden: dict[str, Any], result: dict[str, Any]) -> dict[str, A
 
 def evaluate_directory(golden_dir: Path, results_dir: Path) -> dict[str, Any]:
     clips: list[dict[str, Any]] = []
+    pooled_true: list[str] = []
+    pooled_pred: list[str] = []
     for golden in load_golden_dir(golden_dir):
         result_path = Path(results_dir) / f"{golden['clipId']}.json"
         if not result_path.is_file():
             clips.append({"clipId": golden["clipId"], "error": f"no result file {result_path.name}"})
             continue
-        clips.append(evaluate_clip(golden, json.loads(result_path.read_text(encoding="utf-8"))))
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        clips.append(evaluate_clip(golden, result))
+        y_true, y_pred, _, _ = _shot_labels(golden, result)
+        pooled_true.extend(y_true)
+        pooled_pred.extend(y_pred)
     scored = [clip for clip in clips if "error" not in clip]
     tiers: dict[str, int] = {}
     for clip in scored:
@@ -102,17 +134,25 @@ def evaluate_directory(golden_dir: Path, results_dir: Path) -> dict[str, Any]:
             tier = clip["calibration"]["tier"]
             tiers[tier] = tiers.get(tier, 0) + 1
 
-    def mean(values: list[float]) -> float | None:
-        return round(sum(values) / len(values), 4) if values else None
+    # Gate numbers pool the counts over clips instead of averaging per-clip scores: a clip with
+    # nothing to find (and nothing found) is correct, and a ten-shot clip is too noisy alone.
+    def pooled_contact_f1(key: str) -> float | None:
+        if not scored:
+            return None
+        tp = sum(clip["contacts"][key]["truePositives"] for clip in scored)
+        fp = sum(clip["contacts"][key]["falsePositives"] for clip in scored)
+        fn = sum(clip["contacts"][key]["falseNegatives"] for clip in scored)
+        return round(2 * tp / (2 * tp + fp + fn), 4) if tp + fp + fn else None
 
     return {
         "clips": clips,
         "summary": {
+            "aggregation": "counts pooled over clips",
             "clips": len(clips),
             "clipsWithResults": len(scored),
-            "meanContactF1At33ms": mean([clip["contacts"]["tol33ms"]["f1"] for clip in scored]),
-            "meanContactF1At100ms": mean([clip["contacts"]["tol100ms"]["f1"] for clip in scored]),
-            "meanShotMacroF1": mean([clip["shots"]["macroF1"] for clip in scored]),
+            "contactF1At33ms": pooled_contact_f1("tol33ms"),
+            "contactF1At100ms": pooled_contact_f1("tol100ms"),
+            "shotMacroF1": round(macro_f1(pooled_true, pooled_pred, GOLDEN_SHOT_LABELS)["macroF1"], 4) if scored else None,
             "calibrationTiers": tiers,
         },
     }

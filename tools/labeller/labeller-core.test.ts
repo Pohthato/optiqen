@@ -116,6 +116,16 @@ describe("labeller core: court keypoints", () => {
     expect(state.keypoints).toEqual({});
   });
 
+  it("records the frame a court point was clicked on and keeps it through export and reload", () => {
+    const state = freshState();
+    core.setKeypoint(state, "back1_sl", 612, 301.5, 4033.4);
+    expect(state.keypoints.back1_sl).toEqual({ x: 612, y: 301.5, timeMs: 4033 });
+    const { doc } = core.buildGolden(state);
+    expect(doc.courtKeypoints).toEqual([{ name: "back1_sl", x: 612, y: 301.5, timeMs: 4033 }]);
+    expect(core.stateFromGolden(doc)).toEqual(state);
+    expect(() => core.setKeypoint(state, "back0_sl", 1, 1, NaN)).toThrow("finite");
+  });
+
   it("rejects names outside the court model", () => {
     expect(() => core.setKeypoint(freshState(), "nope", 1, 1)).toThrow("Unknown court keypoint");
   });
@@ -185,8 +195,8 @@ describe("labeller core: worker import and export", () => {
 
   it("exports a golden document the Python validator accepts", () => {
     const state = freshState();
-    core.setKeypoint(state, "back1_sl", 612, 301.5);
-    core.setKeypoint(state, "post_left_top", 400, 200);
+    core.setKeypoint(state, "back1_sl", 612, 301.5, 1200);
+    core.setKeypoint(state, "post_left_top", 400, 200, 1200);
     core.addContact(state, 1200, "serve");
     core.addContact(state, 2100, "clear");
     core.startRally(state, 800);

@@ -59,6 +59,33 @@ class EvaluateClipTests(unittest.TestCase):
         self.assertEqual(shots["truthCount"], 3)
         self.assertAlmostEqual(shots["macroF1"], 0.25)
 
+    def test_spurious_verified_shots_lower_macro_f1(self):
+        clip = golden_clip()
+        clip["contacts"] = [{"timeMs": 1000}]
+        clip["shots"] = [{"timeMs": 1000, "label": "clear", "landing": None}]
+        spurious = [{"timeMs": 5000 + 1000 * i, "label": "smash", "verified": True} for i in range(5)]
+        result = {"events": [], "shots": [{"timeMs": 1000, "label": "clear", "verified": True}, *spurious]}
+        shots = evaluate_clip(clip, result)["shots"]
+        self.assertEqual(shots["unmatchedVerifiedPredictions"], 5)
+        self.assertAlmostEqual(shots["macroF1"], 0.5)
+
+    def test_report_carries_the_worker_camera_and_names_the_calibration_source(self):
+        report = evaluate_clip(golden_clip(), dict(RESULT, camera={"cameraTier": "approximate"}))
+        self.assertEqual(report["workerCamera"], {"cameraTier": "approximate"})
+        self.assertEqual(report["calibration"]["source"], "golden keypoints")
+
+    def test_calibration_uses_one_frame_when_keypoints_span_frames(self):
+        clip = golden_clip()
+        for item in clip["courtKeypoints"]:
+            item["timeMs"] = 0
+        moved, size = standard_scenes()["corner_elevated"]
+        later = observe(moved, size, noise_px=0.5, seed=2)
+        names = [name for name in later if name.startswith(("back", "long"))][:6]
+        clip["courtKeypoints"] += [{"name": n, "x": later[n][0], "y": later[n][1], "timeMs": 9000} for n in names]
+        calibration = evaluate_clip(clip, RESULT)["calibration"]
+        self.assertEqual(calibration["frameTimeMs"], 0)
+        self.assertEqual(calibration["tier"], "validated")
+
     def test_unverified_prediction_is_scored_as_wrong(self):
         result = {
             "events": [],
@@ -93,8 +120,28 @@ class EvaluateDirectoryTests(unittest.TestCase):
             self.assertEqual(report["summary"]["clipsWithResults"], 1)
             by_id = {clip["clipId"]: clip for clip in report["clips"]}
             self.assertIn("error", by_id["b"])
-            self.assertAlmostEqual(report["summary"]["meanContactF1At100ms"], by_id["a"]["contacts"]["tol100ms"]["f1"])
+            self.assertAlmostEqual(report["summary"]["contactF1At100ms"], by_id["a"]["contacts"]["tol100ms"]["f1"])
             self.assertEqual(sum(report["summary"]["calibrationTiers"].values()), 1)
+
+    def test_summary_pools_counts_so_an_empty_clip_does_not_drag_it_down(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "golden").mkdir()
+            (root / "results").mkdir()
+            perfect = golden_clip("a")
+            empty = golden_clip("b")
+            empty["contacts"], empty["shots"] = [], []
+            exact = {
+                "events": [{"type": "contact", "timeMs": c["timeMs"]} for c in perfect["contacts"]],
+                "shots": [{"timeMs": s["timeMs"], "label": s["label"], "verified": True} for s in perfect["shots"]],
+            }
+            (root / "golden" / "a.json").write_text(json.dumps(perfect))
+            (root / "golden" / "b.json").write_text(json.dumps(empty))
+            (root / "results" / "a.json").write_text(json.dumps(exact))
+            (root / "results" / "b.json").write_text(json.dumps({"events": [], "shots": []}))
+            summary = evaluate_directory(root / "golden", root / "results")["summary"]
+            self.assertEqual(summary["contactF1At100ms"], 1.0)
+            self.assertEqual(summary["shotMacroF1"], 1.0)
 
     def test_cli_writes_the_report_and_returns_zero(self):
         with tempfile.TemporaryDirectory() as temp:

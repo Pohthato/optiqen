@@ -46,6 +46,8 @@ def validate_golden(doc: Any) -> list[str]:
             errors.append(f"{where}: x and y must be numbers")
         elif size_ok and not (0 <= item["x"] < size[0] and 0 <= item["y"] < size[1]):
             errors.append(f"{where}: pixel is outside the image")
+        if isinstance(item, dict) and "timeMs" in item and (not _is_number(item["timeMs"]) or item["timeMs"] < 0):
+            errors.append(f"{where}: timeMs (the frame the point was clicked on) must be a non-negative number")
     for key in ("contacts", "shots"):
         if not isinstance(doc.get(key), list):
             errors.append(f"{key} must be a list")

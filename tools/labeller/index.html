@@ -125,7 +125,10 @@
     }
     for (const option of select.options) option.textContent = (state.keypoints[option.value] ? "✓ " : "") + option.value;
     $("kp-list").innerHTML = Object.keys(state.keypoints)
-      .map(name => `<li><span>${name}</span><button class="x" data-remove-kp="${name}" title="Remove">×</button></li>`).join("");
+      .map(name => {
+        const at = state.keypoints[name].timeMs;
+        return `<li><span>${name}${at === undefined ? "" : ` @ ${at} ms`}</span><button class="x" data-remove-kp="${name}" title="Remove">×</button></li>`;
+      }).join("");
   }
 
   function renderContacts() {
@@ -279,7 +282,7 @@
     const rect = overlay.getBoundingClientRect();
     if (!rect.width || !rect.height) { say("The video has no visible size yet — make the window larger and try again.", true); return; }
     try {
-      C.setKeypoint(state, $("kp-select").value, ((event.clientX - rect.left) * video.videoWidth) / rect.width, ((event.clientY - rect.top) * video.videoHeight) / rect.height);
+      C.setKeypoint(state, $("kp-select").value, ((event.clientX - rect.left) * video.videoWidth) / rect.width, ((event.clientY - rect.top) * video.videoHeight) / rect.height, currentMs());
     } catch (error) { say(error.message, true); return; }
     const next = C.KEYPOINT_NAMES.find(candidate => !state.keypoints[candidate]);
     if (next) $("kp-select").value = next;

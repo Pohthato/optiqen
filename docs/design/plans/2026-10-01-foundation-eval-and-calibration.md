@@ -3058,3 +3058,14 @@ git commit -m "feat(tools): add browser labeller for golden-set clips"
 **Type consistency.** `solve_camera` → `CameraSolution` fields (`tier`, `rms_px`, `floor_rms_cm`, `loo_floor_cm`, `redundancy`, `inliers`, `outliers`) are used identically in Tasks 7 and 8; `assess_geometry` → `GeometryQuality` fields (`tier`, `elevation_deg`, `visible_fraction`, `distance_m`, `reasons`) match; the adapter's output keys match the zod schema keys exactly (`cameraTier rmsPx focalPx k1 looFloorCm geometryTier elevationDeg visibleFraction reasons`).
 
 **Review Focus coverage.** (1) Tasks 4 and 8 (`test_fewer_than_four_keypoints_returns_none`, `test_three_corners_are_not_solvable`); (2) Task 4 (`collinear`, `off_floor`, `identical_pixels`); (3) Task 4 (`non_finite_pixels`) and Task 8 (`bad_values_are_skipped`); (4) Task 4 scenes include `behind_portrait`; (5) Task 4 (`rejects_outlier_taps`, `gross_noise_is_never_validated`).
+
+---
+
+## Post-review changes (2026-10-03)
+
+The whole-branch review found defects in this plan's own code. The repository, not the code blocks above, is the reference for later phases:
+
+- `geometry/calibrate.py`: the pose sign is chosen from the observed points' depth (the court origin may be behind the camera), and cameras below the floor or with an inlier behind them are tier `unavailable` (mirrored labels fit a reflected camera almost exactly).
+- `geometry/calibration_adapter.py`: no capture advice from a camera the solver rejected (one `UNSOLVED_REASON` instead), and no summary for doubles courts in v1.
+- `evaluation/evaluate.py`: unmatched verified shots count as false claims; summary numbers pool counts over clips; each clip reports `workerCamera` and names its calibration `source`; calibration is solved from one frame.
+- Golden keypoints and the labeller carry an optional `timeMs` (the frame a point was clicked on).

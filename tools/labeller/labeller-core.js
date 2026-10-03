@@ -93,9 +93,13 @@
     state.rallies[state.rallies.length - 1].winner = winner;
   }
 
-  function setKeypoint(state, name, x, y) {
+  // timeMs is the frame the point was clicked on: handheld clips move the camera, so a
+  // court point only means something together with its frame.
+  function setKeypoint(state, name, x, y, timeMs) {
     if (!KEYPOINT_NAMES.includes(name)) throw new Error(`Unknown court keypoint: ${name}`);
-    state.keypoints[name] = { x: round2(finite(x, "Pixel x")), y: round2(finite(y, "Pixel y")) };
+    const point = { x: round2(finite(x, "Pixel x")), y: round2(finite(y, "Pixel y")) };
+    if (timeMs !== undefined) point.timeMs = Math.round(finite(timeMs, "Keypoint time"));
+    state.keypoints[name] = point;
   }
 
   function removeKeypoint(state, name) {
@@ -133,7 +137,8 @@
       clipId: state.clipId,
       sourceFps: state.fps,
       imageSize: [state.imageSize[0], state.imageSize[1]],
-      courtKeypoints: Object.entries(state.keypoints).map(([name, point]) => ({ name, x: point.x, y: point.y })),
+      courtKeypoints: Object.entries(state.keypoints).map(([name, point]) =>
+        point.timeMs === undefined ? { name, x: point.x, y: point.y } : { name, x: point.x, y: point.y, timeMs: point.timeMs }),
       contacts: state.contacts.map(contact => ({ timeMs: contact.timeMs })),
       shots: state.contacts.map(contact => ({ timeMs: contact.timeMs, label: contact.label, landing: null })),
       rallies,
@@ -143,7 +148,9 @@
 
   function stateFromGolden(doc) {
     const state = emptyState(doc.clipId, doc.sourceFps, doc.imageSize);
-    for (const item of doc.courtKeypoints || []) state.keypoints[item.name] = { x: item.x, y: item.y };
+    for (const item of doc.courtKeypoints || []) {
+      state.keypoints[item.name] = item.timeMs === undefined ? { x: item.x, y: item.y } : { x: item.x, y: item.y, timeMs: item.timeMs };
+    }
     const labelAt = new Map((doc.shots || []).map(shot => [shot.timeMs, shot.label]));
     for (const contact of doc.contacts || []) {
       state.contacts.push({ timeMs: contact.timeMs, label: labelAt.get(contact.timeMs) || "other" });
