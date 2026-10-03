@@ -2,7 +2,7 @@
 import json
 import unittest
 
-from geometry.calibration_adapter import corners_to_observations, summarise_calibration
+from geometry.calibration_adapter import UNSOLVED_REASON, corners_to_observations, summarise_calibration
 from geometry.camera import Camera
 from geometry.court_model import CORNER_LABEL_TO_KEYPOINT, KEYPOINTS
 from geometry.synthetic import LANDSCAPE
@@ -55,6 +55,33 @@ class SummariseCalibrationTests(unittest.TestCase):
 
     def test_empty_corners_are_not_solvable(self):
         self.assertIsNone(summarise_calibration([], LANDSCAPE))
+
+    def test_unsolvable_taps_give_no_capture_advice(self):
+        # Nearly collinear taps cannot be a court; advice from that camera would be invented.
+        corners = [
+            {"label": "nearLeft", "x": 10, "y": 50},
+            {"label": "nearRight", "x": 30, "y": 50.2},
+            {"label": "farRight", "x": 60, "y": 50.1},
+            {"label": "farLeft", "x": 90, "y": 50.3},
+        ]
+        summary = summarise_calibration(corners, LANDSCAPE)
+        self.assertTrue(summary is None or summary["cameraTier"] == "unavailable", summary)
+        if summary is not None:
+            self.assertEqual(summary["geometryTier"], "C")
+            self.assertEqual(summary["reasons"], [UNSOLVED_REASON])
+
+    def test_swapped_left_right_corners_are_unavailable(self):
+        corners = percent_corners(WIDE, LANDSCAPE)
+        by_label = {corner["label"]: corner for corner in corners}
+        by_label["nearLeft"]["label"], by_label["nearRight"]["label"] = "nearRight", "nearLeft"
+        summary = summarise_calibration(corners, LANDSCAPE)
+        self.assertTrue(summary is None or summary["cameraTier"] == "unavailable", summary)
+        if summary is not None:
+            self.assertEqual(summary["reasons"], [UNSOLVED_REASON])
+
+    def test_doubles_courts_are_not_summarised(self):
+        # v1 models the singles court; doubles taps would be solved against the wrong lines.
+        self.assertIsNone(summarise_calibration(percent_corners(WIDE, LANDSCAPE), LANDSCAPE, "doubles"))
 
 
 if __name__ == "__main__":
