@@ -72,6 +72,11 @@ class BuildRallyRefusalTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "receive height"):
             build_rally((3.3, 3.6, 1.0), [Shot("serve", (1.5, 12.9), 1.9, 9.0), Shot("clear", (3.5, 0.6), 1.8, None)])
 
+    def test_receive_heights_outside_reach_are_refused(self):
+        for height in (0.0, -0.002, 4.5):
+            with self.assertRaisesRegex(ValueError, "receive height"):
+                build_rally((3.3, 3.6, 1.0), [Shot("serve", (1.5, 12.9), 1.9, height), Shot("clear", (3.5, 0.6), 1.8, None)])
+
     def test_only_the_last_shot_may_land(self):
         with self.assertRaises(ValueError):
             build_rally((3.3, 3.6, 1.0), [Shot("serve", (1.5, 12.9), 1.9, None), Shot("clear", (3.5, 0.6), 1.8, None)])

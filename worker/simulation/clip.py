@@ -26,6 +26,8 @@ from simulation.camera_path import stable_handheld, tripod
 from simulation.rally import Rally, canned_rally, player_positions
 from simulation.render import render_frame
 
+SPEED_OF_SOUND_M_S = 343.0
+
 
 @dataclass
 class SyntheticClip:
@@ -39,6 +41,7 @@ class SyntheticClip:
     sample_rate: int
     audio_offset_s: float
     distractor_times: list[float]
+    contact_audio_times: list[float]
 
 
 def make_clip(
@@ -52,7 +55,10 @@ def make_clip(
     audio_offset_s: float = 0.0,
     distractors: int = 0,
     noise_sigma: float = 2.0,
+    sound_delay: bool = True,
 ) -> SyntheticClip:
+    if image_size[0] % 2 or image_size[1] % 2:
+        raise ValueError(f"frame size {image_size} must be even: the mp4v writer silently crops odd sizes")
     rally = rally or canned_rally()
     duration = rally.end_time + tail_s
     count = math.ceil(duration * fps)
@@ -67,10 +73,19 @@ def make_clip(
         players = list(player_positions(rally, time).values())
         frames.append(render_frame(cameras[index], image_size, position, previous, players, noise_sigma, seed + index))
         shuttle.append(position)
-    audio, distractor_times = render_audio(
-        [contact.time for contact in rally.contacts], duration, seed=seed, distractors=distractors, offset_s=audio_offset_s
+    # A hit is heard once its sound has travelled to the phone (~15-45 ms on a court).
+    heard = []
+    for contact in rally.contacts:
+        delay = 0.0
+        if sound_delay:
+            camera = cameras[min(count - 1, round(contact.time * fps))]
+            delay = float(np.linalg.norm(np.asarray(contact.position) - camera.centre)) / SPEED_OF_SOUND_M_S
+        heard.append(contact.time + delay)
+    audio, distractor_times = render_audio(heard, duration, seed=seed, distractors=distractors, offset_s=audio_offset_s)
+    contact_audio_times = [time + audio_offset_s for time in heard]
+    return SyntheticClip(
+        fps, image_size, cameras, frames, shuttle, rally, audio, SAMPLE_RATE, audio_offset_s, distractor_times, contact_audio_times
     )
-    return SyntheticClip(fps, image_size, cameras, frames, shuttle, rally, audio, SAMPLE_RATE, audio_offset_s, distractor_times)
 
 
 def _camera_entry(camera: Camera) -> dict[str, Any]:
@@ -92,12 +107,28 @@ def truth_dict(clip: SyntheticClip) -> dict[str, Any]:
     return {
         "fps": clip.fps,
         "imageSize": list(clip.image_size),
+        "exposureS": 0.5 / clip.fps,
+        "conventions": {
+            "imageSize": "[width, height] in pixels",
+            "time": "frame i is at i / fps seconds; every per-frame list is indexed by frame",
+            "shuttle": "court metres (x across, y along, z up) at the frame time: the LEADING end of the motion-blur streak, which covers [t - exposureS, t]; null outside flight",
+            "cameras": "rvec/tvec map world to camera (OpenCV: x right, y down, z forward); k1 is one radial term on normalised coordinates",
+            "audioTimeMs": "when the hit is heard in audio.wav: contact time + sound travel to the camera + audio offset",
+            "audioOffset": "positive offsetMs means the audio lags the video",
+            "distractorTimes": "times in audio.wav of hits from a neighbouring court; no matching contact exists",
+        },
         "frameCount": len(clip.frames),
         "cameras": [_camera_entry(camera) for camera in clip.cameras],
         "shuttle": [None if position is None else [round(float(v), 5) for v in position] for position in clip.shuttle],
         "contacts": [
-            {"timeMs": round(contact.time * 1000, 2), "hitter": contact.hitter, "kind": contact.kind, "position": [round(v, 5) for v in contact.position]}
-            for contact in clip.rally.contacts
+            {
+                "timeMs": round(contact.time * 1000, 2),
+                "audioTimeMs": round(heard * 1000, 2),
+                "hitter": contact.hitter,
+                "kind": contact.kind,
+                "position": [round(v, 5) for v in contact.position],
+            }
+            for contact, heard in zip(clip.rally.contacts, clip.contact_audio_times)
         ],
         "landing": [round(v, 5) for v in clip.rally.landing],
         "rallyEndMs": round(clip.rally.end_time * 1000, 2),

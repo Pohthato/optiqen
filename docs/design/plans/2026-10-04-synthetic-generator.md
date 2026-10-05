@@ -1322,3 +1322,9 @@ git commit -m "feat(sim): assemble, write and render synthetic clips from the CL
 **Type consistency.** `Rally.shuttle_at`, `player_positions`, `render_frame(camera, image_size, shuttle, shuttle_previous, players, noise_sigma, seed)`, `render_audio(..., distractors, offset_s)` and `stable_handheld(camera, frames, fps, seed)` are called with the signatures their tasks define.
 
 **Review Focus coverage.** (1) Task 2 refusal tests; (2) Task 5 `test_objects_behind_the_camera_are_skipped`; (3) Task 6 frame-time alignment test; (4) Task 6 write/read-back tests; (5) Tasks 4–5 seed tests.
+
+---
+
+## Post-review changes (2026-10-05)
+
+The repository, not the code blocks above, is the reference: receive heights are bounded (0.05–3.5 m); each hit is heard after sound travels to the camera (`audioTimeMs` per contact in truth, switchable with `sound_delay=False`); truth carries `exposureS` and a `conventions` block (the shuttle position is the leading end of the blur streak); odd frame sizes are refused because the mp4v writer crops them.

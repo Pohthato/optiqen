@@ -13,6 +13,9 @@ from geometry.shuttle_physics import FEATHER_TERMINAL_VELOCITY, STEP_S, simulate
 NET_CLEARANCE_M = NET_POST_HEIGHT_M
 # The body stands behind and to the side of the racket contact point (near player; mirrored for far).
 BODY_OFFSET_M = (-0.3, 0.5)
+# A receiver plays the shuttle between just off the floor and a jumping overhead reach.
+MIN_RECEIVE_HEIGHT_M = 0.05
+MAX_RECEIVE_HEIGHT_M = 3.5
 DEFAULT_BODY = {"near": (SINGLES_WIDTH_M / 2, 3.2), "far": (SINGLES_WIDTH_M / 2, COURT_LENGTH_M - 3.2)}
 
 
@@ -86,6 +89,11 @@ def build_rally(
     flights: list[Flight] = []
     for index, shot in enumerate(shots):
         label = f"shot {index} ({shot.kind})"
+        if shot.receive_height is not None and not MIN_RECEIVE_HEIGHT_M <= shot.receive_height <= MAX_RECEIVE_HEIGHT_M:
+            raise ValueError(
+                f"{label} receive height {shot.receive_height} m is outside a player's reach "
+                f"({MIN_RECEIVE_HEIGHT_M}–{MAX_RECEIVE_HEIGHT_M} m)"
+            )
         target = np.array([shot.target[0], shot.target[1], 0.0])
         if (target[1] - NET_Y_M) * (position[1] - NET_Y_M) >= 0:
             raise ValueError(f"{label} does not cross the net: its target is on the hitter's side")

@@ -61,6 +61,33 @@ class TruthTests(unittest.TestCase):
         np.testing.assert_allclose(rebuilt.project(point), clip.cameras[7].project(point), atol=1e-6)
 
 
+class SoundAndConventionTests(unittest.TestCase):
+    def test_each_hit_is_heard_after_sound_travels_to_the_camera(self):
+        clip = make_clip(CAMERA, SIZE, SERVE_ONLY, fps=10.0, seed=4)
+        truth = truth_dict(clip)
+        contact = truth["contacts"][0]
+        distance = float(np.linalg.norm(np.array(contact["position"]) - CAMERA.centre))
+        self.assertAlmostEqual(contact["audioTimeMs"] - contact["timeMs"], distance / 343.0 * 1000, places=1)
+        onset = int(contact["audioTimeMs"] / 1000 * clip.sample_rate)
+        self.assertGreater(float(np.max(np.abs(clip.audio[onset : onset + 240]))), 0.2)
+        self.assertLess(float(np.max(np.abs(clip.audio[onset - 480 : onset - 48]))), 0.06)
+
+    def test_sound_delay_can_be_switched_off(self):
+        clip = make_clip(CAMERA, SIZE, SERVE_ONLY, fps=10.0, sound_delay=False)
+        contact = truth_dict(clip)["contacts"][0]
+        self.assertEqual(contact["audioTimeMs"], contact["timeMs"])
+
+    def test_truth_states_its_conventions(self):
+        truth = truth_dict(make_clip(CAMERA, SIZE, SERVE_ONLY, fps=20.0))
+        self.assertAlmostEqual(truth["exposureS"], 0.5 / 20.0)
+        self.assertTrue({"shuttle", "audioOffset", "distractorTimes", "imageSize"} <= set(truth["conventions"]))
+
+    def test_odd_frame_sizes_are_refused(self):
+        odd = Camera.look_at((2.59, -3.5, 3.0), (2.59, 7.0, 0.0), 200.0, (161, 91))
+        with self.assertRaisesRegex(ValueError, "even"):
+            make_clip(odd, (161, 91), SERVE_ONLY, fps=10.0)
+
+
 class WriteClipTests(unittest.TestCase):
     def test_written_files_read_back(self):
         clip = make_clip(CAMERA, SIZE, SERVE_ONLY, fps=10.0, seed=3)
