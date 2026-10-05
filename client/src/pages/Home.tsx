@@ -303,10 +303,7 @@ export default function Home() {
         : calibrationStatus;
   const estimatedCorner = getProvisionalFourthCorner(corners);
   const canStartAnalysis = Boolean(videoFile && corners.length >= 3);
-  const hasOAuthConfig = Boolean(
-    import.meta.env.VITE_OAUTH_PORTAL_URL && import.meta.env.VITE_APP_ID
-  );
-  const authAction = getAuthAction(isAuthenticated, hasOAuthConfig);
+  const authAction = getAuthAction(isAuthenticated);
   const authButtonLabel = getAuthButtonLabel(authAction);
   const playbackProgress = duration ? (currentTime / duration) * 100 : 0;
   const provenance = useMemo(
@@ -385,13 +382,7 @@ export default function Home() {
       setProfileMenuOpen(open => !open);
       return;
     }
-    if (authAction === "sign_in") {
-      startLogin();
-      return;
-    }
-    toast.info(
-      "Local sign-in is not configured. Add VITE_OAUTH_PORTAL_URL and VITE_APP_ID to .env.local, or open the hosted Netoval app to sign in."
-    );
+    startLogin();
   };
 
   const handleLogout = async () => {
@@ -416,16 +407,8 @@ export default function Home() {
 
   const submitAnalysis = async () => {
     if (!isAuthenticated) {
-      if (hasOAuthConfig) {
-        toast.info(
-          "Sign in to protect the video and start a private analysis session."
-        );
-        startLogin();
-      } else {
-        toast.info(
-          "Local sign-in is not configured. Add VITE_OAUTH_PORTAL_URL and VITE_APP_ID to .env.local, or open the hosted Netoval app to sign in."
-        );
-      }
+      toast.info("Sign in to protect the video and start a private analysis session.");
+      startLogin();
       return;
     }
     if (!videoFile || corners.length < 3) return;

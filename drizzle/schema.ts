@@ -11,7 +11,7 @@ export const users = mysqlTable("users", {
    * Use this for relations between tables.
    */
   id: int("id").autoincrement().primaryKey(),
-  /** OAuth identifier (openId) returned from the OAuth callback. Unique per user. */
+  /** Stable unique account id; email accounts use `pw_...`. */
   openId: varchar("openId", { length: 64 }).notNull().unique(),
   name: text("name"),
   email: varchar("email", { length: 320 }),
@@ -24,6 +24,13 @@ export const users = mysqlTable("users", {
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
+
+/** Password hashes live apart from `users` so a user row can never carry one to the client. */
+export const passwordCredentials = mysqlTable("passwordCredentials", {
+  userId: int("userId").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  passwordHash: varchar("passwordHash", { length: 255 }).notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
 
 export const analysisSessions = mysqlTable("analysisSessions", {
   id: varchar("id", { length: 28 }).primaryKey(),

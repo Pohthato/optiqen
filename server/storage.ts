@@ -1,66 +1,37 @@
-// Storage helpers for local development and production object storage.
-// Uploads via Forge Server presigned URL to S3 (PUT direct).
-// Downloads return /manus-storage/{key} paths served via 307 redirect.
+// Video files live on the app server's disk (STORAGE_DIR, default ./uploads).
+// Browsers upload to a same-origin URL with their session cookie; the GPU worker
+// downloads from an absolute URL whose key is unguessable.
+// On hosts with an ephemeral filesystem, mount a volume at STORAGE_DIR.
 
-import { ENV } from "./_core/env";
-import fs from "node:fs/promises";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
+import type { Express, Request, Response } from "express";
+import { sdk } from "./_core/sdk";
 
-function getForgeConfig() {
-  const forgeUrl = ENV.forgeApiUrl;
-  const forgeKey = ENV.forgeApiKey;
+export const MAX_UPLOAD_BYTES = 2_000_000_000;
+const ROUTE = "/api/files";
+const UPLOAD_PREFIX = "analysis-sources";
 
-  if (!forgeUrl || !forgeKey) {
-    throw new Error(
-      "Storage config missing: set BUILT_IN_FORGE_API_URL and BUILT_IN_FORGE_API_KEY",
-    );
-  }
-
-  return { forgeUrl: forgeUrl.replace(/\/+$/, ""), forgeKey };
+function storageRoot() {
+  return path.resolve(process.env.STORAGE_DIR ?? "uploads");
 }
 
-function useLocalStorage() {
-  return process.env.LOCAL_STORAGE_ENABLED === "true";
-}
-
-function localStorageRoot() {
-  return path.resolve(process.env.LOCAL_STORAGE_DIR ?? "uploads");
-}
-
-function localStoragePath(key: string) {
-  const root = localStorageRoot();
-  const resolved = path.resolve(root, normalizeKey(key));
-  if (!resolved.startsWith(`${root}${path.sep}`)) throw new Error("Invalid storage key");
-  return resolved;
-}
-
-export function registerLocalStorageRoutes(app: { put: Function; get: Function }) {
-  if (!useLocalStorage()) return;
-  app.put("/api/local-storage/*", async (req: any, res: any) => {
-    try {
-      const destination = localStoragePath(req.params[0] as string);
-      await fs.mkdir(path.dirname(destination), { recursive: true });
-      const chunks: Buffer[] = [];
-      req.on("data", (chunk: Buffer) => chunks.push(chunk));
-      req.on("end", async () => {
-        await fs.writeFile(destination, Buffer.concat(chunks));
-        res.status(200).json({ ok: true });
-      });
-    } catch (error) {
-      res.status(400).json({ error: error instanceof Error ? error.message : "Upload failed" });
-    }
-  });
-  app.get("/api/local-storage/*", (req: any, res: any) => {
-    try {
-      res.sendFile(localStoragePath(req.params[0] as string));
-    } catch {
-      res.status(404).json({ error: "File not found" });
-    }
-  });
+function publicBaseUrl() {
+  return (process.env.PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/+$/, "");
 }
 
 function normalizeKey(relKey: string): string {
   return relKey.replace(/^\/+/, "");
+}
+
+/** Absolute path for a key; throws if the key escapes the storage root. */
+function storagePath(key: string): string {
+  const root = storageRoot();
+  const resolved = path.resolve(root, normalizeKey(key));
+  if (!resolved.startsWith(`${root}${path.sep}`)) throw new Error("Invalid storage key");
+  return resolved;
 }
 
 function appendHashSuffix(relKey: string): string {
@@ -70,101 +41,93 @@ function appendHashSuffix(relKey: string): string {
   return `${relKey.slice(0, lastDot)}_${hash}${relKey.slice(lastDot)}`;
 }
 
+/** The user id that owns a key (`analysis-sources/{userId}/...`), or null. */
+function ownerOfKey(key: string): number | null {
+  const [prefix, owner] = normalizeKey(key).split("/");
+  return prefix === UPLOAD_PREFIX && /^\d+$/.test(owner ?? "") ? Number(owner) : null;
+}
+
 export async function storageCreateUploadUrl(
   relKey: string,
   contentType = "application/octet-stream",
 ): Promise<{ key: string; uploadUrl: string; contentType: string }> {
-  if (useLocalStorage()) {
-    const key = appendHashSuffix(normalizeKey(relKey));
-    const baseUrl = (process.env.LOCAL_STORAGE_BASE_URL ?? process.env.PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
-    return { key, uploadUrl: `${baseUrl}/api/local-storage/${key}`, contentType };
-  }
-  const { forgeUrl, forgeKey } = getForgeConfig();
   const key = appendHashSuffix(normalizeKey(relKey));
-  const presignUrl = new URL("v1/storage/presign/put", forgeUrl + "/");
-  presignUrl.searchParams.set("path", key);
-
-  const presignResp = await fetch(presignUrl, {
-    headers: { Authorization: `Bearer ${forgeKey}` },
-  });
-  if (!presignResp.ok) {
-    const msg = await presignResp.text().catch(() => presignResp.statusText);
-    throw new Error(`Storage upload preparation failed (${presignResp.status}): ${msg}`);
-  }
-
-  const { url: uploadUrl } = (await presignResp.json()) as { url: string };
-  if (!uploadUrl) throw new Error("Forge returned an empty upload URL");
-  return { key, uploadUrl, contentType };
-}
-
-export async function storagePut(
-  relKey: string,
-  data: Buffer | Uint8Array | string,
-  contentType = "application/octet-stream",
-): Promise<{ key: string; url: string }> {
-  const { forgeUrl, forgeKey } = getForgeConfig();
-  const key = appendHashSuffix(normalizeKey(relKey));
-
-  // 1. Get presigned PUT URL from Forge
-  const presignUrl = new URL("v1/storage/presign/put", forgeUrl + "/");
-  presignUrl.searchParams.set("path", key);
-
-  const presignResp = await fetch(presignUrl, {
-    headers: { Authorization: `Bearer ${forgeKey}` },
-  });
-
-  if (!presignResp.ok) {
-    const msg = await presignResp.text().catch(() => presignResp.statusText);
-    throw new Error(`Storage presign failed (${presignResp.status}): ${msg}`);
-  }
-
-  const { url: s3Url } = (await presignResp.json()) as { url: string };
-  if (!s3Url) throw new Error("Forge returned empty presign URL");
-
-  // 2. PUT file directly to S3
-  const blob =
-    typeof data === "string"
-      ? new Blob([data], { type: contentType })
-      : new Blob([data as any], { type: contentType });
-
-  const uploadResp = await fetch(s3Url, {
-    method: "PUT",
-    headers: { "Content-Type": contentType },
-    body: blob,
-  });
-
-  if (!uploadResp.ok) {
-    throw new Error(`Storage upload to S3 failed (${uploadResp.status})`);
-  }
-
-  return { key, url: `/manus-storage/${key}` };
-}
-
-export async function storageGet(relKey: string): Promise<{ key: string; url: string }> {
-  const key = normalizeKey(relKey);
-  return { key, url: `/manus-storage/${key}` };
+  return { key, uploadUrl: `${ROUTE}/${key}`, contentType };
 }
 
 export async function storageGetSignedUrl(relKey: string): Promise<string> {
-  if (useLocalStorage()) {
-    const baseUrl = (process.env.LOCAL_STORAGE_BASE_URL ?? process.env.PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
-    return `${baseUrl}/api/local-storage/${normalizeKey(relKey)}`;
+  return `${publicBaseUrl()}${ROUTE}/${normalizeKey(relKey)}`;
+}
+
+async function receiveUpload(req: Request, res: Response) {
+  let userId: number;
+  try {
+    userId = (await sdk.authenticateRequest(req)).id;
+  } catch {
+    res.status(401).json({ error: "Sign in to upload." });
+    return;
   }
-  const { forgeUrl, forgeKey } = getForgeConfig();
-  const key = normalizeKey(relKey);
-
-  const getUrl = new URL("v1/storage/presign/get", forgeUrl + "/");
-  getUrl.searchParams.set("path", key);
-
-  const resp = await fetch(getUrl, {
-    headers: { Authorization: `Bearer ${forgeKey}` },
+  const key = normalizeKey((req.params as Record<string, string>)[0] ?? "");
+  if (ownerOfKey(key) !== userId) {
+    res.status(403).json({ error: "You can only upload into your own folder." });
+    return;
+  }
+  if (Number(req.headers["content-length"] ?? 0) > MAX_UPLOAD_BYTES) {
+    res.status(413).json({ error: "Upload is larger than 2 GB." });
+    return;
+  }
+  let destination: string;
+  try {
+    destination = storagePath(key);
+  } catch {
+    res.status(400).json({ error: "Invalid storage key." });
+    return;
+  }
+  await fsp.mkdir(path.dirname(destination), { recursive: true });
+  const partial = `${destination}.partial`;
+  const out = fs.createWriteStream(partial);
+  let received = 0;
+  let failed = false;
+  const fail = (status: number, message: string) => {
+    if (failed) return;
+    failed = true;
+    req.unpipe(out);
+    out.destroy();
+    fs.rm(partial, { force: true }, () => undefined);
+    if (!res.headersSent) res.status(status).json({ error: message });
+  };
+  req.on("data", (chunk: Buffer) => {
+    received += chunk.length;
+    if (received > MAX_UPLOAD_BYTES) fail(413, "Upload is larger than 2 GB.");
   });
+  req.on("aborted", () => fail(400, "Upload was interrupted."));
+  out.on("error", () => fail(500, "Upload could not be saved."));
+  out.on("finish", async () => {
+    if (failed) return;
+    try {
+      await fsp.rename(partial, destination);
+      res.status(200).json({ ok: true });
+    } catch {
+      fail(500, "Upload could not be saved.");
+    }
+  });
+  req.pipe(out);
+}
 
-  if (!resp.ok) {
-    const msg = await resp.text().catch(() => resp.statusText);
-    throw new Error(`Storage signed URL failed (${resp.status}): ${msg}`);
+function serveFile(req: Request, res: Response) {
+  let file: string;
+  try {
+    file = storagePath((req.params as Record<string, string>)[0] ?? "");
+  } catch {
+    res.status(404).json({ error: "File not found." });
+    return;
   }
+  res.sendFile(file, error => {
+    if (error && !res.headersSent) res.status(404).json({ error: "File not found." });
+  });
+}
 
-  const { url } = (await resp.json()) as { url: string };
-  return url;
+export function registerStorageRoutes(app: Express) {
+  app.put(`${ROUTE}/*`, (req, res) => void receiveUpload(req, res));
+  app.get(`${ROUTE}/*`, serveFile);
 }

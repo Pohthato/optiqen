@@ -1,22 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { getAuthAction, getAuthButtonLabel } from "./authUi";
+import { getAuthAction, getAuthButtonLabel, loginPath, safeNextPath } from "./authUi";
 
 describe("auth control state", () => {
   it("opens a profile menu for authenticated users", () => {
-    const action = getAuthAction(true, false);
+    const action = getAuthAction(true);
     expect(action).toBe("profile");
     expect(getAuthButtonLabel(action)).toBe("Open profile menu");
   });
 
-  it("starts sign-in when hosted OAuth is configured", () => {
-    const action = getAuthAction(false, true);
+  it("starts sign-in for everyone else", () => {
+    const action = getAuthAction(false);
     expect(action).toBe("sign_in");
     expect(getAuthButtonLabel(action)).toBe("Sign in to analyze");
   });
+});
 
-  it("explains local configuration when OAuth is unavailable", () => {
-    const action = getAuthAction(false, false);
-    expect(action).toBe("configure_local_auth");
-    expect(getAuthButtonLabel(action)).toBe("Configure local sign-in");
+describe("sign-in redirects", () => {
+  it("sends the visitor to the sign-in page with where they were", () => {
+    expect(loginPath("/", "")).toBe("/login?next=%2F");
+    expect(loginPath("/sessions/abc", "?tab=coach")).toBe("/login?next=%2Fsessions%2Fabc%3Ftab%3Dcoach");
+  });
+
+  it("only returns to paths on this site", () => {
+    expect(safeNextPath("/sessions/abc?tab=coach")).toBe("/sessions/abc?tab=coach");
+    expect(safeNextPath(null)).toBe("/");
+    expect(safeNextPath("https://evil.example")).toBe("/");
+    expect(safeNextPath("//evil.example/path")).toBe("/");
+    expect(safeNextPath("/\\evil.example")).toBe("/");
+    expect(safeNextPath("/login?next=%2F")).toBe("/");
   });
 });

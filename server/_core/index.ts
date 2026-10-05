@@ -3,8 +3,6 @@ import express from "express";
 import { createServer } from "http";
 import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
-import { registerOAuthRoutes } from "./oauth";
-import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
@@ -12,7 +10,7 @@ import crypto from "node:crypto";
 import { reconcileAnalysisWorkerJob } from "../analysisCompletion";
 import { getWorkerCallbackToken } from "../analysisWorker";
 import { startKeepWarmScheduler } from "../warmupScheduler";
-import { registerLocalStorageRoutes } from "../storage";
+import { registerStorageRoutes } from "../storage";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -42,7 +40,7 @@ async function startServer() {
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
-  registerLocalStorageRoutes(app);
+  registerStorageRoutes(app);
   app.post("/api/worker-complete/:analysisId", async (req, res) => {
     const expected = getWorkerCallbackToken(req.params.analysisId);
     const received = typeof req.query.token === "string" ? req.query.token : "";
@@ -61,8 +59,6 @@ async function startServer() {
       res.status(503).json({ error: "Temporary completion reconciliation failure." });
     }
   });
-  registerStorageProxy(app);
-  registerOAuthRoutes(app);
   // tRPC API
   app.use(
     "/api/trpc",

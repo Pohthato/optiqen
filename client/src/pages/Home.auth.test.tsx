@@ -81,22 +81,11 @@ describe("Home authentication and calibration interactions", () => {
     expect(screen.getByText("Sign out")).toBeTruthy();
   });
 
-  it("starts hosted sign-in from the unauthenticated avatar when OAuth is configured", () => {
+  it("starts sign-in from the unauthenticated avatar", () => {
     authState.isAuthenticated = false;
-    vi.stubEnv("VITE_OAUTH_PORTAL_URL", "https://auth.example.test");
-    vi.stubEnv("VITE_APP_ID", "netoval-local");
     render(<Home />);
     fireEvent.click(screen.getByRole("button", { name: "Sign in to analyze" }));
     expect(startLoginMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("reports the local sign-in setup requirement when OAuth is unavailable", () => {
-    authState.isAuthenticated = false;
-    vi.stubEnv("VITE_OAUTH_PORTAL_URL", "");
-    vi.stubEnv("VITE_APP_ID", "");
-    render(<Home />);
-    fireEvent.click(screen.getByRole("button", { name: "Configure local sign-in" }));
-    expect(toastInfoMock).toHaveBeenCalledWith(expect.stringContaining("Local sign-in is not configured"));
   });
 
   it("keeps point labels neutral when far and near points are clicked in arbitrary order", async () => {

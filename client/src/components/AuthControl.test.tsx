@@ -16,15 +16,10 @@ describe("AuthControl", () => {
     expect(markup).toContain("Sign out");
   });
 
-  it("renders the hosted sign-in action label for unauthenticated users", () => {
+  it("renders the sign-in action label for unauthenticated users", () => {
     const markup = renderToStaticMarkup(<AuthControl {...props} action="sign_in" label="Sign in to analyze" />);
     expect(markup).toContain('aria-label="Sign in to analyze"');
     expect(markup).toContain(">?</button>");
     expect(markup).not.toContain("Sign out");
-  });
-
-  it("renders the local configuration action label when OAuth is unavailable", () => {
-    const markup = renderToStaticMarkup(<AuthControl {...props} action="configure_local_auth" label="Configure local sign-in" />);
-    expect(markup).toContain('aria-label="Configure local sign-in"');
   });
 });

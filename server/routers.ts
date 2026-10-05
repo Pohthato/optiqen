@@ -6,7 +6,7 @@ import { AnalysisResult, CourtCorner, CourtType, buildCoachingPrompt, validateCa
 import { analysisResultSchema, cornerSchema } from "./analysisSchema";
 import { submitAnalysisWorkerJob, submitWorkerWarmup } from "./analysisWorker";
 import { reconcileAnalysisWorkerJob } from "./analysisCompletion";
-import { getSessionCookieOptions } from "./_core/cookies";
+import { authRouter } from "./auth";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { createAnalysisSession, getAnalysisSessionForUser, listAnalysisSessionsForUser, updateAnalysisSessionForUser } from "./db";
@@ -20,18 +20,8 @@ function safeFilename(filename: string) {
 }
 
 export const appRouter = router({
-    // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
   system: systemRouter,
-  auth: router({
-    me: publicProcedure.query(opts => opts.ctx.user),
-    logout: publicProcedure.mutation(({ ctx }) => {
-      const cookieOptions = getSessionCookieOptions(ctx.req);
-      ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
-      return {
-        success: true,
-      } as const;
-    }),
-  }),
+  auth: authRouter,
   upload: router({
     prepareVideo: protectedProcedure.input(z.object({
       filename: z.string().trim().min(1).max(255),

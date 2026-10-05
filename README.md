@@ -47,7 +47,9 @@ Copy `.env.example` to `.env` and set:
 - `DATABASE_URL` — app database
 - `CV_WORKER_URL` / `CV_WORKER_TOKEN` — RunPod endpoint root + API key
 - `CV_WORKER_KEEP_WARM_ENABLED` — keep one GPU warm (product hours)
-- `BUILT_IN_FORGE_API_URL` / `BUILT_IN_FORGE_API_KEY` — storage presign proxy
+- `JWT_SECRET` — long random string that signs sign-in cookies (required)
+- `ADMIN_EMAIL` — account that becomes admin when it registers
+- `STORAGE_DIR` — where uploaded videos are stored (mount a persistent volume in production)
 
 ## Video Limits
 - Max duration: 120 seconds (worker limit, configurable)

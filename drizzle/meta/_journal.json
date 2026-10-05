@@ -15,6 +15,13 @@
       "when": 1788825600000,
       "tag": "0001_worker_observability",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1791158400000,
+      "tag": "0002_password_auth",
+      "breakpoints": true
     }
   ]
 }
