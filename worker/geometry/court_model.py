@@ -17,6 +17,7 @@ DOUBLES_MARGIN_M = 0.46
 NET_Y_M = COURT_LENGTH_M / 2
 NET_POST_HEIGHT_M = 1.55
 NET_CENTRE_HEIGHT_M = 1.524
+NET_TAPE_WIDTH_M = 0.075  # white tape doubled over the top cord
 SHORT_SERVICE_M = 1.98
 LONG_SERVICE_INSET_M = 0.76
 
@@ -79,3 +80,12 @@ def court_lines() -> list[tuple[str, np.ndarray, np.ndarray]]:
     lines.append(("centre0", np.array([centre, 0.0, 0.0]), np.array([centre, ROWS["short0"], 0.0])))
     lines.append(("centre1", np.array([centre, ROWS["short1"], 0.0]), np.array([centre, COURT_LENGTH_M, 0.0])))
     return lines
+
+
+def net_tape_lines() -> list[tuple[str, np.ndarray, np.ndarray]]:
+    """Centre of the white net tape: a straight span from each post down to the net centre."""
+    drop = NET_TAPE_WIDTH_M / 2
+    left = np.array([COLUMNS["dl"], NET_Y_M, NET_POST_HEIGHT_M - drop])
+    centre = np.array([COLUMNS["c"], NET_Y_M, NET_CENTRE_HEIGHT_M - drop])
+    right = np.array([COLUMNS["dr"], NET_Y_M, NET_POST_HEIGHT_M - drop])
+    return [("tape_left", left, centre), ("tape_right", centre, right)]

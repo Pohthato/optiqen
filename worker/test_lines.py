@@ -6,7 +6,7 @@ import numpy as np
 
 from geometry.camera import Camera
 from geometry.court_model import court_lines
-from geometry.lines import find_line_offsets, line_response, sample_court_lines
+from geometry.lines import find_line_offsets, line_response, sample_lines
 from simulation.render import render_frame
 
 SIZE = (640, 360)
@@ -31,10 +31,10 @@ def ridge_image(columns: list[tuple[float, float, float]], size=(120, 80)) -> np
     return np.repeat(row[None, :], height, axis=0)
 
 
-class SampleCourtLinesTests(unittest.TestCase):
+class SampleLinesTests(unittest.TestCase):
     def test_samples_lie_on_painted_lines_with_unit_directions(self):
-        points, directions, line_ids = sample_court_lines(0.25)
         lines = court_lines()
+        points, directions, line_ids = sample_lines(lines, 0.25)
         self.assertEqual(len(points), len(directions))
         self.assertEqual(len(points), len(line_ids))
         self.assertEqual(set(line_ids.tolist()), set(range(len(lines))))
@@ -46,7 +46,7 @@ class SampleCourtLinesTests(unittest.TestCase):
             np.testing.assert_allclose(direction, along)
 
     def test_line_ends_are_not_sampled(self):
-        points, _, line_ids = sample_court_lines(0.25)
+        points, _, line_ids = sample_lines(court_lines(), 0.25)
         for line_id, (_, start, end) in enumerate(court_lines()):
             mine = points[line_ids == line_id]
             self.assertGreater(np.linalg.norm(mine - start, axis=1).min(), 0.1)
@@ -66,7 +66,7 @@ class LineResponseTests(unittest.TestCase):
         self.assertLessEqual(float(self.response.max()), 1.0)
 
     def test_painted_lines_respond_and_open_floor_does_not(self):
-        points, _, _ = sample_court_lines(0.25)
+        points, _, _ = sample_lines(court_lines(), 0.25)
         pixels = CAMERA.project(points).astype(np.float32)
         inside = (pixels[:, 0] > 2) & (pixels[:, 0] < SIZE[0] - 3) & (pixels[:, 1] > 2) & (pixels[:, 1] < SIZE[1] - 3)
         on_lines = cv2.remap(self.response, pixels[inside, 0][None, :], pixels[inside, 1][None, :], cv2.INTER_LINEAR)
@@ -81,7 +81,7 @@ class LineResponseTests(unittest.TestCase):
 class FindLineOffsetsTests(unittest.TestCase):
     def test_recovers_a_known_shift_on_a_rendered_court(self):
         response = line_response(render_frame(CAMERA, SIZE, noise_sigma=2.0, seed=4))
-        points, directions, _ = sample_court_lines(0.25)
+        points, directions, _ = sample_lines(court_lines(), 0.25)
         pixels, normals = normals_at(CAMERA, points, directions)
         inside = (pixels[:, 0] > 12) & (pixels[:, 0] < SIZE[0] - 12) & (pixels[:, 1] > 12) & (pixels[:, 1] < SIZE[1] - 12)
         offsets, strengths = find_line_offsets(response, pixels[inside] + 2.5 * normals[inside], normals[inside], 8.0)

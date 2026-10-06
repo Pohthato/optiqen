@@ -8,7 +8,15 @@ import cv2
 import numpy as np
 
 from geometry.camera import Camera
-from geometry.court_model import COLUMNS, COURT_LENGTH_M, NET_CENTRE_HEIGHT_M, NET_POST_HEIGHT_M, NET_Y_M, court_lines
+from geometry.court_model import (
+    COLUMNS,
+    COURT_LENGTH_M,
+    NET_CENTRE_HEIGHT_M,
+    NET_POST_HEIGHT_M,
+    NET_TAPE_WIDTH_M,
+    NET_Y_M,
+    court_lines,
+)
 
 FLOOR_BGR = (64, 112, 44)
 LINE_BGR = (232, 232, 232)
@@ -22,7 +30,6 @@ SHUTTLE_BGR = (250, 250, 250)
 LINE_WIDTH_M = 0.04
 LINE_SEGMENT_M = 0.25
 NET_DEPTH_M = 0.76
-TAPE_DEPTH_M = 0.075
 NET_OPACITY = 0.35
 PLAYER_RADIUS_M = 0.25
 PLAYER_HEIGHT_M = 1.75
@@ -83,10 +90,10 @@ def _draw_net(image: np.ndarray, camera: Camera) -> None:
     spans = [((left, NET_POST_HEIGHT_M), (centre, NET_CENTRE_HEIGHT_M)), ((centre, NET_CENTRE_HEIGHT_M), (right, NET_POST_HEIGHT_M))]
     mesh = image.copy()
     for (xa, za), (xb, zb) in spans:
-        _fill(mesh, camera, [[xa, NET_Y_M, za - TAPE_DEPTH_M], [xb, NET_Y_M, zb - TAPE_DEPTH_M], [xb, NET_Y_M, zb - NET_DEPTH_M], [xa, NET_Y_M, za - NET_DEPTH_M]], NET_BGR)
+        _fill(mesh, camera, [[xa, NET_Y_M, za - NET_TAPE_WIDTH_M], [xb, NET_Y_M, zb - NET_TAPE_WIDTH_M], [xb, NET_Y_M, zb - NET_DEPTH_M], [xa, NET_Y_M, za - NET_DEPTH_M]], NET_BGR)
     cv2.addWeighted(mesh, NET_OPACITY, image, 1 - NET_OPACITY, 0, dst=image)
     for (xa, za), (xb, zb) in spans:
-        _fill(image, camera, [[xa, NET_Y_M, za], [xb, NET_Y_M, zb], [xb, NET_Y_M, zb - TAPE_DEPTH_M], [xa, NET_Y_M, za - TAPE_DEPTH_M]], TAPE_BGR)
+        _fill(image, camera, [[xa, NET_Y_M, za], [xb, NET_Y_M, zb], [xb, NET_Y_M, zb - NET_TAPE_WIDTH_M], [xa, NET_Y_M, za - NET_TAPE_WIDTH_M]], TAPE_BGR)
     for x in (left, right):
         ends = _to_fixed(camera.project(np.array([[x, NET_Y_M, 0.0], [x, NET_Y_M, NET_POST_HEIGHT_M]])))
         if ends is not None:

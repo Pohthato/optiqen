@@ -5,8 +5,6 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from geometry.court_model import court_lines
-
 END_CLEARANCE_M = 0.12  # skip line ends, where two lines cross and the profile is ambiguous
 RIVAL_RATIO = 0.5  # a peak at least this fraction of the strongest one competes on distance
 MIN_STRENGTH = 0.04
@@ -20,16 +18,18 @@ def line_response(frame: np.ndarray, max_line_px: int | None = None) -> np.ndarr
     gray = cv2.GaussianBlur(gray, (3, 3), 0)
     size = max_line_px or max(7, gray.shape[0] // 30)
     size += 1 - size % 2
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (size, size))
     tophat = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, kernel)
     return tophat.astype(np.float32) / 255.0
 
 
-def sample_court_lines(spacing_m: float = 0.25) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """World points along every painted line (ends excluded), each line's unit direction at
-    the point, and the index of the line in court_lines()."""
+def sample_lines(
+    lines: list[tuple[str, np.ndarray, np.ndarray]], spacing_m: float = 0.25
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """World points along each (name, start, end) segment, ends excluded; the segment's unit
+    direction at each point; and the segment's index in `lines`."""
     points, directions, line_ids = [], [], []
-    for line_id, (_, start, end) in enumerate(court_lines()):
+    for line_id, (_, start, end) in enumerate(lines):
         length = float(np.linalg.norm(end - start))
         along = (end - start) / length
         count = max(1, int((length - 2 * END_CLEARANCE_M) // spacing_m))

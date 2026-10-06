@@ -9,6 +9,7 @@ from geometry.court_model import (
     KEYPOINTS,
     NET_Y_M,
     court_lines,
+    net_tape_lines,
 )
 
 
@@ -55,6 +56,13 @@ class CourtModelTests(unittest.TestCase):
         for name in FLOOR_KEYPOINT_NAMES:
             count = sum(1 for _, start, end in lines if on_segment(KEYPOINTS[name], start, end))
             self.assertGreaterEqual(count, 2, name)
+
+    def test_net_tape_runs_post_to_centre_half_a_tape_below_the_net_top(self):
+        (_, left, centre), (_, centre_again, right) = net_tape_lines()
+        np.testing.assert_allclose(centre, centre_again)
+        np.testing.assert_allclose(left, KEYPOINTS["post_left_top"] - [0, 0, 0.0375])
+        np.testing.assert_allclose(right, KEYPOINTS["post_right_top"] - [0, 0, 0.0375])
+        np.testing.assert_allclose(centre, KEYPOINTS["net_centre_top"] - [0, 0, 0.0375])
 
     def test_ui_corner_labels_are_the_singles_corners(self):
         self.assertEqual(
