@@ -12,7 +12,7 @@ import argparse
 import json
 import math
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +42,7 @@ class SyntheticClip:
     audio_offset_s: float
     distractor_times: list[float]
     contact_audio_times: list[float]
+    occluded: list[bool] = field(default_factory=list)
 
 
 def make_clip(
@@ -56,7 +57,10 @@ def make_clip(
     distractors: int = 0,
     noise_sigma: float = 2.0,
     sound_delay: bool = True,
+    occlusions: list[tuple[float, float]] | tuple = (),
 ) -> SyntheticClip:
+    """occlusions: (start_s, end_s) stretches where something covers the lens (a hand, a
+    person walking past the phone); those frames are near-black and flagged in the truth."""
     if image_size[0] % 2 or image_size[1] % 2:
         raise ValueError(f"frame size {image_size} must be even: the mp4v writer silently crops odd sizes")
     rally = rally or canned_rally()
@@ -66,13 +70,19 @@ def make_clip(
     exposure = 0.5 / fps
     frames: list[np.ndarray] = []
     shuttle: list[np.ndarray | None] = []
+    occluded: list[bool] = []
     for index in range(count):
         time = index / fps
         position = rally.shuttle_at(time)
         previous = rally.shuttle_at(max(0.0, time - exposure)) if position is not None else None
         players = list(player_positions(rally, time).values())
-        frames.append(render_frame(cameras[index], image_size, position, previous, players, noise_sigma, seed + index))
+        frame = render_frame(cameras[index], image_size, position, previous, players, noise_sigma, seed + index)
+        covered = any(start <= time < end for start, end in occlusions)
+        if covered:
+            frame = np.clip(np.random.default_rng(seed + index).normal(18, 4, frame.shape), 0, 255).astype(np.uint8)
+        frames.append(frame)
         shuttle.append(position)
+        occluded.append(covered)
     # A hit is heard once its sound has travelled to the phone (~15-45 ms on a court).
     heard = []
     for contact in rally.contacts:
@@ -84,7 +94,7 @@ def make_clip(
     audio, distractor_times = render_audio(heard, duration, seed=seed, distractors=distractors, offset_s=audio_offset_s)
     contact_audio_times = [time + audio_offset_s for time in heard]
     return SyntheticClip(
-        fps, image_size, cameras, frames, shuttle, rally, audio, SAMPLE_RATE, audio_offset_s, distractor_times, contact_audio_times
+        fps, image_size, cameras, frames, shuttle, rally, audio, SAMPLE_RATE, audio_offset_s, distractor_times, contact_audio_times, occluded
     )
 
 
@@ -111,6 +121,7 @@ def truth_dict(clip: SyntheticClip) -> dict[str, Any]:
         "conventions": {
             "imageSize": "[width, height] in pixels",
             "time": "frame i is at i / fps seconds; every per-frame list is indexed by frame",
+            "occluded": "true where something covered the lens; the camera truth still holds for those frames",
             "shuttle": "court metres (x across, y along, z up) at the frame time: the LEADING end of the motion-blur streak, which covers [t - exposureS, t]; null outside flight",
             "cameras": "rvec/tvec map world to camera (OpenCV: x right, y down, z forward); k1 is one radial term on normalised coordinates",
             "audioTimeMs": "when the hit is heard in audio.wav: contact time + sound travel to the camera + audio offset",
@@ -118,6 +129,7 @@ def truth_dict(clip: SyntheticClip) -> dict[str, Any]:
             "distractorTimes": "times in audio.wav of hits from a neighbouring court; no matching contact exists",
         },
         "frameCount": len(clip.frames),
+        "occluded": list(clip.occluded),
         "cameras": [_camera_entry(camera) for camera in clip.cameras],
         "shuttle": [None if position is None else [round(float(v), 5) for v in position] for position in clip.shuttle],
         "contacts": [

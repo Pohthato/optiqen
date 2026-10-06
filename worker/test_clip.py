@@ -88,6 +88,21 @@ class SoundAndConventionTests(unittest.TestCase):
             make_clip(odd, (161, 91), SERVE_ONLY, fps=10.0)
 
 
+class OcclusionTests(unittest.TestCase):
+    def test_frames_inside_an_occlusion_are_covered_and_flagged(self):
+        clip = make_clip(CAMERA, SIZE, SERVE_ONLY, fps=10.0, occlusions=[(1.0, 1.5)])
+        flags = [index / 10.0 >= 1.0 and index / 10.0 < 1.5 for index in range(len(clip.frames))]
+        self.assertEqual(clip.occluded, flags)
+        for index, covered in enumerate(flags):
+            mean = float(clip.frames[index].mean())
+            self.assertTrue(mean < 40 if covered else mean > 60, (index, mean))
+        self.assertEqual(truth_dict(clip)["occluded"], flags)
+
+    def test_no_occlusion_by_default(self):
+        clip = make_clip(CAMERA, SIZE, SERVE_ONLY, fps=10.0)
+        self.assertFalse(any(clip.occluded))
+
+
 class WriteClipTests(unittest.TestCase):
     def test_written_files_read_back(self):
         clip = make_clip(CAMERA, SIZE, SERVE_ONLY, fps=10.0, seed=3)
