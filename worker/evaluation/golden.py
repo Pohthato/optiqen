@@ -12,6 +12,13 @@ from geometry.court_model import COURT_LENGTH_M, DOUBLES_MARGIN_M, KEYPOINTS, SI
 SCHEMA_VERSION = 1
 GOLDEN_SHOT_LABELS = ("serve", "clear", "drop", "net", "lift", "drive", "push", "smash", "block", "other")
 WINNERS = ("near", "far", "unknown")
+PLAYERS = ("near", "far")
+# COCO keypoint order, shared with pose models and tools/labeller.
+COCO_JOINTS = (
+    "nose", "left_eye", "right_eye", "left_ear", "right_ear", "left_shoulder", "right_shoulder",
+    "left_elbow", "right_elbow", "left_wrist", "right_wrist", "left_hip", "right_hip",
+    "left_knee", "right_knee", "left_ankle", "right_ankle",
+)
 LANDING_MARGIN_M = 1.0
 
 
@@ -81,6 +88,29 @@ def validate_golden(doc: Any) -> list[str]:
             errors.append(f"{where}: startMs must be before endMs")
         if item.get("winner") not in WINNERS:
             errors.append(f"{where}: winner must be one of {', '.join(WINNERS)}")
+    if "selectedPlayer" in doc and doc["selectedPlayer"] not in PLAYERS:
+        errors.append("selectedPlayer must be near or far when present")
+    for index, item in enumerate(doc.get("poses") or []):
+        errors.extend(_pose_errors(f"poses[{index}]", item, size if size_ok else None))
+    return errors
+
+
+def _pose_errors(where: str, item: Any, size: list[int] | None) -> list[str]:
+    """A pose is one player's 17 COCO joints at one frame: [x, y, visibility 0|1|2] each."""
+    if not isinstance(item, dict) or not _is_number(item.get("timeMs")) or item["timeMs"] < 0:
+        return [f"{where}: timeMs must be a non-negative number"]
+    errors = []
+    if item.get("player") not in PLAYERS:
+        errors.append(f"{where}: player must be near or far")
+    joints = item.get("keypoints")
+    if not isinstance(joints, list) or len(joints) != len(COCO_JOINTS):
+        return errors + [f"{where}: keypoints must list the {len(COCO_JOINTS)} COCO joints as [x, y, visibility]"]
+    for index, joint in enumerate(joints):
+        name = COCO_JOINTS[index]
+        if not (isinstance(joint, list) and len(joint) == 3 and all(_is_number(v) for v in joint) and joint[2] in (0, 1, 2)):
+            errors.append(f"{where}.{name}: must be [x, y, visibility] with visibility 0, 1 or 2")
+        elif joint[2] > 0 and size is not None and not (0 <= joint[0] < size[0] and 0 <= joint[1] < size[1]):
+            errors.append(f"{where}.{name}: labelled joint is outside the image")
     return errors
 
 

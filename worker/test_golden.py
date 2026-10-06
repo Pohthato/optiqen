@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from evaluation.golden import GOLDEN_SHOT_LABELS, load_golden_dir, validate_golden
+from evaluation.golden import COCO_JOINTS, GOLDEN_SHOT_LABELS, load_golden_dir, validate_golden
 
 VALID = {
     "schemaVersion": 1,
@@ -70,6 +70,36 @@ class ValidateGoldenTests(unittest.TestCase):
     def test_bool_and_nan_are_not_numbers(self):
         self.assertTrue(validate_golden(corrupted(sourceFps=True)))
         self.assertTrue(validate_golden(corrupted(contacts=[{"timeMs": float("nan")}])))
+
+
+def pose(**changes):
+    item = {"timeMs": 1200, "player": "near", "keypoints": [[900.0 + i, 500.0 + i, 2] for i in range(17)]}
+    item.update(changes)
+    return item
+
+
+class PoseLabelTests(unittest.TestCase):
+    def test_coco_joint_order(self):
+        self.assertEqual(len(COCO_JOINTS), 17)
+        self.assertEqual((COCO_JOINTS[0], COCO_JOINTS[9], COCO_JOINTS[16]), ("nose", "left_wrist", "right_ankle"))
+
+    def test_poses_and_selected_player_are_optional_but_validated(self):
+        self.assertEqual(validate_golden(corrupted(selectedPlayer="near", poses=[pose()])), [])
+        hidden = pose(keypoints=[[0.0, 0.0, 0]] * 17)
+        self.assertEqual(validate_golden(corrupted(poses=[hidden])), [])
+
+    def test_reports_each_kind_of_pose_problem(self):
+        cases = {
+            "selectedplayer": corrupted(selectedPlayer="left"),
+            "player": corrupted(poses=[pose(player="umpire")]),
+            "17 coco": corrupted(poses=[pose(keypoints=[[1.0, 1.0, 2]] * 16)]),
+            "visibility": corrupted(poses=[pose(keypoints=[[1.0, 1.0, 3]] * 17)]),
+            "outside the image": corrupted(poses=[pose(keypoints=[[5000.0, 1.0, 2]] * 17)]),
+            "timems": corrupted(poses=[pose(timeMs=-1)]),
+        }
+        for needle, doc in cases.items():
+            errors = validate_golden(doc)
+            self.assertTrue(any(needle in error.lower() for error in errors), (needle, errors))
 
 
 class LoadGoldenDirTests(unittest.TestCase):
