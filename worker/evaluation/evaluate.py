@@ -24,10 +24,13 @@ SHOT_MATCH_TOLERANCE_MS = 100
 
 def evaluate_calibration(golden: dict[str, Any]) -> dict[str, Any] | None:
     """Solve the camera from the golden keypoints of one frame (the frame with the most points).
-    Handheld clips move the camera, so points clicked on different frames cannot be mixed."""
+    Handheld clips move the camera, so points clicked on different frames cannot be mixed.
+    Proposed points are projections of the clicked ones, not evidence, so they are left out."""
     size = (golden["imageSize"][0], golden["imageSize"][1])
     frames: dict[Any, list[dict[str, Any]]] = {}
     for item in golden.get("courtKeypoints", []):
+        if item.get("source") == "proposed":
+            continue
         frames.setdefault(item.get("timeMs"), []).append(item)
     if not frames:
         return None

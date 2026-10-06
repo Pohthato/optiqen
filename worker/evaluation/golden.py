@@ -13,6 +13,9 @@ SCHEMA_VERSION = 1
 GOLDEN_SHOT_LABELS = ("serve", "clear", "drop", "net", "lift", "drive", "push", "smash", "block", "other")
 WINNERS = ("near", "far", "unknown")
 PLAYERS = ("near", "far")
+# Where a court point came from: clicked by a person, a geometric proposal accepted as-is,
+# or a proposal a person moved. Only clicked and adjusted points are independent evidence.
+KEYPOINT_SOURCES = ("clicked", "adjusted", "proposed")
 # COCO keypoint order, shared with pose models and tools/labeller.
 COCO_JOINTS = (
     "nose", "left_eye", "right_eye", "left_ear", "right_ear", "left_shoulder", "right_shoulder",
@@ -55,6 +58,8 @@ def validate_golden(doc: Any) -> list[str]:
             errors.append(f"{where}: pixel is outside the image")
         if isinstance(item, dict) and "timeMs" in item and (not _is_number(item["timeMs"]) or item["timeMs"] < 0):
             errors.append(f"{where}: timeMs (the frame the point was clicked on) must be a non-negative number")
+        if isinstance(item, dict) and "source" in item and item["source"] not in KEYPOINT_SOURCES:
+            errors.append(f"{where}: source must be one of {', '.join(KEYPOINT_SOURCES)}")
     for key in ("contacts", "shots"):
         if not isinstance(doc.get(key), list):
             errors.append(f"{key} must be a list")
@@ -90,8 +95,23 @@ def validate_golden(doc: Any) -> list[str]:
             errors.append(f"{where}: winner must be one of {', '.join(WINNERS)}")
     if "selectedPlayer" in doc and doc["selectedPlayer"] not in PLAYERS:
         errors.append("selectedPlayer must be near or far when present")
+    contact_times = {item["timeMs"] for item in doc.get("contacts") or [] if isinstance(item, dict) and _is_number(item.get("timeMs"))}
+    seen_pose_times: set[float] = set()
     for index, item in enumerate(doc.get("poses") or []):
-        errors.extend(_pose_errors(f"poses[{index}]", item, size if size_ok else None))
+        where = f"poses[{index}]"
+        problems = _pose_errors(where, item, size if size_ok else None)
+        errors.extend(problems)
+        if problems and not isinstance(item, dict):
+            continue
+        time = item.get("timeMs")
+        if _is_number(time):
+            if time not in contact_times:
+                errors.append(f"{where}: timeMs must be the time of a labelled contact")
+            if time in seen_pose_times:
+                errors.append(f"{where}: duplicate pose for the contact at {time} ms")
+            seen_pose_times.add(time)
+        if doc.get("selectedPlayer") in PLAYERS and item.get("player") in PLAYERS and item["player"] != doc["selectedPlayer"]:
+            errors.append(f"{where}: player must be the selectedPlayer ({doc['selectedPlayer']})")
     return errors
 
 

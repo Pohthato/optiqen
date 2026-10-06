@@ -86,6 +86,16 @@ class EvaluateClipTests(unittest.TestCase):
         self.assertEqual(calibration["frameTimeMs"], 0)
         self.assertEqual(calibration["tier"], "validated")
 
+    def test_proposed_court_points_do_not_count_towards_calibration(self):
+        clip = golden_clip()
+        clicked = {"long0_sl", "long0_sr", "short1_sl", "short1_sr", "back1_sl", "back1_sr"}
+        self.assertTrue(clicked <= {item["name"] for item in clip["courtKeypoints"]})
+        for item in clip["courtKeypoints"]:
+            item["timeMs"] = 0
+            item["source"] = "clicked" if item["name"] in clicked else "proposed"
+        calibration = evaluate_clip(clip, RESULT)["calibration"]
+        self.assertEqual(calibration["redundancy"], 6 - 4)
+
     def test_unverified_prediction_is_scored_as_wrong(self):
         result = {
             "events": [],

@@ -34,6 +34,9 @@
   // Sound reaches a phone 15-45 ms after the racket meets the shuttle on a court.
   const SOUND_LEAD_MS = 30;
   const RALLY_GAP_MS = 2500;
+  // A suggested hit is accepted only at a frame this close to it; anything further is a different hit.
+  const SUGGESTION_WINDOW_MS = 250;
+  const KEYPOINT_SOURCES = ["clicked", "adjusted", "proposed"];
 
   // Court geometry in metres, mirroring worker/geometry/court_model.py.
   const SINGLES_WIDTH_M = 5.18;
@@ -110,7 +113,8 @@
   }
 
   function removeContact(state, index) {
-    state.contacts.splice(index, 1);
+    const [removed] = state.contacts.splice(index, 1);
+    if (removed && state.poses) delete state.poses[String(removed.timeMs)];
   }
 
   function nearestContactIndex(state, timeMs, toleranceMs = Infinity) {
@@ -152,11 +156,22 @@
 
   // timeMs is the frame the point was clicked on: handheld clips move the camera, so a
   // court point only means something together with its frame.
-  function setKeypoint(state, name, x, y, timeMs) {
+  // source records where the point came from: "clicked" by a person, "proposed" by the
+  // geometry and accepted as-is, or "adjusted" (a proposal a person moved). Missing = clicked.
+  function setKeypoint(state, name, x, y, timeMs, source) {
     if (!KEYPOINT_NAMES.includes(name)) throw new Error(`Unknown court keypoint: ${name}`);
+    if (source !== undefined && !KEYPOINT_SOURCES.includes(source)) throw new Error(`Unknown keypoint source: ${source}`);
     const point = { x: round2(finite(x, "Pixel x")), y: round2(finite(y, "Pixel y")) };
     if (timeMs !== undefined) point.timeMs = Math.round(finite(timeMs, "Keypoint time"));
+    if (source !== undefined) point.source = source;
     state.keypoints[name] = point;
+  }
+
+  /** A person placed or dragged a point on the frame at timeMs; proposals they move become adjusted. */
+  function moveKeypoint(state, name, x, y, timeMs) {
+    const existing = state.keypoints[name];
+    const source = existing && (existing.source === "proposed" || existing.source === "adjusted") ? "adjusted" : "clicked";
+    setKeypoint(state, name, x, y, timeMs, source);
   }
 
   function removeKeypoint(state, name) {
@@ -226,26 +241,71 @@
     return multiply3(multiply3(inverseTo, [[h[0], h[1], h[2]], [h[3], h[4], h[5]], [h[6], h[7], 1]]), tf);
   }
 
-  // Points that do not all lie near one line: some triangle covers more than 0.5 square metres.
-  function wellSpread(points) {
-    for (let i = 0; i < points.length; i += 1)
-      for (let j = i + 1; j < points.length; j += 1)
-        for (let k = j + 1; k < points.length; k += 1) {
-          const [a, b, c] = [points[i], points[j], points[k]];
-          if (Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])) / 2 > 0.5) return true;
-        }
-    return false;
+  function triangleArea(a, b, c) {
+    return Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])) / 2;
   }
 
-  /** The court-to-image homography from the clicked floor points, or null. */
+  // Points that pin down a homography. With exactly four, no three may lie on one line;
+  // with more, some triangle must cover more than 0.5 square metres.
+  function wellSpread(points) {
+    const triples = [];
+    for (let i = 0; i < points.length; i += 1)
+      for (let j = i + 1; j < points.length; j += 1)
+        for (let k = j + 1; k < points.length; k += 1) triples.push(triangleArea(points[i], points[j], points[k]));
+    return points.length === 4 ? triples.every(area => area > 0.5) : triples.some(area => area > 0.5);
+  }
+
+  /** Floor points a person placed (not accepted proposals) on the frame most of them share. */
+  function evidencePoints(state) {
+    const byFrame = new Map();
+    for (const [name, point] of Object.entries(state.keypoints)) {
+      if (!FLOOR_NAMES.includes(name) || point.source === "proposed") continue;
+      const frame = point.timeMs ?? null;
+      if (!byFrame.has(frame)) byFrame.set(frame, []);
+      byFrame.get(frame).push(name);
+    }
+    let best = { frame: null, names: [] };
+    byFrame.forEach((names, frame) => {
+      if (names.length > best.names.length) best = { frame, names };
+    });
+    return best;
+  }
+
+  /** The court-to-image homography from the person's floor points on one frame, or null. */
   function courtHomography(state) {
-    const names = Object.keys(state.keypoints).filter(name => FLOOR_NAMES.includes(name));
+    const { frame, names } = evidencePoints(state);
     const court = names.map(name => KEYPOINT_POSITIONS[name].slice(0, 2));
     if (names.length < 4 || !wellSpread(court)) return null;
     const h = homography(court, names.map(name => [state.keypoints[name].x, state.keypoints[name].y]));
     if (!h) return null;
     // The side of the camera the clicked points are on; points on the other side are behind it.
-    return { h, sign: Math.sign(transformPoint(h, court[0])[2]) };
+    return { h, sign: Math.sign(transformPoint(h, court[0])[2]), frame };
+  }
+
+  /**
+   * A court looks the same mirrored or turned around, so wrongly named corners still fit a
+   * perfect-looking court with every name wrong. Seen from above (any phone above the floor),
+   * the singles corners back0_sl -> back0_sr -> back1_sr -> back1_sl run clockwise in the image,
+   * and the back0 baseline is the one nearest the camera, so it looks longer.
+   */
+  function courtProblem(state) {
+    const fit = courtHomography(state);
+    if (!fit) return null;
+    const corners = ["back0_sl", "back0_sr", "back1_sr", "back1_sl"].map(name => transformPoint(fit.h, KEYPOINT_POSITIONS[name]));
+    let twiceArea = 0;
+    for (let i = 0; i < 4; i += 1) {
+      const [a, b] = [corners[i], corners[(i + 1) % 4]];
+      twiceArea += a[0] * b[1] - b[0] * a[1];
+    }
+    const nearLength = Math.hypot(corners[0][0] - corners[1][0], corners[0][1] - corners[1][1]);
+    const farLength = Math.hypot(corners[3][0] - corners[2][0], corners[3][1] - corners[2][1]);
+    if (nearLength < 0.85 * farLength) {
+      return "These points have near and far swapped: back0 is the baseline nearest the camera (it looks longer), back1 the far one.";
+    }
+    if (twiceArea >= 0) {
+      return "These points have left and right swapped: sl is the left singles sideline as seen from the camera, sr the right.";
+    }
+    return null;
   }
 
   /** Image position of a court point through the fitted homography; null if behind the camera. */
@@ -254,10 +314,10 @@
     return Math.sign(w) === fit.sign && Number.isFinite(x) && Number.isFinite(y) ? [x, y] : null;
   }
 
-  /** Proposed pixel positions for every unclicked floor point that lands inside the frame. */
+  /** Proposed pixel positions for every unplaced floor point that lands inside the frame. */
   function proposeCourtPoints(state) {
     const fit = courtHomography(state);
-    if (!fit) return {};
+    if (!fit || courtProblem(state)) return {};
     const [width, height] = state.imageSize;
     const proposals = {};
     for (const name of FLOOR_NAMES) {
@@ -270,26 +330,54 @@
     return proposals;
   }
 
-  /** Keep proposals as keypoints, stamped with the frame most clicked points came from. */
+  /** Keep proposals as keypoints marked "proposed", on the frame the person's points share. */
   function acceptCourtProposals(state, proposals) {
-    const counts = new Map();
-    for (const point of Object.values(state.keypoints)) {
-      if (point.timeMs !== undefined) counts.set(point.timeMs, (counts.get(point.timeMs) || 0) + 1);
-    }
-    let timeMs;
-    counts.forEach((count, time) => {
-      if (timeMs === undefined || count > counts.get(timeMs)) timeMs = time;
-    });
+    const { frame } = evidencePoints(state);
     const names = Object.keys(proposals);
-    for (const name of names) setKeypoint(state, name, proposals[name].x, proposals[name].y, timeMs);
+    for (const name of names) setKeypoint(state, name, proposals[name].x, proposals[name].y, frame ?? undefined, "proposed");
     return names.length;
+  }
+
+  /** After a person moves one of their points, move the untouched proposals with it. */
+  function rederiveProposed(state) {
+    const fit = courtHomography(state);
+    if (!fit || courtProblem(state)) return 0;
+    let moved = 0;
+    for (const [name, point] of Object.entries(state.keypoints)) {
+      if (point.source !== "proposed") continue;
+      const pixel = projectCourtPoint(fit, KEYPOINT_POSITIONS[name]);
+      if (!pixel) continue;
+      const [x, y] = [round2(pixel[0]), round2(pixel[1])];
+      if (x !== point.x || y !== point.y) moved += 1;
+      setKeypoint(state, name, x, y, point.timeMs, "proposed");
+    }
+    return moved;
+  }
+
+  function invert3(m) {
+    const [[a, b, c], [d, e, f], [g, h, i]] = m;
+    const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    return [
+      [(e * i - f * h) / det, (c * h - b * i) / det, (b * f - c * e) / det],
+      [(f * g - d * i) / det, (a * i - c * g) / det, (c * d - a * f) / det],
+      [(d * h - e * g) / det, (b * g - a * h) / det, (a * e - b * d) / det],
+    ];
+  }
+
+  /** Floor position (court metres) of an image pixel, through the fitted homography. */
+  function imageToCourt(fit, pixel) {
+    const [x, y] = transformPoint(invert3(fit.h), pixel);
+    return [x, y];
   }
 
   // ---- Hits from audio ----
 
   const ONSET_FRAME_S = 0.0025;
-  const ONSET_RISE = 1.0; // log10 of the energy ratio over the noise floor: 10x louder
+  const ONSET_RISE = 0.5; // log10 of the energy ratio over the local noise floor: ~3x louder
   const ONSET_MIN_GAP_MS = 120;
+  const ONSET_MAX_SKIP_MS = 150; // never ignore more than this after an onset, even in loud stretches
+  const ONSET_BLOCK_S = 0.5; // the noise floor is the median of +/- 2 such blocks around each frame
+  const ONSET_FLOOR_MIN = -8; // log10 energy: digital silence must not make faint noise look like hits
 
   function median(values) {
     const sorted = Float64Array.from(values).sort();
@@ -297,44 +385,76 @@
     return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
   }
 
+  // Second-order filter coefficients (RBJ audio-EQ cookbook, Q = 1/sqrt(2)).
+  function biquad(type, frequency, sampleRate) {
+    const w0 = (2 * Math.PI * frequency) / sampleRate;
+    const cos = Math.cos(w0);
+    const alpha = Math.sin(w0) / (2 * Math.SQRT1_2);
+    const b = type === "highpass" ? [(1 + cos) / 2, -(1 + cos), (1 + cos) / 2] : [(1 - cos) / 2, 1 - cos, (1 - cos) / 2];
+    const a0 = 1 + alpha;
+    return { b0: b[0] / a0, b1: b[1] / a0, b2: b[2] / a0, a1: (-2 * cos) / a0, a2: (1 - alpha) / a0, x1: 0, x2: 0, y1: 0, y2: 0 };
+  }
+
+  function runBiquad(f, x) {
+    const y = f.b0 * x + f.b1 * f.x1 + f.b2 * f.x2 - f.a1 * f.y1 - f.a2 * f.y2;
+    f.x2 = f.x1;
+    f.x1 = x;
+    f.y2 = f.y1;
+    f.y1 = y;
+    return y;
+  }
+
   /**
-   * Sharp, bright onsets (racket hits) in mono samples. Per 2.5 ms frame we take the energy
-   * of the sample-to-sample difference, which favours the high-frequency "thwack" over voices
-   * and footsteps. An onset is a frame at least 10x louder than the clip's median frame;
-   * its strength is how much louder (log10) its peak is, so quieter hits from a neighbouring
-   * court rank below the rally's own.
+   * Sharp, bright onsets (racket hits) in mono samples. Per 2.5 ms frame we take the energy in
+   * the 2-9 kHz band where the racket "thwack" lives (4th-order high- and low-pass, filtered as
+   * the samples stream past), so voices, footsteps and broadband hiss count for little. An
+   * onset is a frame ~3x louder than the running noise floor around it; its strength is how
+   * much louder (log10) its peak is, so quieter hits from a neighbouring court rank lower.
    */
   function detectOnsets(samples, sampleRate, options = {}) {
     const frame = Math.max(2, Math.round(sampleRate * ONSET_FRAME_S));
     const count = Math.floor(samples.length / frame);
     if (count < 8) return [];
+    const top = Math.min(9000, 0.45 * sampleRate);
+    const filters = [biquad("highpass", 2000, sampleRate), biquad("highpass", 2000, sampleRate), biquad("lowpass", top, sampleRate), biquad("lowpass", top, sampleRate)];
     const level = new Float64Array(count);
     for (let f = 0; f < count; f += 1) {
       let sum = 0;
-      for (let i = f * frame + 1; i < (f + 1) * frame; i += 1) {
-        const d = samples[i] - samples[i - 1];
-        sum += d * d;
+      for (let i = f * frame; i < (f + 1) * frame; i += 1) {
+        let y = samples[i];
+        for (const filter of filters) y = runBiquad(filter, y);
+        sum += y * y;
       }
-      level[f] = Math.log10(sum / (frame - 1) + 1e-12);
+      level[f] = Math.log10(sum / frame + 1e-12);
     }
-    const floor = median(level);
+    // A running noise floor follows crowd noise and quiet passages instead of one clip-wide value.
+    const block = Math.max(1, Math.round((ONSET_BLOCK_S * sampleRate) / frame));
+    const blocks = Math.ceil(count / block);
+    const blockFloor = Array.from({ length: blocks }, (_, b) => median(level.subarray(b * block, Math.min(count, (b + 1) * block))));
+    const floorAt = new Float64Array(blocks);
+    for (let b = 0; b < blocks; b += 1) {
+      floorAt[b] = Math.max(ONSET_FLOOR_MIN, median(blockFloor.slice(Math.max(0, b - 2), Math.min(blocks, b + 3))));
+    }
+    const floor = f => floorAt[Math.floor(f / block)];
     const rise = options.rise ?? ONSET_RISE;
     const gap = Math.max(1, Math.round((((options.minGapMs ?? ONSET_MIN_GAP_MS) / 1000) * sampleRate) / frame));
+    const maxSkip = Math.max(gap, Math.round(((ONSET_MAX_SKIP_MS / 1000) * sampleRate) / frame));
     const peakWindow = Math.max(1, Math.round((0.03 * sampleRate) / frame));
     const onsets = [];
     let f = 0;
     while (f < count) {
-      if (level[f] - floor < rise) {
+      if (level[f] - floor(f) < rise) {
         f += 1;
         continue;
       }
       // The hit can start late in the previous frame if that frame is already clearly louder.
-      const start = f > 0 && level[f - 1] - floor > rise * 0.3 ? f - 1 : f;
+      const start = f > 0 && level[f - 1] - floor(f - 1) > rise * 0.3 ? f - 1 : f;
       let peak = level[f];
       for (let g = f; g < Math.min(count, f + peakWindow); g += 1) peak = Math.max(peak, level[g]);
-      onsets.push({ timeMs: Math.round(((start * frame) / sampleRate) * 10000) / 10, strength: round2(peak - floor) });
+      onsets.push({ timeMs: Math.round(((start * frame) / sampleRate) * 10000) / 10, strength: round2(peak - floor(f)) });
+      const resume = f + maxSkip;
       f += gap;
-      while (f < count && level[f] - floor >= rise * 0.5) f += 1;
+      while (f < resume && f < count && level[f] - floor(f) >= rise * 0.5) f += 1;
     }
     return onsets;
   }
@@ -357,7 +477,11 @@
   }
 
   function acceptSuggestion(state, index, contactTimeMs, label) {
-    if (!state.hitSuggestions[index]) throw new Error(`No suggestion at index ${index}`);
+    const suggestion = state.hitSuggestions[index];
+    if (!suggestion) throw new Error(`No suggestion at index ${index}`);
+    if (Math.abs(contactTimeMs - suggestion.timeMs) > SUGGESTION_WINDOW_MS) {
+      throw new Error(`That frame is far from the suggested hit at ${(suggestion.timeMs / 1000).toFixed(2)} s; press N to go back to it.`);
+    }
     const contact = addContact(state, contactTimeMs, label);
     if (label) setLabel(state, contact, label);
     state.hitSuggestions[index].status = "accepted";
@@ -383,29 +507,67 @@
     return groups.map(group => ({ startMs: Math.max(0, group[0] - 600), endMs: group[group.length - 1] + 1500 }));
   }
 
-  function applyRallySuggestions(state) {
+  /** Suggested rallies stay unconfirmed (and out of the export) until a winner is chosen. */
+  function applyRallySuggestions(state, durationMs) {
     let added = 0;
     for (const suggestion of suggestRallies(state.contacts)) {
-      const overlaps = state.rallies.some(rally => suggestion.startMs < (rally.endMs ?? Infinity) && rally.startMs < suggestion.endMs);
-      if (overlaps) continue;
-      state.rallies.push({ ...suggestion, winner: "unknown" });
+      const endMs = durationMs ? Math.min(suggestion.endMs, Math.round(durationMs)) : suggestion.endMs;
+      const overlaps = state.rallies.some(rally => suggestion.startMs < (rally.endMs ?? Infinity) && rally.startMs < endMs);
+      if (overlaps || endMs <= suggestion.startMs) continue;
+      state.rallies.push({ startMs: suggestion.startMs, endMs, winner: "unknown", confirmed: false });
       added += 1;
     }
     state.rallies.sort((a, b) => a.startMs - b.startMs);
     return added;
   }
 
+  /** Choosing a winner (including "unknown") is what confirms a suggested rally. */
   function setRallyWinner(state, index, winner) {
     if (!WINNERS.includes(winner)) throw new Error(`Unknown winner: ${winner}`);
     if (!state.rallies[index]) throw new Error(`No rally at index ${index}`);
     state.rallies[index].winner = winner;
+    delete state.rallies[index].confirmed;
+  }
+
+  function setRallyBounds(state, index, startMs, endMs) {
+    const rally = state.rallies[index];
+    if (!rally) throw new Error(`No rally at index ${index}`);
+    const start = Math.round(finite(startMs, "Rally start"));
+    const end = Math.round(finite(endMs, "Rally end"));
+    if (end <= start) throw new Error("A rally must end after it starts.");
+    rally.startMs = start;
+    rally.endMs = end;
+  }
+
+  /** The rally containing a time, else the latest rally that started before it, else -1. */
+  function rallyIndexAt(state, timeMs) {
+    let latest = -1;
+    for (let i = 0; i < state.rallies.length; i += 1) {
+      const rally = state.rallies[i];
+      if (rally.startMs <= timeMs && timeMs <= (rally.endMs ?? Infinity)) return i;
+      if (rally.startMs <= timeMs && (latest < 0 || rally.startMs > state.rallies[latest].startMs)) latest = i;
+    }
+    return latest;
   }
 
   // ---- Body poses: the selected player's 17 COCO joints at each hit frame ----
 
   function setSelectedPlayer(state, player) {
     if (!PLAYERS.includes(player)) throw new Error(`Unknown player: ${player}`);
+    if (Object.values(state.poses).some(pose => pose.player !== player)) {
+      throw new Error("Delete the other player's poses before switching player: a clip labels one player.");
+    }
     state.selectedPlayer = player;
+  }
+
+  /** A detected pose belongs to one frame; confirming it on any other frame would mislabel it. */
+  function canConfirmPose(pose, frameMs) {
+    return Boolean(pose && pose.keypoints && pose.timeMs === frameMs);
+  }
+
+  /** Right-click cycle: visible -> hidden (placed but not seen) -> not labelled -> visible. */
+  function nextVisibility(visibility) {
+    return visibility === 2 ? 1 : visibility === 1 ? 0 : 2;
   }
 
   function setPose(state, timeMs, player, keypoints) {
@@ -429,12 +591,21 @@
     return state.contacts.map(contact => contact.timeMs).filter(time => !state.poses[String(time)]);
   }
 
-  /** Pose-model output ({keypoints: [{x, y, score}], score}) as candidates with [x, y, visibility] joints. */
-  function candidatesFromDetections(detections, minJointScore = 0.3) {
+  /**
+   * Pose-model output ({keypoints: [{x, y, score}], score}) as candidates with [x, y, visibility]
+   * joints. Low-confidence joints are model guesses, not labels: they start unlabelled (0) and
+   * become labels only when a person drags them. Joints are kept inside the frame.
+   */
+  function candidatesFromDetections(detections, minJointScore = 0.3, imageSize = null) {
+    const clamp = (value, size) => (size ? Math.min(Math.max(value, 0), size - 0.01) : value);
     return detections
       .filter(detection => Array.isArray(detection.keypoints) && detection.keypoints.length === COCO_JOINTS.length)
       .map(detection => {
-        const keypoints = detection.keypoints.map(joint => [round2(joint.x), round2(joint.y), (joint.score ?? 0) >= minJointScore ? 2 : 1]);
+        const keypoints = detection.keypoints.map(joint => [
+          round2(clamp(joint.x, imageSize && imageSize[0])),
+          round2(clamp(joint.y, imageSize && imageSize[1])),
+          (joint.score ?? 0) >= minJointScore ? 2 : 0,
+        ]);
         return { keypoints, score: detection.score ?? 0, bottom: Math.max(...keypoints.map(joint => joint[1])) };
       });
   }
@@ -444,12 +615,33 @@
     return [sum[0] / keypoints.length, sum[1] / keypoints.length];
   }
 
+  /** Where a candidate stands: the midpoint of their ankles, else their lowest joint. */
+  function feetOf(candidate) {
+    const ankles = [candidate.keypoints[15], candidate.keypoints[16]].filter(joint => joint[2] > 0);
+    if (ankles.length) return [ankles.reduce((s, j) => s + j[0], 0) / ankles.length, ankles.reduce((s, j) => s + j[1], 0) / ankles.length];
+    const lowest = candidate.keypoints.reduce((a, b) => (b[1] > a[1] ? b : a));
+    return [lowest[0], lowest[1]];
+  }
+
   /**
-   * The candidate that is the selected player: the one nearest their last confirmed pose, or
-   * without one, the lowest in the frame for the near player and the highest for the far one.
+   * The candidate that is the selected player. With a court fit, only people standing on that
+   * player's half are considered (when anyone is). Among those: the one nearest their last
+   * confirmed pose, or the lowest in the frame for the near player and the highest for the far one.
    */
-  function pickPlayer(candidates, player, previousKeypoints) {
+  function pickPlayer(candidates, player, previousKeypoints, fit) {
     if (!candidates.length) return -1;
+    if (fit) {
+      const onSide = candidates
+        .map((candidate, index) => ({ candidate, index }))
+        .filter(({ candidate }) => {
+          const [, y] = imageToCourt(fit, feetOf(candidate));
+          return player === "near" ? y < NET_Y_M : y > NET_Y_M;
+        });
+      if (onSide.length && onSide.length < candidates.length) {
+        const pick = pickPlayer(onSide.map(item => item.candidate), player, previousKeypoints, null);
+        return onSide[pick].index;
+      }
+    }
     let best = 0;
     if (previousKeypoints) {
       const target = centre(previousKeypoints);
@@ -500,13 +692,19 @@
   function buildGolden(state) {
     const warnings = [];
     const rallies = [];
+    let unchecked = 0;
     for (const rally of state.rallies) {
       if (rally.endMs === null) {
         warnings.push(`Rally starting at ${rally.startMs} ms has no end and was left out of the export.`);
         continue;
       }
+      if (rally.confirmed === false) {
+        unchecked += 1;
+        continue;
+      }
       rallies.push({ startMs: rally.startMs, endMs: rally.endMs, winner: rally.winner });
     }
+    if (unchecked > 0) warnings.push(`${unchecked} suggested rally(s) not checked yet: choose a winner to confirm each one.`);
     const unlabelled = state.contacts.filter(contact => contact.label === "other").length;
     if (unlabelled > 0) warnings.push(`${unlabelled} contact(s) are still labelled "other".`);
     const missingPoses = state.selectedPlayer ? poseTargets(state).length : 0;
@@ -516,16 +714,22 @@
       clipId: state.clipId,
       sourceFps: state.fps,
       imageSize: [state.imageSize[0], state.imageSize[1]],
-      courtKeypoints: Object.entries(state.keypoints).map(([name, point]) =>
-        point.timeMs === undefined ? { name, x: point.x, y: point.y } : { name, x: point.x, y: point.y, timeMs: point.timeMs }),
+      courtKeypoints: Object.entries(state.keypoints).map(([name, point]) => {
+        const item = { name, x: point.x, y: point.y };
+        if (point.timeMs !== undefined) item.timeMs = point.timeMs;
+        if (point.source !== undefined) item.source = point.source;
+        return item;
+      }),
       contacts: state.contacts.map(contact => ({ timeMs: contact.timeMs })),
       shots: state.contacts.map(contact => ({ timeMs: contact.timeMs, label: contact.label, landing: null })),
       rallies,
     };
     if (state.selectedPlayer) doc.selectedPlayer = state.selectedPlayer;
-    const poses = Object.entries(state.poses)
-      .map(([time, pose]) => ({ timeMs: Number(time), player: pose.player, keypoints: pose.keypoints }))
-      .sort((a, b) => a.timeMs - b.timeMs);
+    const contactTimes = new Set(state.contacts.map(contact => contact.timeMs));
+    const allPoses = Object.entries(state.poses).map(([time, pose]) => ({ timeMs: Number(time), player: pose.player, keypoints: pose.keypoints }));
+    const orphans = allPoses.filter(pose => !contactTimes.has(pose.timeMs)).length;
+    if (orphans > 0) warnings.push(`${orphans} pose(s) are not on a hit and were left out of the export.`);
+    const poses = allPoses.filter(pose => contactTimes.has(pose.timeMs)).sort((a, b) => a.timeMs - b.timeMs);
     if (poses.length) doc.poses = poses;
     return { doc, warnings };
   }
@@ -533,7 +737,10 @@
   function stateFromGolden(doc) {
     const state = emptyState(doc.clipId, doc.sourceFps, doc.imageSize);
     for (const item of doc.courtKeypoints || []) {
-      state.keypoints[item.name] = item.timeMs === undefined ? { x: item.x, y: item.y } : { x: item.x, y: item.y, timeMs: item.timeMs };
+      const point = { x: item.x, y: item.y };
+      if (item.timeMs !== undefined) point.timeMs = item.timeMs;
+      if (item.source !== undefined) point.source = item.source;
+      state.keypoints[item.name] = point;
     }
     const labelAt = new Map((doc.shots || []).map(shot => [shot.timeMs, shot.label]));
     for (const contact of doc.contacts || []) {
@@ -546,6 +753,85 @@
     state.selectedPlayer = doc.selectedPlayer || null;
     for (const pose of doc.poses || []) state.poses[String(pose.timeMs)] = { player: pose.player, keypoints: pose.keypoints };
     return state;
+  }
+
+  // ---- Loading files safely ----
+
+  const isNumber = value => typeof value === "number" && Number.isFinite(value);
+
+  /** The checks of worker/evaluation/golden.py validate_golden, for files loaded in the browser. */
+  function validateGolden(doc) {
+    if (!doc || typeof doc !== "object" || Array.isArray(doc)) return ["document must be a JSON object"];
+    const errors = [];
+    if (doc.schemaVersion !== 1) errors.push("schemaVersion must be 1");
+    if (typeof doc.clipId !== "string" || !doc.clipId.trim()) errors.push("clipId must be a non-empty string");
+    if (!isNumber(doc.sourceFps) || doc.sourceFps <= 0) errors.push("sourceFps must be a positive number");
+    const size = doc.imageSize;
+    const sizeOk = Array.isArray(size) && size.length === 2 && size.every(side => Number.isInteger(side) && side > 0);
+    if (!sizeOk) errors.push("imageSize must be [width, height] positive integers");
+    const inside = (x, y) => !sizeOk || (x >= 0 && x < size[0] && y >= 0 && y < size[1]);
+    const points = doc.courtKeypoints === undefined ? [] : doc.courtKeypoints;
+    if (!Array.isArray(points)) errors.push("courtKeypoints must be a list");
+    (Array.isArray(points) ? points : []).forEach((item, i) => {
+      const where = `courtKeypoints[${i}]`;
+      if (!item || typeof item !== "object" || !KEYPOINT_NAMES.includes(item.name)) errors.push(`${where}: keypoint name must be one of the court model names`);
+      else if (!isNumber(item.x) || !isNumber(item.y)) errors.push(`${where}: x and y must be numbers`);
+      else if (!inside(item.x, item.y)) errors.push(`${where}: pixel is outside the image`);
+      if (item && typeof item === "object" && "timeMs" in item && (!isNumber(item.timeMs) || item.timeMs < 0)) errors.push(`${where}: timeMs must be a non-negative number`);
+      if (item && typeof item === "object" && "source" in item && !KEYPOINT_SOURCES.includes(item.source)) errors.push(`${where}: source must be clicked, adjusted or proposed`);
+    });
+    for (const key of ["contacts", "shots"]) if (!Array.isArray(doc[key])) errors.push(`${key} must be a list`);
+    const contacts = Array.isArray(doc.contacts) ? doc.contacts : [];
+    contacts.forEach((item, i) => {
+      if (!item || !isNumber(item.timeMs) || item.timeMs < 0) errors.push(`contacts[${i}]: timeMs must be a non-negative number`);
+    });
+    (Array.isArray(doc.shots) ? doc.shots : []).forEach((item, i) => {
+      if (!item || !isNumber(item.timeMs) || item.timeMs < 0) { errors.push(`shots[${i}]: timeMs must be a non-negative number`); return; }
+      if (!SHOT_LABELS.includes(item.label)) errors.push(`shots[${i}]: unknown label`);
+      const landing = item.landing;
+      if (landing !== null && landing !== undefined) {
+        const ok = typeof landing === "object" && isNumber(landing.x) && isNumber(landing.y) &&
+          landing.x >= -DOUBLES_MARGIN_M - 1 && landing.x <= SINGLES_WIDTH_M + DOUBLES_MARGIN_M + 1 && landing.y >= -1 && landing.y <= COURT_LENGTH_M + 1;
+        if (!ok) errors.push(`shots[${i}]: landing must be null or court metres near the court`);
+      }
+    });
+    const rallies = doc.rallies === undefined ? [] : doc.rallies;
+    (Array.isArray(rallies) ? rallies : []).forEach((item, i) => {
+      if (!item || !isNumber(item.startMs) || !isNumber(item.endMs)) { errors.push(`rallies[${i}]: startMs and endMs must be numbers`); return; }
+      if (item.startMs >= item.endMs) errors.push(`rallies[${i}]: startMs must be before endMs`);
+      if (!WINNERS.includes(item.winner)) errors.push(`rallies[${i}]: unknown winner`);
+    });
+    if ("selectedPlayer" in doc && !PLAYERS.includes(doc.selectedPlayer)) errors.push("selectedPlayer must be near or far when present");
+    const contactTimes = new Set(contacts.filter(c => c && isNumber(c.timeMs)).map(c => c.timeMs));
+    const seen = new Set();
+    (Array.isArray(doc.poses) ? doc.poses : []).forEach((item, i) => {
+      const where = `poses[${i}]`;
+      if (!item || typeof item !== "object" || !isNumber(item.timeMs) || item.timeMs < 0) { errors.push(`${where}: timeMs must be a non-negative number`); return; }
+      if (!PLAYERS.includes(item.player)) errors.push(`${where}: player must be near or far`);
+      if (!Array.isArray(item.keypoints) || item.keypoints.length !== COCO_JOINTS.length) errors.push(`${where}: keypoints must list the 17 COCO joints`);
+      else item.keypoints.forEach((joint, j) => {
+        const ok = Array.isArray(joint) && joint.length === 3 && joint.every(isNumber) && [0, 1, 2].includes(joint[2]);
+        if (!ok) errors.push(`${where}.${COCO_JOINTS[j]}: must be [x, y, visibility 0|1|2]`);
+        else if (joint[2] > 0 && !inside(joint[0], joint[1])) errors.push(`${where}.${COCO_JOINTS[j]}: labelled joint is outside the image`);
+      });
+      if (!contactTimes.has(item.timeMs)) errors.push(`${where}: timeMs must be the time of a labelled contact`);
+      if (seen.has(item.timeMs)) errors.push(`${where}: duplicate pose`);
+      seen.add(item.timeMs);
+      if (PLAYERS.includes(doc.selectedPlayer) && PLAYERS.includes(item.player) && item.player !== doc.selectedPlayer) errors.push(`${where}: player must be the selectedPlayer`);
+    });
+    return errors;
+  }
+
+  function escapeHtml(text) {
+    return String(text).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
+  }
+
+  /** An autosave belongs to one video file: same name, size, date, dimensions and length. */
+  function autosaveMatches(saved, fingerprint) {
+    const stored = saved && saved.fingerprint;
+    if (!stored || !fingerprint) return false;
+    return ["name", "size", "lastModified", "width", "height"].every(key => stored[key] === fingerprint[key]) &&
+      Math.abs((stored.durationS ?? -1) - fingerprint.durationS) < 0.05;
   }
 
   // Video time <-> frames. A time anywhere within ~a quarter frame of a frame start or its
@@ -601,9 +887,13 @@
     setKeypoint,
     removeKeypoint,
     courtHomography,
+    courtProblem,
     projectCourtPoint,
+    imageToCourt,
     proposeCourtPoints,
     acceptCourtProposals,
+    moveKeypoint,
+    rederiveProposed,
     detectOnsets,
     setHitSuggestions,
     suggestionSeekMs,
@@ -613,7 +903,11 @@
     suggestRallies,
     applyRallySuggestions,
     setRallyWinner,
+    setRallyBounds,
+    rallyIndexAt,
     setSelectedPlayer,
+    canConfirmPose,
+    nextVisibility,
     setPose,
     removePose,
     poseTargets,
@@ -623,6 +917,9 @@
     importWorkerResult,
     buildGolden,
     stateFromGolden,
+    validateGolden,
+    escapeHtml,
+    autosaveMatches,
     frameIndexAt,
     frameTimeMs,
     frameCentreSeconds,

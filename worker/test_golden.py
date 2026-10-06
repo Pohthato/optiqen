@@ -102,6 +102,26 @@ class PoseLabelTests(unittest.TestCase):
             self.assertTrue(any(needle in error.lower() for error in errors), (needle, errors))
 
 
+class AnswerKeyConsistencyTests(unittest.TestCase):
+    def test_a_pose_must_sit_on_a_labelled_hit(self):
+        errors = validate_golden(corrupted(poses=[pose(timeMs=1300)]))
+        self.assertTrue(any("contact" in error for error in errors), errors)
+
+    def test_a_hit_has_at_most_one_pose(self):
+        errors = validate_golden(corrupted(poses=[pose(), pose()]))
+        self.assertTrue(any("duplicate" in error for error in errors), errors)
+
+    def test_poses_belong_to_the_selected_player(self):
+        errors = validate_golden(corrupted(selectedPlayer="near", poses=[pose(player="far")]))
+        self.assertTrue(any("selectedplayer" in error.lower() for error in errors), errors)
+
+    def test_court_point_source_is_one_of_the_known_kinds(self):
+        good = corrupted(courtKeypoints=[{"name": "back1_sl", "x": 612.0, "y": 301.5, "timeMs": 0, "source": "proposed"}])
+        self.assertEqual(validate_golden(good), [])
+        bad = corrupted(courtKeypoints=[{"name": "back1_sl", "x": 612.0, "y": 301.5, "source": "guessed"}])
+        self.assertTrue(any("source" in error for error in validate_golden(bad)))
+
+
 class LoadGoldenDirTests(unittest.TestCase):
     def test_loads_valid_files_and_reports_all_bad_ones(self):
         with tempfile.TemporaryDirectory() as temp:
