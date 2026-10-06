@@ -375,7 +375,7 @@
   const ONSET_FRAME_S = 0.0025;
   const ONSET_RISE = 0.5; // log10 of the energy ratio over the local noise floor: ~3x louder
   const ONSET_MIN_GAP_MS = 120;
-  const ONSET_MAX_SKIP_MS = 150; // never ignore more than this after an onset, even in loud stretches
+  const ONSET_ATTACK_MS = 20; // a hit must also jump this much above the 20 ms just before it
   const ONSET_BLOCK_S = 0.5; // the noise floor is the median of +/- 2 such blocks around each frame
   const ONSET_FLOOR_MIN = -8; // log10 energy: digital silence must not make faint noise look like hits
 
@@ -408,8 +408,10 @@
    * Sharp, bright onsets (racket hits) in mono samples. Per 2.5 ms frame we take the energy in
    * the 2-9 kHz band where the racket "thwack" lives (4th-order high- and low-pass, filtered as
    * the samples stream past), so voices, footsteps and broadband hiss count for little. An
-   * onset is a frame ~3x louder than the running noise floor around it; its strength is how
-   * much louder (log10) its peak is, so quieter hits from a neighbouring court rank lower.
+   * onset is a frame ~3x louder than both the running noise floor around it and the 20 ms just
+   * before it: the sharp attack is what tells a racket hit from a shout or a reverb tail, so
+   * sustained sounds trigger at most once while a hit inside them is still found. Strength is
+   * how much louder (log10) the peak is, so quieter hits from a neighbouring court rank lower.
    */
   function detectOnsets(samples, sampleRate, options = {}) {
     const frame = Math.max(2, Math.round(sampleRate * ONSET_FRAME_S));
@@ -438,12 +440,15 @@
     const floor = f => floorAt[Math.floor(f / block)];
     const rise = options.rise ?? ONSET_RISE;
     const gap = Math.max(1, Math.round((((options.minGapMs ?? ONSET_MIN_GAP_MS) / 1000) * sampleRate) / frame));
-    const maxSkip = Math.max(gap, Math.round(((ONSET_MAX_SKIP_MS / 1000) * sampleRate) / frame));
+    const attack = Math.max(1, Math.round(((ONSET_ATTACK_MS / 1000) * sampleRate) / frame));
     const peakWindow = Math.max(1, Math.round((0.03 * sampleRate) / frame));
     const onsets = [];
     let f = 0;
     while (f < count) {
-      if (level[f] - floor(f) < rise) {
+      let before = 0;
+      for (let g = Math.max(0, f - attack); g < f; g += 1) before += level[g];
+      const recent = f > 0 ? before / (f - Math.max(0, f - attack)) : floor(f);
+      if (level[f] - floor(f) < rise || level[f] - recent < rise) {
         f += 1;
         continue;
       }
@@ -452,9 +457,7 @@
       let peak = level[f];
       for (let g = f; g < Math.min(count, f + peakWindow); g += 1) peak = Math.max(peak, level[g]);
       onsets.push({ timeMs: Math.round(((start * frame) / sampleRate) * 10000) / 10, strength: round2(peak - floor(f)) });
-      const resume = f + maxSkip;
       f += gap;
-      while (f < resume && f < count && level[f] - floor(f) >= rise * 0.5) f += 1;
     }
     return onsets;
   }

@@ -29,14 +29,18 @@ press **Detect** to retry, or type the value). Then work through the four steps
 across the top; each shows what to do next and how far you are.
 
 1. **Court** — pause on a clear frame and click the four corners of the singles
-   court (the name to click is pre-selected). **Propose the rest** draws every
+   court (the name to click is pre-selected; `back0` is the baseline nearest the
+   camera, `sl`/`sr` the left/right singles sidelines as you look at the court —
+   the labeller refuses corners that are mirrored or have the ends swapped). **Propose the rest** draws every
    other line where the geometry says it must be; drag any point that is off and
    **Accept**. A magnifier follows the cursor for precise clicks.
 2. **Hits** — **Find hits from audio** lists every racket "thwack". `N` jumps just
    before the next one (sound reaches the phone ~30 ms after the hit); step with
    `,` `.` to the frame where racket meets shuttle and click the shot (or press
-   `1`–`9`, `0`). `X` skips a sound that isn't a hit, `C` marks a hit the audio
-   missed.
+   `1`–`9`, `0`). `X` skips a sound that isn't a hit (squeaks, a neighbouring
+   court), `C` marks a hit the audio missed. Audio suggestions are a starting
+   point, not the answer: watch each rally once at 0.5× and add any quiet hit
+   they missed.
 3. **Rallies** — **Suggest rallies** groups hits by the pauses between them; check
    each one and choose who won (near / far / ?, as seen from the camera). `R`
    starts or ends a rally by hand.

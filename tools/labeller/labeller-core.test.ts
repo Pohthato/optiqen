@@ -750,3 +750,42 @@ describe("review fixes: loading and autosave", () => {
     expect(core.escapeHtml(`<img src=x onerror="alert('1')">&`)).toBe("&lt;img src=x onerror=&quot;alert(&#39;1&#39;)&quot;&gt;&amp;");
   });
 });
+
+// Deterministic synthetic sounds for onset tests that need shapes the Python generator lacks.
+function noiseSource(seed: number) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state / 2 ** 31 - 1;
+  };
+}
+
+function sustainedAudio({ rate = 48000, seconds = 4, background = 0.01, loudFrom = 1.5, loudTo = 2.3, loud = 0.08, hits = [] as number[] }) {
+  const random = noiseSource(7);
+  const samples = new Float32Array(Math.round(rate * seconds));
+  for (let i = 0; i < samples.length; i += 1) {
+    const t = i / rate;
+    samples[i] = random() * (t >= loudFrom && t < loudTo ? loud : background);
+  }
+  for (const hit of hits) {
+    const start = Math.round(hit * rate);
+    for (let i = 0; i < rate * 0.03 && start + i < samples.length; i += 1) {
+      samples[start + i] += 0.5 * Math.exp(-i / (rate * 0.006)) * Math.sin((2 * Math.PI * 4000 * i) / rate);
+    }
+  }
+  return { rate, samples };
+}
+
+describe("review fixes: audio onsets need a sharp attack", () => {
+  it("a loud stretch shorter than the noise-floor window (a shout, a squeak and its echo) gives at most one onset", () => {
+    const audio = sustainedAudio({});
+    const onsets = core.detectOnsets(audio.samples, audio.rate);
+    expect(onsets.length).toBeLessThanOrEqual(1);
+  });
+
+  it("a hit inside a loud stretch is still found", () => {
+    const audio = sustainedAudio({ hits: [2.0] });
+    const onsets = core.detectOnsets(audio.samples, audio.rate);
+    expect(onsets.some((o: any) => Math.abs(o.timeMs - 2000) <= 5)).toBe(true);
+  });
+});

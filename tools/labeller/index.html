@@ -135,9 +135,11 @@
     <section data-panel="court">
       <h2>Court points</h2>
       <p class="hint">Pause on a frame where the court is clear. Click the <b>four corners of the singles court</b> &mdash; the name to click is shown below &mdash; then press <b>Propose the rest</b> and fix any point by dragging it.</p>
+      <p class="hint"><b>back0</b> is the baseline nearest the camera, <b>back1</b> the far one; <b>sl</b> / <b>sr</b> are the left / right singles sidelines as you look at the court.</p>
+      <p id="court-problem" class="hint" style="color: var(--danger)"></p>
       <div class="row"><select id="kp-select" class="grow"></select><button id="kp-clear" class="btn ghost small">Remove</button></div>
       <div class="row"><button id="propose" class="btn">Propose the rest <kbd>P</kbd></button><button id="accept-proposals" class="btn primary">Accept proposals <kbd>A</kbd></button></div>
-      <p class="hint">Yellow points are yours; grey ones are proposals. A magnifier follows the cursor for precise clicks.</p>
+      <p class="hint"><span style="color:#ffcc00">&#9679;</span> clicked &nbsp; <span style="color:#fb923c">&#9679;</span> proposal you moved &nbsp; <span style="color:#cbd5e1">&#9675;</span> proposal. Points from other frames are dimmed. A magnifier follows the cursor.</p>
       <ul id="kp-list" class="list"></ul>
     </section>
 
@@ -222,6 +224,8 @@
   let detector = null;
   let detectorLoading = null;
   let drag = null;
+  let pressed = null; // mousedown waiting to become a click or (after 3 px of movement) a drag
+  let detection = 0; // id of the latest pose detection; results from older requests are dropped
   let hoverName = null; // court point under the cursor: only it and the selected point are labelled
   let detectHandle = null;
 
@@ -279,7 +283,10 @@
   function eventToVideo(event) {
     const rect = overlay.getBoundingClientRect();
     if (!rect.width || !rect.height) return null;
-    return [((event.clientX - rect.left) * video.videoWidth) / rect.width, ((event.clientY - rect.top) * video.videoHeight) / rect.height];
+    const x = ((event.clientX - rect.left) * video.videoWidth) / rect.width;
+    const y = ((event.clientY - rect.top) * video.videoHeight) / rect.height;
+    // Labels must stay inside the frame (the validator rejects x == width).
+    return [Math.min(Math.max(x, 0), video.videoWidth - 0.01), Math.min(Math.max(y, 0), video.videoHeight - 0.01)];
   }
 
   function nearest(points, at) {
@@ -341,10 +348,16 @@
       ctx.setLineDash([]);
     }
     const selected = $("kp-select").value;
+    const colours = { clicked: "#ffcc00", adjusted: "#fb923c", proposed: "#cbd5e1" };
     for (const [name, point] of Object.entries(state.keypoints)) {
       const highlight = name === selected;
-      dot(point.x * s, point.y * s, highlight ? 7 : 5, null, highlight ? "#ffffff" : "#ffcc00");
-      if (highlight || name === hoverName) label(name, point.x * s, point.y * s, highlight ? "#ffffff" : "#ffcc00");
+      const otherFrame = fit && point.timeMs !== undefined && fit.frame !== null && point.timeMs !== fit.frame;
+      ctx.globalAlpha = otherFrame ? 0.35 : 1;
+      const colour = highlight ? "#ffffff" : colours[point.source ?? "clicked"];
+      dot(point.x * s, point.y * s, highlight ? 7 : 5, point.source === "proposed" ? colour : null, colour);
+      // The four corners are always named: a wrongly named corner is the easiest mistake to make.
+      if (highlight || name === hoverName || CORNERS.includes(name)) label(name, point.x * s, point.y * s, colour);
+      ctx.globalAlpha = 1;
     }
   }
 
@@ -365,7 +378,15 @@
       ctx.stroke();
     }
     keypoints.forEach(([x, y, v], i) => {
-      if (!v) return;
+      if (!v) {
+        // A model guess the person has not confirmed: shown dashed, not exported as a label.
+        if (!faint && (x || y)) {
+          ctx.setLineDash([2, 2]);
+          dot(x * s, y * s, 4, null, "rgba(203,213,225,.7)");
+          ctx.setLineDash([]);
+        }
+        return;
+      }
       if (faint) dot(x * s, y * s, 3, "rgba(226,232,240,.45)");
       else dot(x * s, y * s, 5, v === 2 ? jointColor(i) : null, v === 1 ? jointColor(i) : "#0b1116");
     });
@@ -373,8 +394,12 @@
 
   function drawBody(s) {
     if (!pose) return;
+    // A skeleton belongs to one frame; on any other frame it is only a faint reminder.
+    const onFrame = pose.timeMs === currentMs();
+    ctx.globalAlpha = onFrame ? 1 : 0.25;
     pose.candidates.forEach((candidate, i) => { if (i !== pose.chosen) drawSkeleton(candidate.keypoints, s, true); });
     if (pose.keypoints) drawSkeleton(pose.keypoints, s, false);
+    ctx.globalAlpha = 1;
   }
 
   function drawOverlay() {
@@ -452,11 +477,16 @@
     const select = $("kp-select");
     if (!select.options.length) for (const name of C.KEYPOINT_NAMES) select.add(new Option(name, name));
     for (const option of select.options) option.textContent = `${state.keypoints[option.value] ? "✓ " : ""}${option.value}`;
+    $("court-problem").textContent = C.courtProblem(state) ?? "";
     $("propose").disabled = !C.courtHomography(state);
     $("accept-proposals").disabled = !showProposals || !Object.keys(proposals).length;
     $("accept-proposals").innerHTML = `Accept ${showProposals ? Object.keys(proposals).length : ""} proposals <kbd>A</kbd>`;
     $("kp-list").innerHTML = Object.keys(state.keypoints)
-      .map(name => `<li><span class="grow">${name}</span><button class="x" data-remove-kp="${name}" title="Remove">&times;</button></li>`)
+      .map(name => {
+        const safe = C.escapeHtml(name);
+        const source = state.keypoints[name].source ?? "clicked";
+        return `<li><span class="grow">${safe}</span><span class="chip">${source}</span><button class="x" data-remove-kp="${safe}" title="Remove">&times;</button></li>`;
+      })
       .join("");
   }
 
@@ -474,10 +504,16 @@
   }
 
   function renderRallies() {
+    const current = C.rallyIndexAt(state, currentMs());
     $("rallies").innerHTML = state.rallies.map((rally, index) => {
+      const unchecked = rally.confirmed === false;
       const end = rally.endMs === null ? "open" : `${(rally.endMs / 1000).toFixed(1)} s`;
-      const winner = w => `<button class="btn small ${rally.winner === w ? "primary" : "ghost"}" data-winner="${index}" data-value="${w}">${w === "unknown" ? "?" : w}</button>`;
-      return `<li><span class="grow" data-seek="${rally.startMs}" style="cursor:pointer">Rally ${index + 1} · ${(rally.startMs / 1000).toFixed(1)}–${end}</span>` +
+      const winner = w => `<button class="btn small ${!unchecked && rally.winner === w ? "primary" : "ghost"}" data-winner="${index}" data-value="${w}">${w === "unknown" ? "?" : w}</button>`;
+      return `<li style="${index === current ? "background:rgba(183,250,89,.08)" : ""}">` +
+        `<span class="grow" data-seek="${Number(rally.startMs)}" style="cursor:pointer">Rally ${index + 1} · ${(Number(rally.startMs) / 1000).toFixed(1)}–${end}` +
+        `${unchecked ? ' <span class="chip">check</span>' : ""}</span>` +
+        `<button class="btn small ghost" data-bound="start" data-rally="${index}" title="Start this rally at the current frame">start</button>` +
+        `<button class="btn small ghost" data-bound="end" data-rally="${index}" title="End this rally at the current frame">end</button>` +
         `${winner("near")}${winner("far")}${winner("unknown")}<button class="x" data-remove-rally="${index}" title="Delete">&times;</button></li>`;
     }).join("");
   }
@@ -502,7 +538,7 @@
     renderBody();
     drawOverlay();
     drawTimeline();
-    $("warnings").innerHTML = C.buildGolden(state).warnings.map(w => `<li>${w}</li>`).join("");
+    $("warnings").innerHTML = C.buildGolden(state).warnings.map(w => `<li>${C.escapeHtml(w)}</li>`).join("");
     persist();
   }
 
@@ -517,14 +553,19 @@
     return CORNERS.find(name => !state.keypoints[name]) ?? C.KEYPOINT_NAMES.find(name => !state.keypoints[name]);
   }
 
+  // After a person changes one of their points: move untouched accepted proposals with it,
+  // and refresh proposals still on screen.
   function refreshProposals() {
+    C.rederiveProposed(state);
     if (showProposals) proposals = C.proposeCourtPoints(state);
   }
 
   function propose() {
+    const problem = C.courtProblem(state);
     proposals = C.proposeCourtPoints(state);
     showProposals = true;
-    say(Object.keys(proposals).length ? `Proposed ${Object.keys(proposals).length} points. Drag any that are off, then Accept.` : "Click at least four points that are not all on one line first.", !Object.keys(proposals).length);
+    if (problem) say(problem, true);
+    else say(Object.keys(proposals).length ? `Proposed ${Object.keys(proposals).length} points. Drag any that are off, then Accept.` : "Click four points on one frame, no three on a line, first.", !Object.keys(proposals).length);
     render();
   }
 
@@ -573,17 +614,24 @@
   function labelShot(shot) {
     const suggestion = state.hitSuggestions[activeSuggestion];
     if (suggestion && suggestion.status === "pending") {
-      selectedContact = C.acceptSuggestion(state, activeSuggestion, currentMs(), shot);
+      try {
+        selectedContact = C.acceptSuggestion(state, activeSuggestion, currentMs(), shot);
+      } catch (error) {
+        say(error.message, true);
+        return;
+      }
       render();
       nextHit();
       return;
     }
-    const at = C.nearestContactIndex(state, currentMs(), 20);
-    if (at >= 0) {
-      C.setLabel(state, at, shot);
-      selectedContact = at;
+    // A selected hit is relabelled even if the playhead has moved off it; new hits come from C
+    // (or a suggestion), or from a shot key when nothing is selected.
+    if (selectedContact >= 0 && state.contacts[selectedContact]) {
+      C.setLabel(state, selectedContact, shot);
     } else {
-      selectedContact = C.addContact(state, currentMs(), shot);
+      const at = C.nearestContactIndex(state, currentMs(), 20);
+      if (at >= 0) C.setLabel(state, at, shot);
+      selectedContact = at >= 0 ? at : C.addContact(state, currentMs(), shot);
     }
     render();
   }
@@ -601,9 +649,7 @@
   }
 
   function rallyAtPlayhead() {
-    const now = currentMs();
-    const index = state.rallies.findIndex(rally => rally.startMs <= now && now <= (rally.endMs ?? Infinity));
-    return index >= 0 ? index : state.rallies.length - 1;
+    return C.rallyIndexAt(state, currentMs());
   }
 
   // ---------- body ----------
@@ -648,6 +694,7 @@
   }
 
   async function detectPose(timeMs) {
+    const request = ++detection;
     const existing = state.poses[String(timeMs)];
     if (existing) {
       pose = { timeMs, candidates: [], chosen: -1, keypoints: existing.keypoints.map(joint => [...joint]) };
@@ -659,12 +706,20 @@
     render();
     try {
       const model = await poseDetector();
+      if (request !== detection) return; // the person has moved on to another frame
+      if (currentMs() !== timeMs) {
+        seekToMs(timeMs);
+        await seeked();
+        if (request !== detection) return;
+      }
       const frame = document.createElement("canvas");
       frame.width = video.videoWidth;
       frame.height = video.videoHeight;
       frame.getContext("2d").drawImage(video, 0, 0);
-      const candidates = C.candidatesFromDetections(await model.estimatePoses(frame, { maxPoses: 6 }));
-      const chosen = C.pickPlayer(candidates, state.selectedPlayer, C.previousPose(state, timeMs));
+      const detections = await model.estimatePoses(frame, { maxPoses: 6 });
+      if (request !== detection) return;
+      const candidates = C.candidatesFromDetections(detections, 0.3, [video.videoWidth, video.videoHeight]);
+      const chosen = C.pickPlayer(candidates, state.selectedPlayer, C.previousPose(state, timeMs), C.courtHomography(state));
       pose = { timeMs, candidates, chosen, keypoints: chosen >= 0 ? candidates[chosen].keypoints.map(joint => [...joint]) : null };
       $("pose-status").textContent = chosen >= 0
         ? `Found ${candidates.length} ${candidates.length === 1 ? "person" : "people"}. Click a faint skeleton to switch player.`
@@ -688,6 +743,10 @@
   function confirmPose() {
     if (!pose || !pose.keypoints) { say("Nothing to confirm yet.", true); return; }
     if (!state.selectedPlayer) { say("Choose the near or far player first.", true); return; }
+    if (!C.canConfirmPose(pose, currentMs())) {
+      say(`This skeleton belongs to the hit at ${(pose.timeMs / 1000).toFixed(2)} s — go back to that frame (click it in the list) to confirm.`, true);
+      return;
+    }
     C.setPose(state, pose.timeMs, state.selectedPlayer, pose.keypoints);
     say(`Pose saved for the hit at ${(pose.timeMs / 1000).toFixed(2)} s.`);
     pose = null;
@@ -720,7 +779,8 @@
       return points;
     }
     if (step === "body" && pose && pose.keypoints) {
-      return pose.keypoints.map(([x, y, v], index) => ({ kind: "joint", index, x, y, v })).filter(j => j.v > 0);
+      // Visible, hidden and model-guessed joints can all be dragged; dragging makes them visible.
+      return pose.keypoints.map(([x, y, v], index) => ({ kind: "joint", index, x, y, v })).filter(j => j.v > 0 || j.x || j.y);
     }
     return [];
   }
@@ -751,12 +811,16 @@
     const at = eventToVideo(event);
     if (!at) { say("The video has no visible size yet — make the window larger and try again.", true); return; }
     video.pause();
-    const hit = nearest(grabbables(), at);
-    if (hit) { drag = hit; return; }
+    // Nothing happens until the button is released (a click) or the mouse moves 3 px (a drag),
+    // so clicking next to an existing point places the selected one instead of moving it.
+    pressed = { at, x: event.clientX, y: event.clientY, hit: nearest(grabbables(), at) };
+  });
+
+  function clickOverlay(at) {
     try {
       if (step === "court") {
         const name = $("kp-select").value;
-        C.setKeypoint(state, name, at[0], at[1], currentMs());
+        C.moveKeypoint(state, name, at[0], at[1], currentMs());
         refreshProposals();
         const next = nextPointToClick();
         if (next) $("kp-select").value = next;
@@ -779,7 +843,7 @@
     } catch (error) {
       say(error.message, true);
     }
-  });
+  }
 
   overlay.addEventListener("mousemove", event => {
     const at = eventToVideo(event);
@@ -791,9 +855,10 @@
         drawOverlay();
       }
     }
+    if (pressed && !drag && pressed.hit && Math.hypot(event.clientX - pressed.x, event.clientY - pressed.y) > 3) drag = pressed.hit;
     if (!drag || !at) return;
     if (drag.kind === "keypoint") {
-      C.setKeypoint(state, drag.name, at[0], at[1], state.keypoints[drag.name].timeMs);
+      C.moveKeypoint(state, drag.name, at[0], at[1], currentMs());
       refreshProposals();
     } else if (drag.kind === "proposal") {
       proposals[drag.name] = { x: at[0], y: at[1] };
@@ -804,12 +869,16 @@
   });
 
   window.addEventListener("mouseup", () => {
+    const click = pressed && !drag ? pressed.at : null;
+    pressed = null;
+    if (click) { clickOverlay(click); return; }
     if (!drag) return;
     if (drag.kind === "proposal") {
+      // A proposal a person moved is their judgement on this frame.
       const point = proposals[drag.name];
-      const clicked = Object.values(state.keypoints).find(p => p.timeMs !== undefined);
-      C.setKeypoint(state, drag.name, point.x, point.y, clicked ? clicked.timeMs : currentMs());
+      C.setKeypoint(state, drag.name, point.x, point.y, currentMs(), "adjusted");
       delete proposals[drag.name];
+      refreshProposals();
     }
     drag = null;
     render();
@@ -823,7 +892,7 @@
     const at = eventToVideo(event);
     const joint = at && nearest(grabbables(), at);
     if (!joint) return;
-    pose.keypoints[joint.index][2] = pose.keypoints[joint.index][2] === 2 ? 1 : 2;
+    pose.keypoints[joint.index][2] = C.nextVisibility(pose.keypoints[joint.index][2]);
     drawOverlay();
   });
 
@@ -871,7 +940,7 @@
   });
 
   $("suggest-rallies").addEventListener("click", () => {
-    const added = C.applyRallySuggestions(state);
+    const added = C.applyRallySuggestions(state, durationMs());
     say(added ? `Suggested ${added} rallies. Check each and choose the winner.` : (state.contacts.length ? "No new rallies to suggest." : "Label hits first (step 2)."), !added && !state.contacts.length);
     render();
   });
@@ -879,13 +948,35 @@
   $("rallies").addEventListener("click", event => {
     const target = event.target;
     if (target.dataset.winner !== undefined) { C.setRallyWinner(state, Number(target.dataset.winner), target.dataset.value); render(); }
+    else if (target.dataset.bound !== undefined) {
+      const index = Number(target.dataset.rally);
+      const rally = state.rallies[index];
+      try {
+        if (target.dataset.bound === "start") C.setRallyBounds(state, index, currentMs(), rally.endMs ?? currentMs() + 1000);
+        else C.setRallyBounds(state, index, rally.startMs, currentMs());
+      } catch (error) { say(error.message, true); }
+      render();
+    }
     else if (target.dataset.removeRally !== undefined) { state.rallies.splice(Number(target.dataset.removeRally), 1); render(); }
     else if (target.dataset.seek !== undefined) seekToMs(Number(target.dataset.seek));
   });
 
   $("player-pick").addEventListener("click", event => {
     const player = event.target.closest("[data-player]")?.dataset.player;
-    if (player) { C.setSelectedPlayer(state, player); render(); }
+    if (!player || player === state.selectedPlayer) return;
+    try {
+      C.setSelectedPlayer(state, player);
+    } catch (error) {
+      say(error.message, true);
+      return;
+    }
+    // A skeleton picked for the other player must not be confirmed under this one.
+    if (pose) {
+      const time = pose.timeMs;
+      pose = null;
+      detectPose(time);
+    }
+    render();
   });
   $("next-pose").addEventListener("click", nextPose);
   $("confirm-pose").addEventListener("click", confirmPose);
@@ -893,6 +984,7 @@
   $("pose-list").addEventListener("click", async event => {
     const time = event.target.closest("[data-pose]")?.dataset.pose;
     if (time === undefined) return;
+    activeSuggestion = -1;
     seekToMs(Number(time));
     await seeked();
     await detectPose(Number(time));
@@ -902,6 +994,7 @@
     const total = durationMs();
     if (!total) return;
     const rect = timeline.getBoundingClientRect();
+    activeSuggestion = -1;
     seekToMs(((event.clientX - rect.left) / rect.width) * total);
   });
 
@@ -946,11 +1039,17 @@
     $("clip-name").textContent = file.name;
     $("empty").style.display = "none";
     video.addEventListener("loadedmetadata", () => {
+      const fingerprint = { name: file.name, size: file.size, lastModified: file.lastModified, width: video.videoWidth, height: video.videoHeight, durationS: video.duration };
       state = C.emptyState($("clip-id").value, fps(), [video.videoWidth, video.videoHeight]);
+      state.fingerprint = fingerprint;
       try {
         const saved = JSON.parse(localStorage.getItem(storageKey()) || "null");
-        if (saved && saved.clipId === state.clipId) {
+        // Phones reuse names like IMG_1234, so an autosave is restored only onto the same file.
+        const sameVideo = saved && C.autosaveMatches(saved, fingerprint);
+        const restore = sameVideo || (saved && window.confirm(`There is unsaved work for a different video also called ${file.name}. Restore it onto this one?`));
+        if (restore) {
           state = C.normalizeState(saved);
+          state.fingerprint = fingerprint;
           state.imageSize = [video.videoWidth, video.videoHeight];
           $("fps").value = state.fps;
           say(`Restored your unsaved work on ${state.clipId}.`);
@@ -973,8 +1072,14 @@
     if (!file) return;
     try {
       const doc = JSON.parse(await file.text());
-      if (doc.schemaVersion !== 1) throw new Error("not a schemaVersion 1 labels file");
+      const errors = C.validateGolden(doc);
+      if (errors.length) throw new Error(`${errors.length} problem(s), first: ${errors[0]}`);
+      const fingerprint = state.fingerprint;
       state = C.stateFromGolden(doc);
+      state.fingerprint = fingerprint;
+      proposals = {};
+      showProposals = false;
+      pose = null;
       $("clip-id").value = state.clipId;
       $("fps").value = state.fps;
       selectedContact = -1;
@@ -990,6 +1095,8 @@
     if (!file) return;
     try {
       const added = C.importWorkerResult(state, JSON.parse(await file.text()));
+      selectedContact = -1;
+      activeSuggestion = -1;
       say(`Imported ${added} hit(s) from the worker result — check each one before saving.`);
       render();
     } catch (error) { say(`Could not read the worker result: ${error.message}`, true); }
@@ -1033,7 +1140,7 @@
       else if (step === "hits" && (key === "Delete" || key === "Backspace") && selectedContact >= 0) { C.removeContact(state, selectedContact); selectedContact = -1; render(); }
       else if (step === "rallies" && ["n", "f", "u"].includes(lower)) {
         const index = rallyAtPlayhead();
-        if (index < 0) throw new Error("No rally yet: press Suggest rallies or R.");
+        if (index < 0) throw new Error("No rally starts before this frame: go to a rally first.");
         C.setRallyWinner(state, index, { n: "near", f: "far", u: "unknown" }[lower]);
         render();
       }
@@ -1048,7 +1155,15 @@
 
   video.addEventListener("seeked", () => { updateReadout(); drawOverlay(); });
   video.addEventListener("play", updateReadout);
-  video.addEventListener("pause", updateReadout);
+  video.addEventListener("pause", () => {
+    // Any pause (a click, a key) ends FPS detection; a leftover frame callback would later
+    // change the FPS and rewind the clip mid-labelling.
+    if (detectHandle !== null) {
+      stopDetectFps();
+      say("FPS detection was interrupted — press Detect to try again, or type the value.", true);
+    }
+    updateReadout();
+  });
   video.addEventListener("loadeddata", () => { drawOverlay(); updateReadout(); });
   window.addEventListener("resize", () => { drawOverlay(); drawTimeline(); });
   setInterval(() => { if (!video.paused) updateReadout(); }, 100);

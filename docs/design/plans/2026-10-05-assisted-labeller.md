@@ -21,3 +21,21 @@
 - The first inference after loading returns nothing while WebGL compiles, so the detector runs one warm-up pass (found in the browser check).
 - Court point names are drawn only for the selected point and the point under the cursor; drawing all 32 at once was unreadable (found in the browser check).
 - Suggestions are never trusted on their own: audio hits, proposed court points and pre-filled joints all stay grey or editable until confirmed.
+
+## Review and fixes (2026-10-05)
+
+An independent review found ways the tool could write wrong answers into the golden set without the person noticing. All critical and important findings were fixed test-first and re-checked in the browser:
+
+- Mirrored or end-swapped corners are refused with an explanation (corner orientation and baseline-length checks); the four corner names are always drawn.
+- A detected pose is tied to its frame: stale detections are dropped and a pose cannot be confirmed on another frame.
+- Suggested hits are accepted only within 250 ms of the suggestion; a shot key relabels the selected hit instead of adding a duplicate.
+- Deleting a hit deletes its pose; poses must sit on a hit and belong to the selected player (Python validator too); switching player re-detects.
+- Low-confidence joints start unlabelled; right-click cycles visible, hidden, unlabelled.
+- Court fits use one frame of human-placed points; each point records whether it was clicked, proposed or adjusted; proposals follow when a corner moves; evaluation ignores proposed points.
+- Suggested rallies stay out of the export until a winner is chosen; start and end can be set from the playhead; winner keys use the rally at the playhead.
+- Audio onsets use the 2-9 kHz band, a running noise floor and a sharp-attack rule (quiet hits and hits over noise are found; sustained sounds trigger once). On the test clip, candidates went from 85 to 61.
+- Autosaves are restored only onto the same video file; loaded labels are validated and escaped; clicks place points and drags start only after movement; FPS detection stops on any pause.
+
+Deferred minors: select boxes swallowing shortcuts, R active in every step, the AudioContext not closed on decode failure, re-running Find hits resurfacing dismissed hits, MoveNet's 256 px default input (the far player is rarely found), partial manual poses confirmable, the video always muted, blob URLs not revoked, no integrity hashes on CDN scripts.
+
+Open question: detector recall and precision on real footage need hand-labelled clips to measure.
