@@ -132,6 +132,19 @@ class WriteClipTests(unittest.TestCase):
             self.assertEqual(len(truth["contacts"]), 7)
             self.assertTrue((out / "video.mp4").is_file() and (out / "audio.wav").is_file())
 
+    def test_cli_places_the_phone_and_covers_the_lens(self):
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp) / "cli"
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = main(["--out", str(out), "--fps", "10", "--width", "160", "--height", "90", "--view", "side", "--occlude", "1.0", "2.0", "--occlude", "3.0", "3.5"])
+            self.assertEqual(code, 0)
+            truth = json.loads((out / "truth.json").read_text())
+        covered = [index / 10 for index, flag in enumerate(truth["occluded"]) if flag]
+        self.assertEqual(covered[0], 1.0)
+        self.assertTrue(all(1.0 <= t < 2.0 or 3.0 <= t < 3.5 for t in covered))
+        self.assertEqual(len(covered), 15)
+        self.assertLess(camera_from_truth(truth["cameras"][0]).centre[0], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

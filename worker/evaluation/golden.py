@@ -134,6 +134,20 @@ def _pose_errors(where: str, item: Any, size: list[int] | None) -> list[str]:
     return errors
 
 
+def keypoint_frame(doc: dict[str, Any]) -> tuple[Any, dict[str, tuple[float, float]]] | None:
+    """The court points placed on one frame: the frame (timeMs) with the most of them. A handheld
+    camera moves, so points placed on different frames cannot be mixed; proposed points are
+    projections of the placed ones, not evidence, so they are left out."""
+    frames: dict[Any, list[dict[str, Any]]] = {}
+    for item in doc.get("courtKeypoints", []):
+        if item.get("source") != "proposed":
+            frames.setdefault(item.get("timeMs"), []).append(item)
+    if not frames:
+        return None
+    time_ms, keypoints = max(frames.items(), key=lambda entry: len(entry[1]))
+    return time_ms, {item["name"]: (item["x"], item["y"]) for item in keypoints}
+
+
 def load_golden_dir(directory: Path) -> list[dict[str, Any]]:
     documents: list[dict[str, Any]] = []
     problems: list[str] = []

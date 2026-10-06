@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from evaluation.golden import GOLDEN_SHOT_LABELS, load_golden_dir
+from evaluation.golden import GOLDEN_SHOT_LABELS, keypoint_frame, load_golden_dir
 from evaluation.metrics import macro_f1, match_events
 from geometry.calibrate import solve_camera
 from geometry.quality import assess_geometry
@@ -23,19 +23,12 @@ SHOT_MATCH_TOLERANCE_MS = 100
 
 
 def evaluate_calibration(golden: dict[str, Any]) -> dict[str, Any] | None:
-    """Solve the camera from the golden keypoints of one frame (the frame with the most points).
-    Handheld clips move the camera, so points clicked on different frames cannot be mixed.
-    Proposed points are projections of the clicked ones, not evidence, so they are left out."""
+    """Solve the camera from the golden keypoints of one frame (see keypoint_frame)."""
     size = (golden["imageSize"][0], golden["imageSize"][1])
-    frames: dict[Any, list[dict[str, Any]]] = {}
-    for item in golden.get("courtKeypoints", []):
-        if item.get("source") == "proposed":
-            continue
-        frames.setdefault(item.get("timeMs"), []).append(item)
-    if not frames:
+    placed = keypoint_frame(golden)
+    if placed is None:
         return None
-    frame_time, keypoints = max(frames.items(), key=lambda entry: len(entry[1]))
-    observations = {item["name"]: (item["x"], item["y"]) for item in keypoints}
+    frame_time, observations = placed
     solution = solve_camera(observations, size)
     if solution is None:
         return None

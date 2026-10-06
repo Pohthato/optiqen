@@ -27,6 +27,13 @@ from simulation.rally import Rally, canned_rally, player_positions
 from simulation.render import render_frame
 
 SPEED_OF_SOUND_M_S = 343.0
+# Phone placements (position, aim) in court metres. Behind the near baseline, 3 m up, is the
+# recommended tier-A placement.
+VIEWS = {
+    "behind": ((2.59, -3.5, 3.0), (2.59, 7.0, 0.0)),
+    "corner": ((-2.5, -2.5, 3.0), (2.59, 6.7, 0.0)),
+    "side": ((-4.5, 6.7, 3.0), (2.59, 6.7, 0.0)),
+}
 
 
 @dataclass
@@ -178,13 +185,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tripod", action="store_true", help="still camera instead of a steadily held phone")
     parser.add_argument("--distractors", type=int, default=2, help="quieter hits from a neighbouring court")
     parser.add_argument("--audio-offset-ms", type=float, default=0.0)
+    parser.add_argument("--view", choices=sorted(VIEWS), default="behind", help="where the phone stands")
+    parser.add_argument(
+        "--occlude", type=float, nargs=2, action="append", default=[], metavar=("START_S", "END_S"),
+        help="cover the lens for this stretch (repeatable)",
+    )
     args = parser.parse_args(argv)
     size = (args.width, args.height)
-    # Behind the near baseline, 3 m up: the recommended tier-A placement; focal ~ 26 mm-equivalent.
-    camera = Camera.look_at((2.59, -3.5, 3.0), (2.59, 7.0, 0.0), 1300.0 * args.width / 1920, size)
+    position, target = VIEWS[args.view]
+    # Focal ~ 26 mm-equivalent, the main lens of most phones.
+    camera = Camera.look_at(position, target, 1300.0 * args.width / 1920, size)
     clip = make_clip(
         camera, size, fps=args.fps, handheld=not args.tripod, seed=args.seed,
         distractors=args.distractors, audio_offset_s=args.audio_offset_ms / 1000,
+        occlusions=[tuple(stretch) for stretch in args.occlude],
     )
     paths = write_clip(clip, args.out)
     print(f"wrote {len(clip.frames)} frames, {len(clip.rally.contacts)} contacts -> {paths['video'].parent}")

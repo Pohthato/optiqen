@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from evaluation.golden import COCO_JOINTS, GOLDEN_SHOT_LABELS, load_golden_dir, validate_golden
+from evaluation.golden import COCO_JOINTS, GOLDEN_SHOT_LABELS, keypoint_frame, load_golden_dir, validate_golden
 
 VALID = {
     "schemaVersion": 1,
@@ -120,6 +120,25 @@ class AnswerKeyConsistencyTests(unittest.TestCase):
         self.assertEqual(validate_golden(good), [])
         bad = corrupted(courtKeypoints=[{"name": "back1_sl", "x": 612.0, "y": 301.5, "source": "guessed"}])
         self.assertTrue(any("source" in error for error in validate_golden(bad)))
+
+
+class KeypointFrameTests(unittest.TestCase):
+    def test_picks_the_frame_with_the_most_placed_points(self):
+        doc = corrupted(courtKeypoints=[
+            {"name": "back0_sl", "x": 10.0, "y": 20.0, "timeMs": 500},
+            {"name": "back0_sl", "x": 11.0, "y": 21.0, "timeMs": 1000, "source": "clicked"},
+            {"name": "back0_sr", "x": 30.0, "y": 20.0, "timeMs": 1000, "source": "adjusted"},
+            {"name": "back1_sr", "x": 30.0, "y": 5.0, "timeMs": 500, "source": "proposed"},
+            {"name": "back1_sl", "x": 10.0, "y": 5.0, "timeMs": 500, "source": "proposed"},
+        ])
+        time_ms, points = keypoint_frame(doc)
+        self.assertEqual(time_ms, 1000)
+        self.assertEqual(points, {"back0_sl": (11.0, 21.0), "back0_sr": (30.0, 20.0)})
+
+    def test_proposed_points_alone_are_no_frame(self):
+        doc = corrupted(courtKeypoints=[{"name": "back0_sl", "x": 1.0, "y": 2.0, "timeMs": 0, "source": "proposed"}])
+        self.assertIsNone(keypoint_frame(doc))
+        self.assertIsNone(keypoint_frame(corrupted(courtKeypoints=[])))
 
 
 class LoadGoldenDirTests(unittest.TestCase):
