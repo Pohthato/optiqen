@@ -234,3 +234,248 @@ describe("labeller core: worker import and export", () => {
     expect(warnings.some((w: string) => w.includes('"other"'))).toBe(true);
   });
 });
+
+// A perspective map from court metres to pixels: far lines shrink and rise like a phone behind the baseline.
+const H_BEHIND = [[120, 106.4, 400], [0, 0, 900], [0, 0.15, 1]];
+
+function project(h: number[][], [x, y]: number[]) {
+  const w = h[2][0] * x + h[2][1] * y + h[2][2];
+  return [(h[0][0] * x + h[0][1] * y + h[0][2]) / w, (h[1][0] * x + h[1][1] * y + h[1][2]) / w];
+}
+
+function clickCourt(state: any, h: number[][], names: string[], noise: number[][] = []) {
+  names.forEach((name, i) => {
+    const [x, y] = project(h, core.KEYPOINT_POSITIONS[name]);
+    const [dx, dy] = noise[i] ?? [0, 0];
+    core.setKeypoint(state, name, x + dx, y + dy, 500);
+  });
+}
+
+describe("labeller core: court completion", () => {
+  it("uses the Python court model's coordinates", () => {
+    const positions = JSON.parse(runPython("import json; from geometry.court_model import KEYPOINTS; print(json.dumps({k: list(map(float, v)) for k, v in KEYPOINTS.items()}))"));
+    for (const name of core.KEYPOINT_NAMES) {
+      core.KEYPOINT_POSITIONS[name].forEach((value: number, axis: number) => expect(value).toBeCloseTo(positions[name][axis], 9));
+    }
+  });
+
+  it("proposes every other visible floor point from four clicked corners", () => {
+    const state = freshState();
+    clickCourt(state, H_BEHIND, ["back0_sl", "back0_sr", "back1_sr", "back1_sl"]);
+    const proposals = core.proposeCourtPoints(state);
+    expect(Object.keys(proposals)).toContain("short0_c");
+    expect(Object.keys(proposals)).not.toContain("back0_sl");
+    for (const [name, point] of Object.entries<any>(proposals)) {
+      const [x, y] = project(H_BEHIND, core.KEYPOINT_POSITIONS[name]);
+      expect(point.x).toBeCloseTo(x, 1);
+      expect(point.y).toBeCloseTo(y, 1);
+    }
+  });
+
+  it("fits more than four slightly misplaced clicks by least squares", () => {
+    const state = freshState();
+    const noise = [[0.6, -0.4], [-0.5, 0.5], [0.4, 0.6], [-0.6, -0.3], [0.3, -0.6], [-0.4, 0.4]];
+    clickCourt(state, H_BEHIND, ["back0_sl", "back0_sr", "back1_sr", "back1_sl", "short0_c", "short1_dl"], noise);
+    const proposals = core.proposeCourtPoints(state);
+    const [x, y] = project(H_BEHIND, core.KEYPOINT_POSITIONS.long0_c);
+    expect(Math.hypot(proposals.long0_c.x - x, proposals.long0_c.y - y)).toBeLessThan(3);
+  });
+
+  it("proposes nothing from fewer than four points or from points on one line", () => {
+    const state = freshState();
+    clickCourt(state, H_BEHIND, ["back0_sl", "back0_sr", "back1_sr"]);
+    expect(core.proposeCourtPoints(state)).toEqual({});
+    const line = freshState();
+    clickCourt(line, H_BEHIND, ["back0_dl", "back0_sl", "back0_c", "back0_sr"]);
+    expect(core.proposeCourtPoints(line)).toEqual({});
+  });
+
+  it("never proposes points that would be behind the camera", () => {
+    // w = 1 - 0.1 y turns negative past y = 10 m, where pixels can still land inside the frame.
+    const behind = [[120, 0, -400], [0, 50, -1000], [0, -0.1, 1]];
+    const state = freshState();
+    clickCourt(state, behind, ["back0_sl", "back0_sr", "short0_sl", "short0_sr"]);
+    const [x, y] = project(behind, core.KEYPOINT_POSITIONS.back1_sl);
+    expect(x > 0 && x < 1920 && y > 0 && y < 1080).toBe(true);
+    expect(core.proposeCourtPoints(state)).not.toHaveProperty("back1_sl");
+  });
+
+  it("accepts proposals as points on the frame the corners were clicked on", () => {
+    const state = freshState();
+    clickCourt(state, H_BEHIND, ["back0_sl", "back0_sr", "back1_sr", "back1_sl"]);
+    const proposals = core.proposeCourtPoints(state);
+    const added = core.acceptCourtProposals(state, proposals);
+    expect(added).toBe(Object.keys(proposals).length);
+    expect(state.keypoints.short0_c).toEqual({ ...proposals.short0_c, timeMs: 500 });
+  });
+
+  it("lists court line segments between named points for drawing", () => {
+    expect(core.COURT_LINES.length).toBe(13);
+    for (const [from, to] of core.COURT_LINES) {
+      expect(core.KEYPOINT_NAMES).toContain(from);
+      expect(core.KEYPOINT_NAMES).toContain(to);
+    }
+  });
+});
+
+const AUDIO_SCRIPT = [
+  "import base64, json, sys",
+  "from simulation.audio import render_audio, SAMPLE_RATE",
+  "samples, extra = render_audio(json.loads(sys.argv[1]), float(sys.argv[2]), distractors=int(sys.argv[3]), seed=11)",
+  "print(json.dumps({'rate': SAMPLE_RATE, 'distractors': extra, 'samples': base64.b64encode(samples.astype('<f4').tobytes()).decode()}))",
+].join("\n");
+
+function syntheticAudio(contactTimes: number[], distractors: number, seconds: number) {
+  const out = JSON.parse(
+    execFileSync(python, ["-c", AUDIO_SCRIPT, JSON.stringify(contactTimes), String(seconds), String(distractors)], {
+      cwd: workerDir,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    }),
+  );
+  const bytes = Buffer.from(out.samples, "base64");
+  const samples = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+  return { rate: out.rate as number, distractors: out.distractors as number[], samples };
+}
+
+describe("labeller core: hits from audio", () => {
+  it("finds every racket hit within 5 ms and ranks neighbouring-court hits below them", () => {
+    const hits = [0.5, 1.4, 2.2, 3.05];
+    const audio = syntheticAudio(hits, 2, 4.0);
+    const onsets = core.detectOnsets(audio.samples, audio.rate);
+    const matched = hits.map(t => onsets.find((o: any) => Math.abs(o.timeMs - t * 1000) <= 5));
+    expect(matched.every(Boolean)).toBe(true);
+    const weakestHit = Math.min(...matched.map((o: any) => o.strength));
+    for (const t of audio.distractors) {
+      const onset = onsets.find((o: any) => Math.abs(o.timeMs - t * 1000) <= 5);
+      if (onset) expect(onset.strength).toBeLessThan(weakestHit);
+    }
+  });
+
+  it("finds nothing in background noise alone", () => {
+    const audio = syntheticAudio([], 0, 2.0);
+    expect(core.detectOnsets(audio.samples, audio.rate)).toEqual([]);
+  });
+
+  it("reports one onset for sounds closer together than the minimum gap", () => {
+    const audio = syntheticAudio([1.0, 1.06], 0, 2.0);
+    expect(core.detectOnsets(audio.samples, audio.rate)).toHaveLength(1);
+  });
+
+  it("turns onsets into suggestions, skipping hits already labelled", () => {
+    const state = freshState();
+    core.addContact(state, 1000, "clear");
+    const kept = core.setHitSuggestions(state, [
+      { timeMs: 1030, strength: 3 },
+      { timeMs: 2000, strength: 3 },
+      { timeMs: 3000, strength: 2 },
+    ]);
+    expect(kept).toBe(2);
+    expect(state.hitSuggestions.map((s: any) => s.timeMs)).toEqual([2000, 3000]);
+    expect(core.suggestionSeekMs(state.hitSuggestions[0])).toBe(1970);
+  });
+
+  it("walks pending suggestions, accepting and skipping them", () => {
+    const state = freshState();
+    core.setHitSuggestions(state, [{ timeMs: 2000, strength: 3 }, { timeMs: 3000, strength: 3 }, { timeMs: 4000, strength: 3 }]);
+    expect(core.nextPendingSuggestion(state, -1)).toBe(0);
+    const contact = core.acceptSuggestion(state, 0, 1967, "smash");
+    expect(state.contacts[contact]).toEqual({ timeMs: 1967, label: "smash" });
+    core.dismissSuggestion(state, 1);
+    expect(core.nextPendingSuggestion(state, 0)).toBe(2);
+    expect(core.nextPendingSuggestion(state, 2)).toBe(-1);
+    expect(state.hitSuggestions.map((s: any) => s.status)).toEqual(["accepted", "dismissed", "pending"]);
+  });
+});
+
+describe("labeller core: rally suggestions", () => {
+  it("groups hits separated by long pauses into rallies", () => {
+    const contacts = [1000, 2000, 3100, 9000, 10000].map(timeMs => ({ timeMs, label: "other" }));
+    expect(core.suggestRallies(contacts)).toEqual([
+      { startMs: 400, endMs: 4600 },
+      { startMs: 8400, endMs: 11500 },
+    ]);
+  });
+
+  it("adds suggested rallies that do not overlap ones already marked, and sets winners by index", () => {
+    const state = freshState();
+    [1000, 2000, 9000, 10000].forEach(t => core.addContact(state, t, "clear"));
+    core.startRally(state, 300);
+    core.endRally(state, 3000);
+    expect(core.applyRallySuggestions(state)).toBe(1);
+    expect(state.rallies.map((r: any) => [r.startMs, r.endMs])).toEqual([[300, 3000], [8400, 11500]]);
+    core.setRallyWinner(state, 1, "far");
+    expect(state.rallies[1].winner).toBe("far");
+    expect(() => core.setRallyWinner(state, 5, "far")).toThrow("No rally");
+  });
+});
+
+const POSE = Array.from({ length: 17 }, (_, i) => [900 + i, 500 + i, 2]);
+
+describe("labeller core: body poses", () => {
+  it("uses the Python COCO joint order", () => {
+    const joints = JSON.parse(runPython("import json; from evaluation.golden import COCO_JOINTS; print(json.dumps(list(COCO_JOINTS)))"));
+    expect(core.COCO_JOINTS).toEqual(joints);
+  });
+
+  it("stores a validated pose per hit and lists hits still needing one", () => {
+    const state = freshState();
+    core.setSelectedPlayer(state, "near");
+    core.addContact(state, 1000, "clear");
+    core.addContact(state, 2000, "drop");
+    core.setPose(state, 1000, "near", POSE);
+    expect(core.poseTargets(state)).toEqual([2000]);
+    expect(() => core.setPose(state, 2000, "near", POSE.slice(1))).toThrow("17");
+    expect(() => core.setPose(state, 2000, "near", POSE.map(([x, y]) => [x, y, 5]))).toThrow("visibility");
+    expect(() => core.setPose(state, 2000, "umpire", POSE)).toThrow("player");
+    expect(() => core.setSelectedPlayer(state, "left")).toThrow("player");
+    core.removePose(state, 1000);
+    expect(core.poseTargets(state)).toEqual([1000, 2000]);
+  });
+
+  it("turns detector output into candidates and picks the selected player", () => {
+    const far = { score: 0.8, keypoints: Array.from({ length: 17 }, (_, i) => ({ x: 950 + i, y: 300 + i, score: 0.9 })) };
+    const near = { score: 0.7, keypoints: Array.from({ length: 17 }, (_, i) => ({ x: 600 + i, y: 700 + i * 5, score: i === 3 ? 0.1 : 0.9 })) };
+    const candidates = core.candidatesFromDetections([far, near]);
+    expect(candidates[1].keypoints[3][2]).toBe(1);
+    expect(candidates[1].keypoints[4][2]).toBe(2);
+    expect(core.pickPlayer(candidates, "near", null)).toBe(1);
+    expect(core.pickPlayer(candidates, "far", null)).toBe(0);
+    expect(core.pickPlayer(candidates, "near", candidates[0].keypoints)).toBe(0);
+    expect(core.pickPlayer([], "near", null)).toBe(-1);
+  });
+
+  it("finds the latest confirmed pose before a time for the selected player", () => {
+    const state = freshState();
+    core.setSelectedPlayer(state, "near");
+    core.setPose(state, 1000, "near", POSE);
+    expect(core.previousPose(state, 1500)).toEqual(POSE);
+    expect(core.previousPose(state, 900)).toBeNull();
+  });
+
+  it("exports poses the Python validator accepts and warns about hits without one", () => {
+    const state = freshState();
+    core.setSelectedPlayer(state, "near");
+    core.addContact(state, 1000, "clear");
+    core.addContact(state, 2000, "drop");
+    core.setPose(state, 1000, "near", POSE);
+    const { doc, warnings } = core.buildGolden(state);
+    expect(doc.selectedPlayer).toBe("near");
+    expect(doc.poses).toEqual([{ timeMs: 1000, player: "near", keypoints: POSE }]);
+    expect(warnings.some((w: string) => w.includes("need a body pose"))).toBe(true);
+    const errors = JSON.parse(
+      runPython("import json,sys; from evaluation.golden import validate_golden; print(json.dumps(validate_golden(json.load(sys.stdin))))", JSON.stringify(doc)),
+    );
+    expect(errors).toEqual([]);
+    expect(core.stateFromGolden(doc).poses).toEqual(state.poses);
+    expect(core.stateFromGolden(doc).selectedPlayer).toBe("near");
+  });
+
+  it("upgrades autosaves from before suggestions and poses existed", () => {
+    const old = { clipId: "c", fps: 60, imageSize: [1920, 1080], keypoints: {}, contacts: [], rallies: [] };
+    const state = core.normalizeState(old);
+    expect(state.poses).toEqual({});
+    expect(state.hitSuggestions).toEqual([]);
+    expect(state.selectedPlayer).toBeNull();
+  });
+});
