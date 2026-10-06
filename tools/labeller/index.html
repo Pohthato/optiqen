@@ -3,80 +3,188 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Golden Set Labeller</title>
+<title>Optiqen Labeller</title>
 <style>
-  :root { --bg:#f6f7f9; --panel:#fff; --ink:#15181d; --muted:#5d6672; --line:#d9dde3; --accent:#1f6feb; --ok:#1a7f37; --warn:#9a6700; --mark:#ffcc00; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#0f1216; --panel:#171b21; --ink:#e8ebef; --muted:#9aa4b0; --line:#2a3039; --accent:#5aa2ff; --ok:#3fb950; --warn:#d29922; } }
+  :root {
+    --bg: #0b1116; --panel: #101a20; --raised: #15222a; --line: #22323c; --ink: #e6edf1; --muted: #8a9aa5;
+    --accent: #b7fa59; --accent-ink: #0c1717; --warn: #f5c451; --danger: #f87171; --suggest: #9aa6ae;
+  }
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.4 system-ui, sans-serif; }
-  header { display:flex; flex-wrap:wrap; gap:8px 12px; align-items:center; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line); }
-  header label.field { display:flex; gap:6px; align-items:center; color:var(--muted); }
-  input, select, button, .btn { font:inherit; color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:5px 9px; }
-  .btn, button { cursor:pointer; }
-  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
-  input[type=number] { width:90px; }
-  main { display:grid; grid-template-columns:minmax(0,1fr) 360px; gap:16px; padding:16px; }
-  @media (max-width: 960px) { main { grid-template-columns:1fr; } }
-  #wrap { position:relative; display:inline-block; max-width:100%; background:#000; line-height:0; }
-  video { max-width:100%; max-height:70vh; display:block; }
-  canvas { position:absolute; left:0; top:0; cursor:crosshair; }
-  #readout { margin:8px 0; color:var(--muted); font-variant-numeric:tabular-nums; }
-  #status { color:var(--muted); }
-  #status.error { color:#cf222e; }
-  #warnings { color:var(--warn); margin:6px 0; }
-  aside section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:12px; }
-  h2 { margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
-  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
-  td, th { padding:3px 4px; text-align:left; border-bottom:1px solid var(--line); }
-  tr.selected { background:color-mix(in srgb, var(--accent) 16%, transparent); }
-  tr[data-index] { cursor:pointer; }
-  ul { list-style:none; margin:0; padding:0; }
-  li { display:flex; gap:8px; align-items:center; padding:2px 0; }
-  .hint { color:var(--muted); margin:6px 0 0; font-size:12px; }
-  kbd { background:var(--bg); border:1px solid var(--line); border-radius:4px; padding:0 5px; font:12px ui-monospace, monospace; }
-  .x { margin-left:auto; padding:0 7px; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  button, input, select { font: inherit; color: inherit; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--raised); border-radius: 8px; padding: 7px 12px; cursor: pointer; white-space: nowrap; }
+  .btn:hover { border-color: #35505e; }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  .btn.ghost { background: transparent; }
+  .btn.small { padding: 4px 9px; font-size: 12px; }
+  .btn:disabled { opacity: .45; cursor: default; }
+  input, select { background: var(--raised); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; }
+  kbd { font: 11px ui-monospace, monospace; background: var(--raised); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; }
+  .muted { color: var(--muted); }
+
+  header.top { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding: 10px 18px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .brand { display: flex; align-items: center; gap: 10px; margin-right: auto; }
+  .logo { width: 30px; height: 30px; border-radius: 8px; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; font-weight: 800; }
+  .brand small { display: block; color: var(--muted); font-size: 12px; }
+  .files, .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .meta label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+  .meta input { width: 130px; } #fps { width: 80px; }
+
+  nav.steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 12px 18px 0; }
+  nav.steps button { display: flex; align-items: center; gap: 10px; text-align: left; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; }
+  nav.steps button .num { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: var(--raised); font-weight: 700; font-size: 12px; flex: none; }
+  nav.steps button b { display: block; }
+  nav.steps button small { color: var(--muted); font-size: 12px; }
+  nav.steps button.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  nav.steps button.active .num { background: var(--accent); color: var(--accent-ink); }
+  nav.steps button.done .num { background: #2c4a2a; color: var(--accent); }
+
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; padding: 12px 18px 24px; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } nav.steps { grid-template-columns: repeat(2, 1fr); } }
+  .stage { min-width: 0; }
+  #wrap { position: relative; display: inline-block; max-width: 100%; background: #000; line-height: 0; border-radius: 10px; overflow: hidden; min-height: 200px; min-width: 320px; }
+  #wrap video { max-width: 100%; max-height: 62vh; display: block; }
+  #overlay { position: absolute; left: 0; top: 0; }
+  #overlay.placing { cursor: crosshair; }
+  #loupe { position: absolute; width: 180px; height: 180px; border-radius: 50%; border: 2px solid var(--accent); box-shadow: 0 6px 24px rgba(0,0,0,.6); pointer-events: none; display: none; }
+  #empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); line-height: 1.4; font-size: 15px; }
+  #timeline { display: block; width: 100%; height: 64px; margin-top: 10px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); cursor: pointer; }
+  .transport { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+  .transport .btn { padding: 6px 10px; }
+  #readout { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #status { min-height: 20px; margin: 10px 0 0; color: var(--muted); }
+  #status.error { color: var(--danger); }
+  #warnings { list-style: none; padding: 0; margin: 6px 0 0; color: var(--warn); font-size: 13px; }
+
+  aside.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; align-self: start; }
+  aside.panel section { display: none; }
+  aside.panel section.active { display: block; }
+  aside.panel h2 { margin: 0 0 6px; font-size: 16px; }
+  .hint { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+  .hint b { color: var(--ink); font-weight: 600; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .segmented button { flex: 1; }
+  .segmented button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  .shots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin: 4px 0 14px; }
+  .shots button { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--raised); cursor: pointer; text-transform: capitalize; }
+  .shots button i { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .shots button kbd { margin-left: auto; }
+  .list { width: 100%; list-style: none; margin: 0; padding: 0; max-height: 300px; overflow: auto; font-size: 13px; border-collapse: collapse; }
+  .list li, .list tr { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-top: 1px solid var(--line); }
+  .list tr { cursor: pointer; }
+  .list tr.selected { background: rgba(183,250,89,.08); }
+  .list td { padding: 0; }
+  .list .grow { flex: 1; min-width: 0; }
+  .list select { padding: 2px 6px; font-size: 12px; }
+  .chip { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--raised); color: var(--muted); }
+  .chip.ok { background: #2c4a2a; color: var(--accent); }
+  .x { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 16px; padding: 0 4px; }
+  .x:hover { color: var(--danger); }
+  details.keys { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: 12px; }
+  details.keys summary { cursor: pointer; color: var(--ink); }
+  details.keys dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 10px 0 0; }
+  details.keys dd { margin: 0; }
 </style>
 </head>
 <body>
-<header>
-  <label class="btn">Open video <input id="video-file" type="file" accept="video/*" hidden></label>
-  <label class="btn">Load labels <input id="labels-file" type="file" accept=".json,application/json" hidden></label>
-  <label class="btn">Load worker result <input id="result-file" type="file" accept=".json,application/json" hidden></label>
-  <label class="field">Clip ID <input id="clip-id" size="16" placeholder="clip-001"></label>
-  <label class="field">FPS <input id="fps" type="number" min="1" step="0.001" value="30"></label>
-  <button id="detect-fps" title="Play a moment of the clip to measure its frame rate">Detect FPS</button>
-  <button id="save" class="primary">Save labels</button>
-  <span id="status">Open a video to begin.</span>
+<header class="top">
+  <div class="brand"><span class="logo">O</span><div><b>Optiqen labeller</b><small id="clip-name">Open a rally video to begin</small></div></div>
+  <div class="files">
+    <label class="btn primary">Open video<input id="video-file" type="file" accept="video/*" hidden></label>
+    <label class="btn ghost">Load labels<input id="labels-file" type="file" accept=".json,application/json" hidden></label>
+    <label class="btn ghost">Load worker result<input id="result-file" type="file" accept=".json,application/json" hidden></label>
+  </div>
+  <div class="meta">
+    <label>Clip <input id="clip-id" placeholder="clip-001"></label>
+    <label>FPS <input id="fps" type="number" min="1" step="0.001" value="30"></label>
+    <button id="detect-fps" class="btn ghost" title="Play a moment of the clip to measure its frame rate">Detect</button>
+    <button id="save" class="btn">Save labels</button>
+  </div>
 </header>
+
+<nav class="steps" id="steps">
+  <button data-step="court"><span class="num">1</span><span><b>Court</b><small id="progress-court"></small></span></button>
+  <button data-step="hits"><span class="num">2</span><span><b>Hits</b><small id="progress-hits"></small></span></button>
+  <button data-step="rallies"><span class="num">3</span><span><b>Rallies</b><small id="progress-rallies"></small></span></button>
+  <button data-step="body"><span class="num">4</span><span><b>Body</b><small id="progress-body"></small></span></button>
+</nav>
+
 <main>
-  <section>
-    <div id="wrap"><video id="video" muted playsinline></video><canvas id="overlay"></canvas></div>
-    <div id="readout">frame <b id="frame-no">0</b> · <b id="time-ms">0</b> ms · speed <b id="speed">1</b>×</div>
-    <div id="warnings"></div>
+  <section class="stage">
+    <div id="wrap">
+      <video id="video" muted playsinline></video>
+      <canvas id="overlay"></canvas>
+      <canvas id="loupe" width="180" height="180"></canvas>
+      <div id="empty">Open a rally video to begin.</div>
+    </div>
+    <canvas id="timeline" title="Click to jump"></canvas>
+    <div class="transport">
+      <button class="btn" data-frames="-10" title="Back 10 frames (<)">&minus;10</button>
+      <button class="btn" data-frames="-1" title="Back 1 frame (,)">&minus;1</button>
+      <button class="btn" id="play" title="Play / pause (Space)">Play</button>
+      <button class="btn" data-frames="1" title="Forward 1 frame (.)">+1</button>
+      <button class="btn" data-frames="10" title="Forward 10 frames (>)">+10</button>
+      <select id="speed" title="Playback speed ([ and ])"><option value="0.25">0.25&times;</option><option value="0.5">0.5&times;</option><option value="1" selected>1&times;</option></select>
+      <span id="readout">frame 0 &middot; 0 ms</span>
+    </div>
+    <p id="status" role="status"></p>
+    <ul id="warnings"></ul>
   </section>
-  <aside>
-    <section>
+
+  <aside class="panel">
+    <section data-panel="court">
       <h2>Court points</h2>
-      <select id="kp-select"></select>
-      <p class="hint">Pick a name, then click that point on the paused frame. Use a frame where the court is clearly visible.</p>
-      <ul id="kp-list"></ul>
+      <p class="hint">Pause on a frame where the court is clear. Click the <b>four corners of the singles court</b> &mdash; the name to click is shown below &mdash; then press <b>Propose the rest</b> and fix any point by dragging it.</p>
+      <div class="row"><select id="kp-select" class="grow"></select><button id="kp-clear" class="btn ghost small">Remove</button></div>
+      <div class="row"><button id="propose" class="btn">Propose the rest <kbd>P</kbd></button><button id="accept-proposals" class="btn primary">Accept proposals <kbd>A</kbd></button></div>
+      <p class="hint">Yellow points are yours; grey ones are proposals. A magnifier follows the cursor for precise clicks.</p>
+      <ul id="kp-list" class="list"></ul>
     </section>
-    <section>
-      <h2>Contacts</h2>
-      <table><thead><tr><th>#</th><th>ms</th><th>frame</th><th>shot</th><th></th></tr></thead><tbody id="contacts"></tbody></table>
+
+    <section data-panel="hits">
+      <h2>Hits</h2>
+      <p class="hint">Press <b>Find hits</b> once. Then <kbd>N</kbd> jumps to the next likely hit: step with <kbd>,</kbd> <kbd>.</kbd> to the frame where racket meets shuttle and click the shot. <kbd>X</kbd> skips a sound that isn't a hit.</p>
+      <div class="row"><button id="find-hits" class="btn primary">Find hits from audio</button><span id="hit-counts" class="muted"></span></div>
+      <div class="row"><button id="next-hit" class="btn">Next hit <kbd>N</kbd></button><button id="skip-hit" class="btn ghost">Not a hit <kbd>X</kbd></button><button id="mark-hit" class="btn ghost">Hit here <kbd>C</kbd></button></div>
+      <div id="shot-buttons" class="shots"></div>
+      <table class="list"><tbody id="contacts"></tbody></table>
     </section>
-    <section>
+
+    <section data-panel="rallies">
       <h2>Rallies</h2>
-      <ul id="rallies"></ul>
+      <p class="hint">Rallies are suggested from the pauses between hits. Check each one and choose who won it (as seen from the camera).</p>
+      <div class="row"><button id="suggest-rallies" class="btn primary">Suggest rallies</button><button id="rally-here" class="btn ghost">Start / end here <kbd>R</kbd></button></div>
+      <ul id="rallies" class="list"></ul>
     </section>
-    <section>
-      <h2>Keys</h2>
-      <p class="hint"><kbd>Space</kbd> play/pause · <kbd>,</kbd> <kbd>.</kbd> step 1 frame · <kbd>&lt;</kbd> <kbd>&gt;</kbd> step 10 · <kbd>[</kbd> <kbd>]</kbd> slower/faster<br>
-      <kbd>C</kbd> mark contact · <kbd>1</kbd>–<kbd>9</kbd>,<kbd>0</kbd> shot: serve clear drop net lift drive push smash block other<br>
-      <kbd>R</kbd> start/end rally · <kbd>N</kbd> <kbd>F</kbd> <kbd>U</kbd> winner near/far/unknown · <kbd>Del</kbd> delete contact</p>
+
+    <section data-panel="body">
+      <h2>Body pose</h2>
+      <p class="hint">Choose your player. <kbd>B</kbd> goes to the next hit frame and fills in the skeleton; drag any joint that is off, right-click a joint you can't see, then <kbd>Enter</kbd> to confirm.</p>
+      <div class="row segmented" id="player-pick"><button class="btn" data-player="near">Near player</button><button class="btn" data-player="far">Far player</button></div>
+      <div class="row"><button id="next-pose" class="btn">Next hit frame <kbd>B</kbd></button><button id="confirm-pose" class="btn primary">Confirm pose <kbd>Enter</kbd></button></div>
+      <div class="row"><button id="manual-pose" class="btn ghost small">Place joints by hand</button><span id="pose-status" class="muted"></span></div>
+      <ul id="pose-list" class="list"></ul>
     </section>
+
+    <details class="keys">
+      <summary>All keyboard shortcuts</summary>
+      <dl>
+        <dt><kbd>Space</kbd></dt><dd>Play / pause</dd>
+        <dt><kbd>,</kbd> <kbd>.</kbd></dt><dd>Back / forward one frame</dd>
+        <dt><kbd>&lt;</kbd> <kbd>&gt;</kbd></dt><dd>Back / forward ten frames</dd>
+        <dt><kbd>[</kbd> <kbd>]</kbd></dt><dd>Slower / faster</dd>
+        <dt><kbd>P</kbd> <kbd>A</kbd></dt><dd>Court: propose / accept points</dd>
+        <dt><kbd>N</kbd> <kbd>X</kbd> <kbd>C</kbd></dt><dd>Hits: next / not a hit / hit here</dd>
+        <dt><kbd>1</kbd>&ndash;<kbd>9</kbd> <kbd>0</kbd></dt><dd>Hits: shot type (see buttons)</dd>
+        <dt><kbd>Del</kbd></dt><dd>Hits: delete the selected hit</dd>
+        <dt><kbd>R</kbd></dt><dd>Start / end a rally here</dd>
+        <dt><kbd>N</kbd> <kbd>F</kbd> <kbd>U</kbd></dt><dd>Rallies: near / far / unclear won</dd>
+        <dt><kbd>B</kbd> <kbd>Enter</kbd> <kbd>H</kbd></dt><dd>Body: next frame / confirm / skip joint when placing by hand</dd>
+      </dl>
+    </details>
   </aside>
 </main>
+
 <script src="labeller-core.js"></script>
 <script>
 (() => {
@@ -86,15 +194,45 @@
   const video = $("video");
   const overlay = $("overlay");
   const ctx = overlay.getContext("2d");
-  let state = C.emptyState("", 30, [0, 0]);
-  let selectedContact = -1;
+  const loupe = $("loupe");
+  const loupeCtx = loupe.getContext("2d");
+  const timeline = $("timeline");
+  const tctx = timeline.getContext("2d");
 
+  const SHOT_COLORS = { serve: "#a78bfa", clear: "#60a5fa", drop: "#34d399", net: "#2dd4bf", lift: "#38bdf8", drive: "#fbbf24", push: "#f472b6", smash: "#f87171", block: "#c084fc", other: "#94a3b8" };
+  const SHOT_KEY = label => (label === "other" ? "0" : String(C.SHOT_LABELS.indexOf(label) + 1));
+  const CORNERS = ["back0_sl", "back0_sr", "back1_sr", "back1_sl"];
+  const POSE_SCRIPTS = [
+    "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.22.0/dist/tf-core.min.js",
+    "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.22.0/dist/tf-converter.min.js",
+    "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.22.0/dist/tf-backend-webgl.min.js",
+    "https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.min.js",
+  ];
+  const GRAB_PX = 12;
+  const LOUPE_ZOOM = 4;
+
+  let state = C.emptyState("", 30, [0, 0]);
+  let step = "court";
+  let videoFile = null;
+  let selectedContact = -1;
+  let activeSuggestion = -1;
+  let proposals = {};
+  let showProposals = false;
+  let pose = null; // { timeMs, candidates, chosen, keypoints, manualNext }
+  let detector = null;
+  let detectorLoading = null;
+  let drag = null;
+  let hoverName = null; // court point under the cursor: only it and the selected point are labelled
+  let detectHandle = null;
+
+  // ---------- basics ----------
   const fps = () => {
     const value = Number($("fps").value);
     return Number.isFinite(value) && value > 0 ? value : 30;
   };
-  const storageKey = () => `optiqen-labeller:${state.clipId}`;
   const currentMs = () => C.frameTimeMs(C.frameIndexAt(video.currentTime, fps()), fps());
+  const durationMs = () => (Number.isFinite(video.duration) ? video.duration * 1000 : 0);
+  const storageKey = () => `optiqen-labeller:${state.clipId}`;
 
   function say(message, isError = false) {
     $("status").textContent = message;
@@ -105,7 +243,7 @@
     state.clipId = $("clip-id").value.trim();
     state.fps = fps();
     if (!state.clipId) return;
-    try { localStorage.setItem(storageKey(), JSON.stringify(state)); } catch { /* storage unavailable: manual save still works */ }
+    try { localStorage.setItem(storageKey(), JSON.stringify(state)); } catch { /* storage unavailable: Save still works */ }
   }
 
   function seekToMs(ms) {
@@ -113,71 +251,16 @@
     video.currentTime = C.frameCentreSeconds(C.frameIndexAt(ms / 1000, fps()), fps());
   }
 
-  function step(frames) {
+  function stepFrames(frames) {
     video.pause();
     video.currentTime = C.stepSeconds(video.currentTime, frames, fps(), video.duration || 0);
   }
 
-  function renderKeypoints() {
-    const select = $("kp-select");
-    if (!select.options.length) {
-      for (const name of C.KEYPOINT_NAMES) select.add(new Option(name, name));
-    }
-    for (const option of select.options) option.textContent = (state.keypoints[option.value] ? "✓ " : "") + option.value;
-    $("kp-list").innerHTML = Object.keys(state.keypoints)
-      .map(name => {
-        const at = state.keypoints[name].timeMs;
-        return `<li><span>${name}${at === undefined ? "" : ` @ ${at} ms`}</span><button class="x" data-remove-kp="${name}" title="Remove">×</button></li>`;
-      }).join("");
-  }
-
-  function renderContacts() {
-    $("contacts").innerHTML = state.contacts.map((contact, index) => {
-      const options = C.SHOT_LABELS.map(label => `<option${label === contact.label ? " selected" : ""}>${label}</option>`).join("");
-      const frame = C.frameIndexAt(contact.timeMs / 1000, fps());
-      return `<tr data-index="${index}" class="${index === selectedContact ? "selected" : ""}"><td>${index + 1}</td><td>${contact.timeMs}</td><td>${frame}</td>` +
-        `<td><select data-label="${index}">${options}</select></td><td><button data-remove="${index}" title="Delete">×</button></td></tr>`;
-    }).join("");
-  }
-
-  function renderRallies() {
-    $("rallies").innerHTML = state.rallies.map((rally, index) => {
-      const options = ["near", "far", "unknown"].map(w => `<option${w === rally.winner ? " selected" : ""}>${w}</option>`).join("");
-      return `<li><span>${rally.startMs}–${rally.endMs === null ? "open" : rally.endMs} ms</span><select data-winner="${index}">${options}</select></li>`;
-    }).join("");
-  }
-
-  function drawOverlay() {
-    // Size the canvas from the video's exact (fractional) box so click positions map to
-    // video pixels without a rounding offset.
-    const box = video.getBoundingClientRect();
-    overlay.width = Math.round(box.width);
-    overlay.height = Math.round(box.height);
-    overlay.style.width = `${box.width}px`;
-    overlay.style.height = `${box.height}px`;
-    ctx.clearRect(0, 0, overlay.width, overlay.height);
-    if (!video.videoWidth) return;
-    const scale = overlay.width / video.videoWidth;
-    ctx.font = "12px system-ui, sans-serif";
-    for (const [name, point] of Object.entries(state.keypoints)) {
-      const x = point.x * scale, y = point.y * scale;
-      ctx.strokeStyle = "#ffcc00"; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(x - 10, y); ctx.lineTo(x + 10, y); ctx.moveTo(x, y - 10); ctx.lineTo(x, y + 10); ctx.stroke();
-      ctx.fillStyle = "#ffcc00"; ctx.fillText(name, x + 9, y - 8);
-    }
-  }
-
-  function render() {
-    renderKeypoints(); renderContacts(); renderRallies(); drawOverlay();
-    $("warnings").innerHTML = C.buildGolden(state).warnings.map(w => `<div>⚠ ${w}</div>`).join("");
-    persist();
-  }
-
-  function updateReadout() {
-    $("frame-no").textContent = C.frameIndexAt(video.currentTime, fps());
-    $("time-ms").textContent = currentMs();
-    $("speed").textContent = video.playbackRate;
+  function seeked() {
+    return new Promise(resolve => {
+      if (!video.seeking) return resolve();
+      video.addEventListener("seeked", () => resolve(), { once: true });
+    });
   }
 
   function download(name, text) {
@@ -188,19 +271,652 @@
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
   }
 
-  // Playback is the only way a browser exposes frame timestamps. Chrome refuses to play
-  // video in a hidden tab, so a failed detection must leave nothing behind that could
-  // pause or rewind the clip later: the pending frame callback is always cancelled.
-  let detectHandle = null;
-  function stopDetect() {
+  // ---------- geometry between the canvas and video pixels ----------
+  function scale() {
+    return video.videoWidth ? overlay.width / video.videoWidth : 1;
+  }
+
+  function eventToVideo(event) {
+    const rect = overlay.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    return [((event.clientX - rect.left) * video.videoWidth) / rect.width, ((event.clientY - rect.top) * video.videoHeight) / rect.height];
+  }
+
+  function nearest(points, at) {
+    const limit = GRAB_PX / scale();
+    let best = null;
+    for (const point of points) {
+      const distance = Math.hypot(point.x - at[0], point.y - at[1]);
+      if (distance <= limit && (!best || distance < best.distance)) best = { ...point, distance };
+    }
+    return best;
+  }
+
+  // ---------- drawing ----------
+  function sizeOverlay() {
+    const box = video.getBoundingClientRect();
+    overlay.width = Math.round(box.width);
+    overlay.height = Math.round(box.height);
+    overlay.style.width = `${box.width}px`;
+    overlay.style.height = `${box.height}px`;
+  }
+
+  function dot(x, y, radius, fill, stroke) {
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+    if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke(); }
+  }
+
+  function label(text, x, y, color) {
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(0,0,0,.75)";
+    ctx.strokeText(text, x + 8, y - 8);
+    ctx.fillStyle = color;
+    ctx.fillText(text, x + 8, y - 8);
+  }
+
+  function drawCourt(s) {
+    const fit = C.courtHomography(state);
+    if (fit) {
+      ctx.strokeStyle = "rgba(183,250,89,.6)";
+      ctx.lineWidth = 1.5;
+      for (const [from, to] of C.COURT_LINES) {
+        const a = C.projectCourtPoint(fit, C.KEYPOINT_POSITIONS[from]);
+        const b = C.projectCourtPoint(fit, C.KEYPOINT_POSITIONS[to]);
+        if (!a || !b) continue;
+        ctx.beginPath();
+        ctx.moveTo(a[0] * s, a[1] * s);
+        ctx.lineTo(b[0] * s, b[1] * s);
+        ctx.stroke();
+      }
+    }
+    if (showProposals) {
+      ctx.setLineDash([3, 3]);
+      for (const [name, point] of Object.entries(proposals)) {
+        dot(point.x * s, point.y * s, 5, null, "#cbd5e1");
+        if (name === hoverName) label(name, point.x * s, point.y * s, "#cbd5e1");
+      }
+      ctx.setLineDash([]);
+    }
+    const selected = $("kp-select").value;
+    for (const [name, point] of Object.entries(state.keypoints)) {
+      const highlight = name === selected;
+      dot(point.x * s, point.y * s, highlight ? 7 : 5, null, highlight ? "#ffffff" : "#ffcc00");
+      if (highlight || name === hoverName) label(name, point.x * s, point.y * s, highlight ? "#ffffff" : "#ffcc00");
+    }
+  }
+
+  function jointColor(index) {
+    if (index <= 4) return "#e2e8f0";
+    return index % 2 ? "#60a5fa" : "#fb923c"; // left joints blue, right joints orange
+  }
+
+  function drawSkeleton(keypoints, s, faint) {
+    ctx.lineWidth = faint ? 1.5 : 3;
+    for (const [a, b] of C.SKELETON) {
+      const [ja, jb] = [keypoints[a], keypoints[b]];
+      if (!ja[2] || !jb[2]) continue;
+      ctx.strokeStyle = faint ? "rgba(226,232,240,.35)" : jointColor(b);
+      ctx.beginPath();
+      ctx.moveTo(ja[0] * s, ja[1] * s);
+      ctx.lineTo(jb[0] * s, jb[1] * s);
+      ctx.stroke();
+    }
+    keypoints.forEach(([x, y, v], i) => {
+      if (!v) return;
+      if (faint) dot(x * s, y * s, 3, "rgba(226,232,240,.45)");
+      else dot(x * s, y * s, 5, v === 2 ? jointColor(i) : null, v === 1 ? jointColor(i) : "#0b1116");
+    });
+  }
+
+  function drawBody(s) {
+    if (!pose) return;
+    pose.candidates.forEach((candidate, i) => { if (i !== pose.chosen) drawSkeleton(candidate.keypoints, s, true); });
+    if (pose.keypoints) drawSkeleton(pose.keypoints, s, false);
+  }
+
+  function drawOverlay() {
+    sizeOverlay();
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    if (!video.videoWidth) return;
+    const s = scale();
+    if (step === "court") drawCourt(s);
+    if (step === "body") drawBody(s);
+  }
+
+  function drawTimeline() {
+    const width = timeline.clientWidth;
+    const height = timeline.clientHeight;
+    timeline.width = width;
+    timeline.height = height;
+    tctx.clearRect(0, 0, width, height);
+    const total = durationMs();
+    if (!total) return;
+    const x = ms => (ms / total) * width;
+    for (const rally of state.rallies) {
+      const end = rally.endMs ?? currentMs();
+      tctx.fillStyle = "rgba(183,250,89,.13)";
+      tctx.fillRect(x(rally.startMs), 0, Math.max(2, x(end) - x(rally.startMs)), height);
+      tctx.fillStyle = "#b7fa59";
+      tctx.font = "11px system-ui, sans-serif";
+      tctx.fillText(rally.winner === "unknown" ? "?" : rally.winner, x(rally.startMs) + 4, 12);
+    }
+    state.hitSuggestions.forEach((suggestion, i) => {
+      if (suggestion.status !== "pending") return;
+      tctx.fillStyle = i === activeSuggestion ? "#ffffff" : "rgba(154,166,174,.7)";
+      tctx.fillRect(Math.round(x(suggestion.timeMs)), height - 20, 2, 16);
+    });
+    state.contacts.forEach((contact, i) => {
+      const cx = Math.round(x(contact.timeMs));
+      tctx.fillStyle = SHOT_COLORS[contact.label];
+      tctx.fillRect(cx - 1, 16, i === selectedContact ? 4 : 3, height - 22);
+      if (state.poses[String(contact.timeMs)]) {
+        tctx.beginPath();
+        tctx.arc(cx, height - 4, 2.5, 0, Math.PI * 2);
+        tctx.fill();
+      }
+    });
+    tctx.fillStyle = "#f87171";
+    tctx.fillRect(Math.round(x(video.currentTime * 1000)), 0, 2, height);
+  }
+
+  // ---------- panels ----------
+  function renderSteps() {
+    const contacts = state.contacts.length;
+    const posesDone = state.contacts.filter(c => state.poses[String(c.timeMs)]).length;
+    const progress = {
+      court: `${Object.keys(state.keypoints).length} points`,
+      hits: `${contacts} hits${state.hitSuggestions.some(s => s.status === "pending") ? ` · ${state.hitSuggestions.filter(s => s.status === "pending").length} to check` : ""}`,
+      rallies: `${state.rallies.length} rallies`,
+      body: state.selectedPlayer ? `${posesDone} / ${contacts} poses` : "choose a player",
+    };
+    const done = {
+      court: Object.keys(state.keypoints).length >= 6,
+      hits: contacts > 0 && !state.hitSuggestions.some(s => s.status === "pending"),
+      rallies: state.rallies.length > 0 && state.rallies.every(r => r.endMs !== null && r.winner !== "unknown"),
+      body: contacts > 0 && posesDone === contacts,
+    };
+    document.querySelectorAll("#steps button").forEach(button => {
+      const name = button.dataset.step;
+      button.classList.toggle("active", name === step);
+      button.classList.toggle("done", done[name] && name !== step);
+      $(`progress-${name}`).textContent = progress[name];
+    });
+    document.querySelectorAll("aside.panel section").forEach(section => section.classList.toggle("active", section.dataset.panel === step));
+    overlay.classList.toggle("placing", step === "court" || step === "body");
+  }
+
+  function renderCourt() {
+    const select = $("kp-select");
+    if (!select.options.length) for (const name of C.KEYPOINT_NAMES) select.add(new Option(name, name));
+    for (const option of select.options) option.textContent = `${state.keypoints[option.value] ? "✓ " : ""}${option.value}`;
+    $("propose").disabled = !C.courtHomography(state);
+    $("accept-proposals").disabled = !showProposals || !Object.keys(proposals).length;
+    $("accept-proposals").innerHTML = `Accept ${showProposals ? Object.keys(proposals).length : ""} proposals <kbd>A</kbd>`;
+    $("kp-list").innerHTML = Object.keys(state.keypoints)
+      .map(name => `<li><span class="grow">${name}</span><button class="x" data-remove-kp="${name}" title="Remove">&times;</button></li>`)
+      .join("");
+  }
+
+  function renderHits() {
+    const pending = state.hitSuggestions.filter(s => s.status === "pending").length;
+    $("hit-counts").textContent = state.hitSuggestions.length ? `${pending} left to check` : "";
+    $("contacts").innerHTML = state.contacts.map((contact, index) => {
+      const options = C.SHOT_LABELS.map(l => `<option${l === contact.label ? " selected" : ""}>${l}</option>`).join("");
+      return `<tr data-index="${index}" class="${index === selectedContact ? "selected" : ""}">` +
+        `<td><i style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${SHOT_COLORS[contact.label]}"></i></td>` +
+        `<td class="grow">${(contact.timeMs / 1000).toFixed(2)} s</td>` +
+        `<td><select data-label="${index}">${options}</select></td>` +
+        `<td><button class="x" data-remove="${index}" title="Delete">&times;</button></td></tr>`;
+    }).join("");
+  }
+
+  function renderRallies() {
+    $("rallies").innerHTML = state.rallies.map((rally, index) => {
+      const end = rally.endMs === null ? "open" : `${(rally.endMs / 1000).toFixed(1)} s`;
+      const winner = w => `<button class="btn small ${rally.winner === w ? "primary" : "ghost"}" data-winner="${index}" data-value="${w}">${w === "unknown" ? "?" : w}</button>`;
+      return `<li><span class="grow" data-seek="${rally.startMs}" style="cursor:pointer">Rally ${index + 1} · ${(rally.startMs / 1000).toFixed(1)}–${end}</span>` +
+        `${winner("near")}${winner("far")}${winner("unknown")}<button class="x" data-remove-rally="${index}" title="Delete">&times;</button></li>`;
+    }).join("");
+  }
+
+  function renderBody() {
+    document.querySelectorAll("#player-pick button").forEach(b => b.classList.toggle("on", b.dataset.player === state.selectedPlayer));
+    $("pose-list").innerHTML = state.contacts.map(contact => {
+      const done = Boolean(state.poses[String(contact.timeMs)]);
+      return `<li data-pose="${contact.timeMs}" style="cursor:pointer"><span class="grow">${(contact.timeMs / 1000).toFixed(2)} s · ${contact.label}</span>` +
+        `<span class="chip ${done ? "ok" : ""}">${done ? "done" : "to do"}</span></li>`;
+    }).join("");
+    if (pose && pose.manualNext !== undefined && pose.manualNext < C.COCO_JOINTS.length) {
+      $("pose-status").textContent = `Click: ${C.COCO_JOINTS[pose.manualNext].replace("_", " ")} (H to skip)`;
+    }
+  }
+
+  function render() {
+    renderSteps();
+    renderCourt();
+    renderHits();
+    renderRallies();
+    renderBody();
+    drawOverlay();
+    drawTimeline();
+    $("warnings").innerHTML = C.buildGolden(state).warnings.map(w => `<li>${w}</li>`).join("");
+    persist();
+  }
+
+  function updateReadout() {
+    $("readout").textContent = `frame ${C.frameIndexAt(video.currentTime, fps())} · ${currentMs()} ms · ${video.playbackRate}×`;
+    $("play").textContent = video.paused ? "Play" : "Pause";
+    drawTimeline();
+  }
+
+  // ---------- court ----------
+  function nextPointToClick() {
+    return CORNERS.find(name => !state.keypoints[name]) ?? C.KEYPOINT_NAMES.find(name => !state.keypoints[name]);
+  }
+
+  function refreshProposals() {
+    if (showProposals) proposals = C.proposeCourtPoints(state);
+  }
+
+  function propose() {
+    proposals = C.proposeCourtPoints(state);
+    showProposals = true;
+    say(Object.keys(proposals).length ? `Proposed ${Object.keys(proposals).length} points. Drag any that are off, then Accept.` : "Click at least four points that are not all on one line first.", !Object.keys(proposals).length);
+    render();
+  }
+
+  function acceptProposals() {
+    const added = C.acceptCourtProposals(state, proposals);
+    proposals = {};
+    showProposals = false;
+    say(`Added ${added} court points.`);
+    render();
+  }
+
+  // ---------- hits ----------
+  async function findHits() {
+    if (!videoFile) { say("Open a video first.", true); return; }
+    say("Reading the audio track…");
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      const audioContext = new AudioCtx();
+      const audio = await audioContext.decodeAudioData(await videoFile.arrayBuffer());
+      const mono = new Float32Array(audio.length);
+      for (let channel = 0; channel < audio.numberOfChannels; channel += 1) {
+        const data = audio.getChannelData(channel);
+        for (let i = 0; i < data.length; i += 1) mono[i] += data[i] / audio.numberOfChannels;
+      }
+      audioContext.close();
+      const found = C.setHitSuggestions(state, C.detectOnsets(mono, audio.sampleRate));
+      activeSuggestion = -1;
+      say(found ? `Found ${found} likely hits. Press N to go to the first.` : "No hits found in the audio. Mark hits by hand with C.", !found);
+    } catch (error) {
+      say(`Could not read audio from this video (${error.message}). Mark hits by hand with C.`, true);
+    }
+    render();
+  }
+
+  function nextHit() {
+    let index = C.nextPendingSuggestion(state, activeSuggestion);
+    if (index < 0) index = C.nextPendingSuggestion(state, -1);
+    if (index < 0) { say(state.hitSuggestions.length ? "All suggested hits are checked." : "Press Find hits from audio first."); activeSuggestion = -1; render(); return; }
+    activeSuggestion = index;
+    selectedContact = -1;
+    seekToMs(C.suggestionSeekMs(state.hitSuggestions[index]));
+    say(`Hit ${index + 1} of ${state.hitSuggestions.length}: step to the frame where racket meets shuttle, then pick the shot.`);
+    render();
+  }
+
+  function labelShot(shot) {
+    const suggestion = state.hitSuggestions[activeSuggestion];
+    if (suggestion && suggestion.status === "pending") {
+      selectedContact = C.acceptSuggestion(state, activeSuggestion, currentMs(), shot);
+      render();
+      nextHit();
+      return;
+    }
+    const at = C.nearestContactIndex(state, currentMs(), 20);
+    if (at >= 0) {
+      C.setLabel(state, at, shot);
+      selectedContact = at;
+    } else {
+      selectedContact = C.addContact(state, currentMs(), shot);
+    }
+    render();
+  }
+
+  function skipHit() {
+    if (activeSuggestion >= 0 && state.hitSuggestions[activeSuggestion]?.status === "pending") C.dismissSuggestion(state, activeSuggestion);
+    nextHit();
+  }
+
+  // ---------- rallies ----------
+  function toggleRally() {
+    if (state.rallies.some(rally => rally.endMs === null)) C.endRally(state, currentMs());
+    else C.startRally(state, currentMs());
+    render();
+  }
+
+  function rallyAtPlayhead() {
+    const now = currentMs();
+    const index = state.rallies.findIndex(rally => rally.startMs <= now && now <= (rally.endMs ?? Infinity));
+    return index >= 0 ? index : state.rallies.length - 1;
+  }
+
+  // ---------- body ----------
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = src;
+      script.crossOrigin = "anonymous";
+      script.onload = resolve;
+      script.onerror = () => reject(new Error(`could not load ${src.split("/npm/")[1] ?? src}`));
+      document.head.appendChild(script);
+    });
+  }
+
+  function poseDetector() {
+    if (detector) return Promise.resolve(detector);
+    if (!detectorLoading) {
+      detectorLoading = (async () => {
+        $("pose-status").textContent = "Loading the pose model (first time only)…";
+        for (const src of POSE_SCRIPTS) await loadScript(src);
+        await window.tf.setBackend("webgl");
+        await window.tf.ready();
+        const model = await window.poseDetection.createDetector(window.poseDetection.SupportedModels.MoveNet, {
+          modelType: window.poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING,
+          enableTracking: false,
+        });
+        // The first inference after loading returns nothing while WebGL compiles its shaders,
+        // so run one throwaway detection before the real frame.
+        const warmup = document.createElement("canvas");
+        warmup.width = 256;
+        warmup.height = 256;
+        await model.estimatePoses(warmup);
+        detector = model;
+        $("pose-status").textContent = "Pose model ready.";
+        return detector;
+      })().catch(error => {
+        detectorLoading = null;
+        throw error;
+      });
+    }
+    return detectorLoading;
+  }
+
+  async function detectPose(timeMs) {
+    const existing = state.poses[String(timeMs)];
+    if (existing) {
+      pose = { timeMs, candidates: [], chosen: -1, keypoints: existing.keypoints.map(joint => [...joint]) };
+      $("pose-status").textContent = "Editing the saved pose.";
+      render();
+      return;
+    }
+    pose = { timeMs, candidates: [], chosen: -1, keypoints: null };
+    render();
+    try {
+      const model = await poseDetector();
+      const frame = document.createElement("canvas");
+      frame.width = video.videoWidth;
+      frame.height = video.videoHeight;
+      frame.getContext("2d").drawImage(video, 0, 0);
+      const candidates = C.candidatesFromDetections(await model.estimatePoses(frame, { maxPoses: 6 }));
+      const chosen = C.pickPlayer(candidates, state.selectedPlayer, C.previousPose(state, timeMs));
+      pose = { timeMs, candidates, chosen, keypoints: chosen >= 0 ? candidates[chosen].keypoints.map(joint => [...joint]) : null };
+      $("pose-status").textContent = chosen >= 0
+        ? `Found ${candidates.length} ${candidates.length === 1 ? "person" : "people"}. Click a faint skeleton to switch player.`
+        : "Nobody detected here. Use Place joints by hand.";
+    } catch (error) {
+      $("pose-status").textContent = `Pose model unavailable (${error.message}). Use Place joints by hand.`;
+    }
+    render();
+  }
+
+  async function nextPose() {
+    if (!state.selectedPlayer) { say("Choose the near or far player first.", true); return; }
+    const targets = C.poseTargets(state);
+    if (!targets.length) { say(state.contacts.length ? "Every hit has a pose." : "Label hits first (step 2)."); return; }
+    const time = targets.find(t => t > (pose?.timeMs ?? -1)) ?? targets[0];
+    seekToMs(time);
+    await seeked();
+    await detectPose(time);
+  }
+
+  function confirmPose() {
+    if (!pose || !pose.keypoints) { say("Nothing to confirm yet.", true); return; }
+    if (!state.selectedPlayer) { say("Choose the near or far player first.", true); return; }
+    C.setPose(state, pose.timeMs, state.selectedPlayer, pose.keypoints);
+    say(`Pose saved for the hit at ${(pose.timeMs / 1000).toFixed(2)} s.`);
+    pose = null;
+    render();
+    nextPose();
+  }
+
+  function manualPose() {
+    const time = C.nearestContactIndex(state, currentMs(), 20) >= 0 ? state.contacts[C.nearestContactIndex(state, currentMs(), 20)].timeMs : null;
+    if (time === null) { say("Go to a hit frame first (B).", true); return; }
+    pose = { timeMs: time, candidates: [], chosen: -1, keypoints: C.COCO_JOINTS.map(() => [0, 0, 0]), manualNext: 0 };
+    render();
+  }
+
+  function advanceManual() {
+    if (!pose || pose.manualNext === undefined) return;
+    pose.manualNext += 1;
+    if (pose.manualNext >= C.COCO_JOINTS.length) {
+      delete pose.manualNext;
+      $("pose-status").textContent = "All joints placed. Drag to adjust, then Enter.";
+    }
+    render();
+  }
+
+  // ---------- overlay mouse ----------
+  function grabbables() {
+    if (step === "court") {
+      const points = Object.entries(state.keypoints).map(([name, p]) => ({ kind: "keypoint", name, x: p.x, y: p.y }));
+      if (showProposals) for (const [name, p] of Object.entries(proposals)) points.push({ kind: "proposal", name, x: p.x, y: p.y });
+      return points;
+    }
+    if (step === "body" && pose && pose.keypoints) {
+      return pose.keypoints.map(([x, y, v], index) => ({ kind: "joint", index, x, y, v })).filter(j => j.v > 0);
+    }
+    return [];
+  }
+
+  function updateLoupe(event, at) {
+    if (!(step === "court" || step === "body") || !video.videoWidth || !at) { loupe.style.display = "none"; return; }
+    const half = loupe.width / (2 * LOUPE_ZOOM * scale());
+    loupeCtx.imageSmoothingEnabled = false;
+    loupeCtx.drawImage(video, at[0] - half, at[1] - half, half * 2, half * 2, 0, 0, loupe.width, loupe.height);
+    loupeCtx.strokeStyle = "#b7fa59";
+    loupeCtx.lineWidth = 1;
+    loupeCtx.beginPath();
+    loupeCtx.moveTo(loupe.width / 2, 0); loupeCtx.lineTo(loupe.width / 2, loupe.height);
+    loupeCtx.moveTo(0, loupe.height / 2); loupeCtx.lineTo(loupe.width, loupe.height / 2);
+    loupeCtx.stroke();
+    const rect = $("wrap").getBoundingClientRect();
+    let left = event.clientX - rect.left + 24;
+    let top = event.clientY - rect.top - 204;
+    if (left + 180 > rect.width) left = event.clientX - rect.left - 204;
+    if (top < 0) top = event.clientY - rect.top + 24;
+    loupe.style.left = `${left}px`;
+    loupe.style.top = `${top}px`;
+    loupe.style.display = "block";
+  }
+
+  overlay.addEventListener("mousedown", event => {
+    if (event.button !== 0 || !video.videoWidth) return;
+    const at = eventToVideo(event);
+    if (!at) { say("The video has no visible size yet — make the window larger and try again.", true); return; }
+    video.pause();
+    const hit = nearest(grabbables(), at);
+    if (hit) { drag = hit; return; }
+    try {
+      if (step === "court") {
+        const name = $("kp-select").value;
+        C.setKeypoint(state, name, at[0], at[1], currentMs());
+        refreshProposals();
+        const next = nextPointToClick();
+        if (next) $("kp-select").value = next;
+        render();
+      } else if (step === "body" && pose) {
+        if (pose.manualNext !== undefined) {
+          pose.keypoints[pose.manualNext] = [at[0], at[1], 2];
+          advanceManual();
+          return;
+        }
+        // Clicking near another person's skeleton makes them the selected player.
+        const other = pose.candidates.findIndex((candidate, i) => i !== pose.chosen &&
+          nearest(candidate.keypoints.map(([x, y]) => ({ x, y })), at));
+        if (other >= 0) {
+          pose.chosen = other;
+          pose.keypoints = pose.candidates[other].keypoints.map(joint => [...joint]);
+          render();
+        }
+      }
+    } catch (error) {
+      say(error.message, true);
+    }
+  });
+
+  overlay.addEventListener("mousemove", event => {
+    const at = eventToVideo(event);
+    updateLoupe(event, at);
+    if (step === "court" && at && !drag) {
+      const over = nearest(grabbables(), at);
+      if ((over?.name ?? null) !== hoverName) {
+        hoverName = over?.name ?? null;
+        drawOverlay();
+      }
+    }
+    if (!drag || !at) return;
+    if (drag.kind === "keypoint") {
+      C.setKeypoint(state, drag.name, at[0], at[1], state.keypoints[drag.name].timeMs);
+      refreshProposals();
+    } else if (drag.kind === "proposal") {
+      proposals[drag.name] = { x: at[0], y: at[1] };
+    } else if (drag.kind === "joint") {
+      pose.keypoints[drag.index] = [at[0], at[1], pose.keypoints[drag.index][2] || 2];
+    }
+    drawOverlay();
+  });
+
+  window.addEventListener("mouseup", () => {
+    if (!drag) return;
+    if (drag.kind === "proposal") {
+      const point = proposals[drag.name];
+      const clicked = Object.values(state.keypoints).find(p => p.timeMs !== undefined);
+      C.setKeypoint(state, drag.name, point.x, point.y, clicked ? clicked.timeMs : currentMs());
+      delete proposals[drag.name];
+    }
+    drag = null;
+    render();
+  });
+
+  overlay.addEventListener("mouseleave", () => { loupe.style.display = "none"; });
+
+  overlay.addEventListener("contextmenu", event => {
+    if (step !== "body" || !pose || !pose.keypoints) return;
+    event.preventDefault();
+    const at = eventToVideo(event);
+    const joint = at && nearest(grabbables(), at);
+    if (!joint) return;
+    pose.keypoints[joint.index][2] = pose.keypoints[joint.index][2] === 2 ? 1 : 2;
+    drawOverlay();
+  });
+
+  // ---------- controls ----------
+  document.querySelectorAll("#steps button").forEach(button => button.addEventListener("click", () => {
+    step = button.dataset.step;
+    loupe.style.display = "none";
+    render();
+  }));
+  document.querySelectorAll("[data-frames]").forEach(button => button.addEventListener("click", () => stepFrames(Number(button.dataset.frames))));
+  $("play").addEventListener("click", () => (video.paused ? video.play() : video.pause()));
+  $("speed").addEventListener("change", event => { video.playbackRate = Number(event.target.value); updateReadout(); });
+
+  $("shot-buttons").innerHTML = C.SHOT_LABELS
+    .map(shot => `<button data-shot="${shot}"><i style="background:${SHOT_COLORS[shot]}"></i>${shot}<kbd>${SHOT_KEY(shot)}</kbd></button>`)
+    .join("");
+  $("shot-buttons").addEventListener("click", event => {
+    const button = event.target.closest("[data-shot]");
+    if (button) labelShot(button.dataset.shot);
+  });
+
+  $("propose").addEventListener("click", propose);
+  $("accept-proposals").addEventListener("click", acceptProposals);
+  $("kp-select").addEventListener("change", () => drawOverlay());
+  $("kp-clear").addEventListener("click", () => { C.removeKeypoint(state, $("kp-select").value); refreshProposals(); render(); });
+  $("kp-list").addEventListener("click", event => {
+    const name = event.target.dataset.removeKp;
+    if (name) { C.removeKeypoint(state, name); refreshProposals(); render(); }
+  });
+
+  $("find-hits").addEventListener("click", findHits);
+  $("next-hit").addEventListener("click", nextHit);
+  $("skip-hit").addEventListener("click", skipHit);
+  $("mark-hit").addEventListener("click", () => { video.pause(); selectedContact = C.addContact(state, currentMs()); render(); });
+  $("contacts").addEventListener("click", event => {
+    const remove = event.target.dataset.remove;
+    if (remove !== undefined) { C.removeContact(state, Number(remove)); selectedContact = -1; render(); return; }
+    if (event.target.dataset.label !== undefined) return;
+    const row = event.target.closest("tr[data-index]");
+    if (row) { selectedContact = Number(row.dataset.index); activeSuggestion = -1; seekToMs(state.contacts[selectedContact].timeMs); render(); }
+  });
+  $("contacts").addEventListener("change", event => {
+    const index = event.target.dataset.label;
+    if (index !== undefined) { C.setLabel(state, Number(index), event.target.value); render(); }
+  });
+
+  $("suggest-rallies").addEventListener("click", () => {
+    const added = C.applyRallySuggestions(state);
+    say(added ? `Suggested ${added} rallies. Check each and choose the winner.` : (state.contacts.length ? "No new rallies to suggest." : "Label hits first (step 2)."), !added && !state.contacts.length);
+    render();
+  });
+  $("rally-here").addEventListener("click", () => { try { toggleRally(); } catch (error) { say(error.message, true); } });
+  $("rallies").addEventListener("click", event => {
+    const target = event.target;
+    if (target.dataset.winner !== undefined) { C.setRallyWinner(state, Number(target.dataset.winner), target.dataset.value); render(); }
+    else if (target.dataset.removeRally !== undefined) { state.rallies.splice(Number(target.dataset.removeRally), 1); render(); }
+    else if (target.dataset.seek !== undefined) seekToMs(Number(target.dataset.seek));
+  });
+
+  $("player-pick").addEventListener("click", event => {
+    const player = event.target.closest("[data-player]")?.dataset.player;
+    if (player) { C.setSelectedPlayer(state, player); render(); }
+  });
+  $("next-pose").addEventListener("click", nextPose);
+  $("confirm-pose").addEventListener("click", confirmPose);
+  $("manual-pose").addEventListener("click", manualPose);
+  $("pose-list").addEventListener("click", async event => {
+    const time = event.target.closest("[data-pose]")?.dataset.pose;
+    if (time === undefined) return;
+    seekToMs(Number(time));
+    await seeked();
+    await detectPose(Number(time));
+  });
+
+  timeline.addEventListener("click", event => {
+    const total = durationMs();
+    if (!total) return;
+    const rect = timeline.getBoundingClientRect();
+    seekToMs(((event.clientX - rect.left) / rect.width) * total);
+  });
+
+  // ---------- files ----------
+  function stopDetectFps() {
     if (detectHandle !== null && video.cancelVideoFrameCallback) video.cancelVideoFrameCallback(detectHandle);
     detectHandle = null;
   }
 
+  // Playback is the only way a browser exposes frame timestamps, and browsers refuse to play
+  // video in a hidden tab, so a failed detection must leave no pending frame callback behind.
   function detectFps() {
     if (!("requestVideoFrameCallback" in video)) { say("This browser cannot detect FPS — enter it manually.", true); return; }
     if (!video.videoWidth) { say("Open a video first.", true); return; }
-    stopDetect();
+    stopDetectFps();
     const stamps = [];
     const onFrame = (_now, meta) => {
       stamps.push(meta.mediaTime);
@@ -216,23 +932,37 @@
     detectHandle = video.requestVideoFrameCallback(onFrame);
     video.currentTime = 0;
     video.play().catch(() => {
-      stopDetect();
-      say("Could not play the clip to detect FPS (keep this tab in front and press Detect FPS) — or enter it manually.", true);
+      stopDetectFps();
+      say("Could not play the clip to detect FPS (keep this tab in front and press Detect) — or enter it manually.", true);
     });
   }
 
   $("video-file").addEventListener("change", event => {
     const file = event.target.files[0];
     if (!file) return;
+    videoFile = file;
     video.src = URL.createObjectURL(file);
     $("clip-id").value = file.name.replace(/\.[^.]+$/, "");
+    $("clip-name").textContent = file.name;
+    $("empty").style.display = "none";
     video.addEventListener("loadedmetadata", () => {
       state = C.emptyState($("clip-id").value, fps(), [video.videoWidth, video.videoHeight]);
       try {
         const saved = JSON.parse(localStorage.getItem(storageKey()) || "null");
-        if (saved && saved.clipId === state.clipId) { state = saved; state.imageSize = [video.videoWidth, video.videoHeight]; $("fps").value = state.fps; say(`Restored autosaved labels for ${state.clipId}.`); }
+        if (saved && saved.clipId === state.clipId) {
+          state = C.normalizeState(saved);
+          state.imageSize = [video.videoWidth, video.videoHeight];
+          $("fps").value = state.fps;
+          say(`Restored your unsaved work on ${state.clipId}.`);
+        }
       } catch { /* ignore a corrupt autosave */ }
       selectedContact = -1;
+      activeSuggestion = -1;
+      proposals = {};
+      showProposals = false;
+      pose = null;
+      const next = nextPointToClick();
+      if (next) $("kp-select").value = next;
       render();
       if (!state.contacts.length && !Object.keys(state.keypoints).length) detectFps();
     }, { once: true });
@@ -248,7 +978,8 @@
       $("clip-id").value = state.clipId;
       $("fps").value = state.fps;
       selectedContact = -1;
-      say(`Loaded ${state.contacts.length} contacts for ${state.clipId}.`);
+      activeSuggestion = -1;
+      say(`Loaded ${state.contacts.length} hits for ${state.clipId}.`);
       render();
     } catch (error) { say(`Could not load labels: ${error.message}`, true); }
     event.target.value = "";
@@ -259,7 +990,7 @@
     if (!file) return;
     try {
       const added = C.importWorkerResult(state, JSON.parse(await file.text()));
-      say(`Imported ${added} contact(s) from the worker result — review each one before saving.`);
+      say(`Imported ${added} hit(s) from the worker result — check each one before saving.`);
       render();
     } catch (error) { say(`Could not read the worker result: ${error.message}`, true); }
     event.target.value = "";
@@ -271,81 +1002,56 @@
     persist();
     const { doc, warnings } = C.buildGolden(state);
     download(`${clipId}.json`, JSON.stringify(doc, null, 2));
-    say(warnings.length ? `Saved with ${warnings.length} warning(s) — see below.` : `Saved ${clipId}.json`);
+    say(warnings.length ? `Saved ${clipId}.json with ${warnings.length} thing(s) still to finish — see below.` : `Saved ${clipId}.json`);
   });
 
   $("clip-id").addEventListener("change", persist);
   $("detect-fps").addEventListener("click", detectFps);
   $("fps").addEventListener("change", () => { state.fps = fps(); render(); });
-  overlay.addEventListener("click", event => {
-    if (!video.videoWidth) return;
-    const rect = overlay.getBoundingClientRect();
-    if (!rect.width || !rect.height) { say("The video has no visible size yet — make the window larger and try again.", true); return; }
-    try {
-      C.setKeypoint(state, $("kp-select").value, ((event.clientX - rect.left) * video.videoWidth) / rect.width, ((event.clientY - rect.top) * video.videoHeight) / rect.height, currentMs());
-    } catch (error) { say(error.message, true); return; }
-    const next = C.KEYPOINT_NAMES.find(candidate => !state.keypoints[candidate]);
-    if (next) $("kp-select").value = next;
-    render();
-  });
 
-  $("kp-list").addEventListener("click", event => {
-    const name = event.target.dataset.removeKp;
-    if (name) { C.removeKeypoint(state, name); render(); }
-  });
-  $("contacts").addEventListener("click", event => {
-    const remove = event.target.dataset.remove;
-    if (remove !== undefined) { C.removeContact(state, Number(remove)); selectedContact = -1; render(); return; }
-    if (event.target.dataset.label !== undefined) return;
-    const row = event.target.closest("tr[data-index]");
-    if (row) { selectedContact = Number(row.dataset.index); seekToMs(state.contacts[selectedContact].timeMs); render(); }
-  });
-  $("contacts").addEventListener("change", event => {
-    const index = event.target.dataset.label;
-    if (index !== undefined) { C.setLabel(state, Number(index), event.target.value); render(); }
-  });
-  $("rallies").addEventListener("change", event => {
-    const index = event.target.dataset.winner;
-    if (index !== undefined) { state.rallies[Number(index)].winner = event.target.value; render(); }
-  });
-
+  // ---------- keyboard ----------
   document.addEventListener("keydown", event => {
     if (event.target.closest("input, select, textarea") || event.ctrlKey || event.metaKey || event.altKey) return;
     const key = event.key;
+    const lower = key.toLowerCase();
     let handled = true;
     try {
       if (key === " ") { if (video.paused) video.play(); else video.pause(); }
-      else if (key === ",") step(-1);
-      else if (key === ".") step(1);
-      else if (key === "<") step(-10);
-      else if (key === ">") step(10);
-      else if (key === "[") video.playbackRate = Math.max(0.1, video.playbackRate / 2);
-      else if (key === "]") video.playbackRate = Math.min(2, video.playbackRate * 2);
-      else if (key === "c" || key === "C") { video.pause(); selectedContact = C.addContact(state, currentMs()); render(); }
-      else if (/^[0-9]$/.test(key)) {
-        if (selectedContact < 0) throw new Error("Select or mark a contact first (C).");
-        C.setLabel(state, selectedContact, key === "0" ? "other" : C.SHOT_LABELS[Number(key) - 1]); render();
-      }
-      else if (key === "r" || key === "R") {
-        if (state.rallies.some(rally => rally.endMs === null)) C.endRally(state, currentMs()); else C.startRally(state, currentMs());
+      else if (key === ",") stepFrames(-1);
+      else if (key === ".") stepFrames(1);
+      else if (key === "<") stepFrames(-10);
+      else if (key === ">") stepFrames(10);
+      else if (key === "[") { video.playbackRate = Math.max(0.125, video.playbackRate / 2); }
+      else if (key === "]") { video.playbackRate = Math.min(2, video.playbackRate * 2); }
+      else if (lower === "r") toggleRally();
+      else if (step === "court" && lower === "p") propose();
+      else if (step === "court" && lower === "a") acceptProposals();
+      else if (step === "hits" && lower === "n") nextHit();
+      else if (step === "hits" && lower === "x") skipHit();
+      else if (step === "hits" && lower === "c") { video.pause(); selectedContact = C.addContact(state, currentMs()); render(); }
+      else if (step === "hits" && /^[0-9]$/.test(key)) labelShot(key === "0" ? "other" : C.SHOT_LABELS[Number(key) - 1]);
+      else if (step === "hits" && (key === "Delete" || key === "Backspace") && selectedContact >= 0) { C.removeContact(state, selectedContact); selectedContact = -1; render(); }
+      else if (step === "rallies" && ["n", "f", "u"].includes(lower)) {
+        const index = rallyAtPlayhead();
+        if (index < 0) throw new Error("No rally yet: press Suggest rallies or R.");
+        C.setRallyWinner(state, index, { n: "near", f: "far", u: "unknown" }[lower]);
         render();
       }
-      else if (key === "n" || key === "N") { C.setWinner(state, "near"); render(); }
-      else if (key === "f" || key === "F") { C.setWinner(state, "far"); render(); }
-      else if (key === "u" || key === "U") { C.setWinner(state, "unknown"); render(); }
-      else if (key === "Delete" || key === "Backspace") {
-        if (selectedContact >= 0) { C.removeContact(state, selectedContact); selectedContact = -1; render(); }
-      }
+      else if (step === "body" && lower === "b") nextPose();
+      else if (step === "body" && key === "Enter") confirmPose();
+      else if (step === "body" && lower === "h" && pose && pose.manualNext !== undefined) advanceManual();
       else handled = false;
     } catch (error) { say(error.message, true); }
     if (handled) event.preventDefault();
     updateReadout();
   });
 
-  video.addEventListener("seeked", updateReadout);
+  video.addEventListener("seeked", () => { updateReadout(); drawOverlay(); });
+  video.addEventListener("play", updateReadout);
+  video.addEventListener("pause", updateReadout);
   video.addEventListener("loadeddata", () => { drawOverlay(); updateReadout(); });
-  window.addEventListener("resize", drawOverlay);
-  setInterval(updateReadout, 100);
+  window.addEventListener("resize", () => { drawOverlay(); drawTimeline(); });
+  setInterval(() => { if (!video.paused) updateReadout(); }, 100);
   render();
 })();
 </script>

@@ -22,23 +22,33 @@ results are small and belong in the repo or the team drive.
 ## The labeller
 
 `tools/labeller/index.html` is a zero-install browser tool that writes this schema
-directly — open the file in Chrome or Edge (no server needed). Open the clip, check
-the detected FPS against the phone's setting (keep the tab in front while it
-detects; press **Detect FPS** to retry, or type the value), then:
+directly — open the file in Chrome or Edge (no server needed; the Body step loads
+its pose model from the internet the first time). Open the clip and check the
+detected FPS against the phone's setting (keep the tab in front while it detects;
+press **Detect** to retry, or type the value). Then work through the four steps
+across the top; each shows what to do next and how far you are.
 
-- step with `,` and `.` (one frame) or `<` and `>` (ten); play at 0.25× with `[`;
-- press `C` at each contact, then `1`–`9`/`0` for the shot type
-  (serve clear drop net lift drive push smash block other);
-- press `R` at a rally's start and again at its end, then `N`/`F`/`U` for the
-  winner (near/far/unknown, as seen from the camera);
-- pick a court-point name and click it on a clear, paused frame;
-- **Save labels** downloads `<clipId>.json`. Work autosaves in the browser, and
-  **Load labels** resumes a saved file.
+1. **Court** — pause on a clear frame and click the four corners of the singles
+   court (the name to click is pre-selected). **Propose the rest** draws every
+   other line where the geometry says it must be; drag any point that is off and
+   **Accept**. A magnifier follows the cursor for precise clicks.
+2. **Hits** — **Find hits from audio** lists every racket "thwack". `N` jumps just
+   before the next one (sound reaches the phone ~30 ms after the hit); step with
+   `,` `.` to the frame where racket meets shuttle and click the shot (or press
+   `1`–`9`, `0`). `X` skips a sound that isn't a hit, `C` marks a hit the audio
+   missed.
+3. **Rallies** — **Suggest rallies** groups hits by the pauses between them; check
+   each one and choose who won (near / far / ?, as seen from the camera). `R`
+   starts or ends a rally by hand.
+4. **Body** — choose your player once. `B` goes to the next hit frame and fills in
+   that player's skeleton; drag any joint that is off, right-click a joint you
+   can't see (hidden), `Enter` to confirm. If nobody is detected, **Place joints
+   by hand** asks for each joint in turn (`H` skips one).
 
-To pre-label, run the clip through the worker first and use **Load worker
-result**: its detected contacts appear as `other`/verified-shot labels for you to
-correct, which is much faster than starting from nothing. Shuttle landing points
-are left `null` in this version.
+**Save labels** downloads `<clipId>.json`; work also autosaves in the browser, and
+**Load labels** resumes a saved file. **Load worker result** imports the worker's
+detected hits as a starting point. Shuttle landing points are left `null` in this
+version.
 
 ## Labelling a clip
 
@@ -59,6 +69,11 @@ are left `null` in this version.
    baseline) or `null`.
 4. **Rallies** — start/end time and the winner as seen from the camera
    (`near`, `far`, or `unknown`).
+5. **Body poses** — `selectedPlayer` (`near` or `far`) and, for each hit, that
+   player's 17 COCO joints (nose, eyes, ears, shoulders, elbows, wrists, hips,
+   knees, ankles) as `[x, y, visibility]` in pixels: visibility `2` visible, `1`
+   hidden but placed, `0` not labelled. Stored as
+   `"poses": [{ "timeMs": 1200, "player": "near", "keypoints": [[x, y, v], …17] }]`.
 
 ## Format
 
