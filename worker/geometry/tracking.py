@@ -16,14 +16,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Iterable
+from typing import Iterable, Iterator
 
 import cv2
 import numpy as np
 from scipy.optimize import least_squares
 
 from geometry.camera import Camera
-from geometry.court_model import court_lines, net_tape_lines
+from geometry.court_model import LINE_WIDTH_M, NET_TAPE_WIDTH_M, court_lines, net_tape_lines
 from geometry.lines import find_line_offsets, line_response, sample_lines
 
 SAMPLE_SPACING_M = 0.25
@@ -31,6 +31,7 @@ REFERENCE_WIDTH_PX = 1280.0  # search radii below are for a frame this wide and 
 TRACK_RADII_PX = (10.0, 5.0, 3.0)
 ACQUIRE_RADII_PX = (16.0, 8.0, 4.0, 3.0)
 ACQUIRE_SHIFT_FRACTION = 0.06  # how far (of the frame width) the court may have moved while lost
+SHIFT_CANDIDATES = 3
 MIN_RADIUS_PX = 2.5
 TANGENT_STEP_M = 0.05
 INLIER_PX = 2.0
@@ -84,6 +85,13 @@ def _model() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 @lru_cache(maxsize=1)
 def _lines() -> list[tuple[str, np.ndarray, np.ndarray]]:
     return court_lines() + net_tape_lines()
+
+
+@lru_cache(maxsize=1)
+def _widths() -> np.ndarray:
+    """Painted width of the line under each model sample, in metres."""
+    points, _, _ = _model()
+    return np.where(points[:, 2] > 0, NET_TAPE_WIDTH_M, LINE_WIDTH_M)
 
 
 @lru_cache(maxsize=1)
@@ -157,7 +165,10 @@ def fit_frame(
     for radius in _radii(radii_px, width):
         pixels, normals, visible = _project(current, (width, height))
         candidates = np.flatnonzero(visible)
-        offsets, _ = find_line_offsets(response, pixels[candidates], normals[candidates], radius)
+        # The search covers the position error plus half the line: near the phone a line is wide.
+        depth = points[candidates] @ current.rotation[2] + float(np.asarray(current.tvec, dtype=np.float64).reshape(3)[2])
+        search = radius + 0.5 * _widths()[candidates] * current.focal_px / depth + 1.0
+        offsets, _ = find_line_offsets(response, pixels[candidates], normals[candidates], search)
         found = np.isfinite(offsets)
         if found.sum() < MIN_INLIERS:
             return None
@@ -188,42 +199,56 @@ def _turn_to_shift(camera: Camera, shift: np.ndarray) -> Camera:
     return Camera(camera.focal_px, camera.cx, camera.cy, cv2.Rodrigues(rotation)[0].ravel(), tvec, camera.k1)
 
 
-def _best_shift(response: np.ndarray, camera: Camera, max_shift_px: float) -> np.ndarray:
-    """The image shift that puts the most line response under the projected model, searched
-    coarse to fine on a blurred response so a near miss still scores."""
+def _shift_scores(response: np.ndarray, pixels: np.ndarray, shifts: np.ndarray, blur_px: float) -> np.ndarray:
+    """Mean line response under the projected model for each image shift (blurred so a near miss still scores)."""
+    blurred = cv2.GaussianBlur(response, (0, 0), max(1.0, blur_px))
+    where = pixels[None, :, :] + shifts[:, None, :]
+    return cv2.remap(
+        blurred,
+        where[..., 0].astype(np.float32),
+        where[..., 1].astype(np.float32),
+        cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0.0,
+    ).mean(axis=1)
+
+
+def _shift_candidates(response: np.ndarray, camera: Camera, max_shift_px: float) -> list[np.ndarray]:
+    """The best few image shifts of the projected model onto the line response. Banners and
+    spectators respond too, so the top score can be wrong; each candidate is checked by a fit."""
     height, width = response.shape
     pixels, _, visible = _project(camera, (width, height))
     pixels = pixels[visible]
-    best = np.zeros(2)
     if len(pixels) == 0:
-        return best
+        return []
     step = max(1.0, max_shift_px / 10)
-    span = max_shift_px
-    while True:
-        blurred = cv2.GaussianBlur(response, (0, 0), max(1.0, step))
-        grid = np.arange(-span, span + 1e-9, step)
-        shifts = best + np.stack(np.meshgrid(grid, grid), axis=-1).reshape(-1, 2)
-        where = pixels[None, :, :] + shifts[:, None, :]
-        scores = cv2.remap(
-            blurred,
-            where[..., 0].astype(np.float32),
-            where[..., 1].astype(np.float32),
-            cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=0.0,
-        ).mean(axis=1)
-        best = shifts[int(np.argmax(scores))]
-        if step <= 1.0:
-            return best
-        span, step = step, max(1.0, step / 4)
+    grid = np.arange(-max_shift_px, max_shift_px + 1e-9, step)
+    shifts = np.stack(np.meshgrid(grid, grid), axis=-1).reshape(-1, 2)
+    scores = _shift_scores(response, pixels, shifts, step).reshape(len(grid), len(grid)).astype(np.float32)
+    peaks = (scores >= cv2.dilate(scores, np.ones((3, 3), np.uint8))).ravel()
+    order = [index for index in np.argsort(-scores.ravel()) if peaks[index]][:SHIFT_CANDIDATES]
+    candidates = []
+    for index in order:
+        best, span, fine = shifts[index], step, max(1.0, step / 4)
+        while True:
+            local = np.arange(-span, span + 1e-9, fine)
+            nearby = best + np.stack(np.meshgrid(local, local), axis=-1).reshape(-1, 2)
+            best = nearby[int(np.argmax(_shift_scores(response, pixels, nearby, fine)))]
+            if fine <= 1.0:
+                break
+            span, fine = fine, max(1.0, fine / 4)
+        candidates.append(best)
+    return candidates
 
 
 def acquire(response: np.ndarray, camera: Camera, fit_intrinsics: bool = False) -> LineFit | None:
     """Find the court when the camera is only roughly known: after the first calibration, or
-    after the court was lost. A whole-court shift search first, then the coarse-to-fine fit."""
-    width = response.shape[1]
-    shift = _best_shift(response, camera, ACQUIRE_SHIFT_FRACTION * width)
-    return fit_frame(response, _turn_to_shift(camera, shift), ACQUIRE_RADII_PX, fit_intrinsics)
+    after the court was lost. Coarse-to-fine fits from `camera` and from the best whole-court
+    shifts of the model onto the lines; a partial lock can look confident, so the fit that
+    explains the most of the court wins."""
+    starts = [camera] + [_turn_to_shift(camera, shift) for shift in _shift_candidates(response, camera, ACQUIRE_SHIFT_FRACTION * response.shape[1])]
+    fits = [fit for fit in (fit_frame(response, start, ACQUIRE_RADII_PX, fit_intrinsics) for start in starts) if fit is not None]
+    return max(fits, key=lambda fit: (fit.confident, fit.inliers), default=None)
 
 
 def _small_step(previous: Camera, current: Camera) -> bool:
@@ -231,9 +256,10 @@ def _small_step(previous: Camera, current: Camera) -> bool:
     return np.degrees(np.linalg.norm(turn)) <= MAX_STEP_DEG and np.linalg.norm(current.centre - previous.centre) <= MAX_STEP_M
 
 
-def track_video(frames: Iterable[np.ndarray], anchor: Camera, fit_intrinsics: bool = True) -> list[TrackedFrame]:
-    """A camera per frame, starting from `anchor` (e.g. solve_camera on a few tapped court points)."""
-    track: list[TrackedFrame] = []
+def iter_track(frames: Iterable[np.ndarray], anchor: Camera, fit_intrinsics: bool = True) -> Iterator[TrackedFrame]:
+    """A camera per frame, yielded as each frame is read, starting from `anchor` (e.g. solve_camera
+    on a few labelled court points). Frames before and after the anchor's frame both work: the
+    first frame is found from the anchor the same way as after a loss."""
     last_good = anchor
     following = False
     anchored = False
@@ -250,9 +276,19 @@ def track_video(frames: Iterable[np.ndarray], anchor: Camera, fit_intrinsics: bo
                 state = "reanchored" if anchored else "anchored"
         if state == "lost":
             following = False
-            track.append(TrackedFrame("lost", None, fit.inliers if fit else 0, fit.rms_px if fit else float("inf")))
+            yield TrackedFrame("lost", None, fit.inliers if fit else 0, fit.rms_px if fit else float("inf"))
             continue
         assert fit is not None
         following, anchored, last_good = True, True, fit.camera
-        track.append(TrackedFrame(state, fit.camera, fit.inliers, fit.rms_px))
-    return track
+        yield TrackedFrame(state, fit.camera, fit.inliers, fit.rms_px)
+
+
+def track_video(frames: Iterable[np.ndarray], anchor: Camera, fit_intrinsics: bool = True) -> list[TrackedFrame]:
+    return list(iter_track(frames, anchor, fit_intrinsics))
+
+
+def model_polylines(camera: Camera, size: tuple[int, int]) -> list[np.ndarray]:
+    """The court model as image polylines (one per model line, visible samples only), for drawing."""
+    _, _, line_ids = _model()
+    pixels, _, visible = _project(camera, size)
+    return [pixels[(line_ids == line) & visible] for line in range(len(_lines())) if ((line_ids == line) & visible).sum() >= 2]

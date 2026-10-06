@@ -45,13 +45,13 @@ def find_line_offsets(
     response: np.ndarray,
     pixels: np.ndarray,
     normals: np.ndarray,
-    radius_px: float,
+    radius_px: float | np.ndarray,
     min_strength: float = MIN_STRENGTH,
 ) -> tuple[np.ndarray, np.ndarray]:
     """For each predicted line pixel, the signed distance along its unit normal to the centre
     of the line actually seen there, and that line's strength (NaN and 0 when none is found).
 
-    The profile along the normal is searched within radius_px. Of the peaks at least half as
+    The profile along the normal is searched within radius_px (one for all points, or one each). Of the peaks at least half as
     strong as the best one, the nearest wins, so a neighbouring parallel line a few pixels away
     does not steal the match. The centre is the centroid of the peak above half its height, which
     stays accurate for lines many pixels wide. Bright areas wider than the search are rejected.
@@ -64,7 +64,9 @@ def find_line_offsets(
     if count == 0:
         return offsets, strengths
     height, width = response.shape
-    steps = np.arange(-radius_px, radius_px + 1e-9, SEARCH_STEP_PX)
+    radii = np.broadcast_to(np.asarray(radius_px, dtype=np.float64), (count,))
+    steps = np.arange(-radii.max(), radii.max() + 1e-9, SEARCH_STEP_PX)
+    window = np.abs(steps)[None, :] <= radii[:, None] + 1e-9
     where = pixels[:, None, :] + steps[None, :, None] * normals[:, None, :]
     profiles = cv2.remap(
         response,
@@ -74,12 +76,13 @@ def find_line_offsets(
         borderMode=cv2.BORDER_CONSTANT,
         borderValue=0.0,
     ).astype(np.float64)
+    profiles[~window] = 0.0
     inside = (where[..., 0] >= 0) & (where[..., 0] <= width - 1) & (where[..., 1] >= 0) & (where[..., 1] <= height - 1)
-    usable = inside.all(axis=1)
+    usable = (inside | ~window).all(axis=1)
 
     left = np.pad(profiles[:, :-1], ((0, 0), (1, 0)), constant_values=-np.inf)
     right = np.pad(profiles[:, 1:], ((0, 0), (0, 1)), constant_values=-np.inf)
-    peaks = (profiles >= left) & (profiles > right) & (profiles >= min_strength)
+    peaks = (profiles >= left) & (profiles > right) & (profiles >= min_strength) & window
     strongest = np.where(peaks, profiles, 0.0).max(axis=1)
     rivals = peaks & (profiles >= RIVAL_RATIO * strongest[:, None])
     distance = np.where(rivals, np.abs(steps)[None, :], np.inf)
@@ -92,7 +95,9 @@ def find_line_offsets(
     above = profiles > half[:, None]
     run = np.cumsum(~above, axis=1)
     in_run = above & (run == run[rows, choice][:, None])
-    found &= ~in_run[:, 0] & ~in_run[:, -1]
+    first = window.argmax(axis=1)
+    last = window.shape[1] - 1 - window[:, ::-1].argmax(axis=1)
+    found &= ~in_run[rows, first] & ~in_run[rows, last]
     weights = np.where(in_run, profiles - half[:, None], 0.0)
     total = weights.sum(axis=1)
     found &= total > 0

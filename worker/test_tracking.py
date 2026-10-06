@@ -85,7 +85,35 @@ class FitFrameTests(unittest.TestCase):
         self.assertTrue(fit is None or not fit.confident)
 
 
+class NearLinesTests(unittest.TestCase):
+    def test_lines_close_to_the_phone_are_used_even_when_wider_than_the_search(self):
+        close = Camera.look_at((2.59, -1.0, 1.3), (2.59, 4.0, 0.0), 650.0, SIZE)
+        response = line_response(render_frame(close, SIZE, seed=8))
+        fit = fit_frame(response, turned(close, (0.2, 0.2, 0.0)))
+        self.assertTrue(fit.confident)
+        self.assertGreater(fit.matched, 0.7 * fit.visible)
+
+
+def cluttered(frame: np.ndarray, seed: int) -> np.ndarray:
+    """Dense white strokes just above the far court, like banners, lettering and spectators in a real hall."""
+    rng = np.random.default_rng(seed)
+    out = frame.copy()
+    height, width = out.shape[:2]
+    for _ in range(1500):
+        x, y = rng.uniform(0, width), rng.uniform(0.2 * height, 0.45 * height)
+        angle, length = rng.uniform(0, np.pi), rng.uniform(5, 40)
+        end = (int(x + length * np.cos(angle)), int(y + length * np.sin(angle)))
+        cv2.line(out, (int(x), int(y)), end, (235, 235, 235), int(rng.integers(1, 4)), cv2.LINE_AA)
+    return out
+
+
 class AcquireTests(unittest.TestCase):
+    def test_a_close_start_is_kept_when_the_hall_is_cluttered(self):
+        response = line_response(cluttered(render_frame(TRUTH, SIZE, players=PLAYERS, seed=9), seed=9))
+        fit = acquire(response, turned(TRUTH, (0.3, -0.4, 0.2), (0.04, -0.03, 0.02)))
+        self.assertTrue(fit.confident)
+        self.assertLess(float(np.median(floor_error_cm(TRUTH, fit.camera))), 2.0)
+
     def test_finds_the_court_after_the_phone_turned(self):
         response = line_response(render_frame(TRUTH, SIZE, players=PLAYERS, seed=7))
         fit = acquire(response, turned(TRUTH, (1.0, 2.0, 0.3), (0.05, 0.0, -0.03)))

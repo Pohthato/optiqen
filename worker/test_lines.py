@@ -118,6 +118,21 @@ class FindLineOffsetsTests(unittest.TestCase):
         offsets, _ = find_line_offsets(response, np.array([[60.0, 40.0]]), np.array([[1.0, 0.0]]), 12.0)
         self.assertAlmostEqual(float(offsets[0]), 3.3, delta=0.4)
 
+    def test_each_point_searches_its_own_radius(self):
+        response = ridge_image([(66.0, 1.0, 0.8)])
+        pixels = np.array([[60.0, 20.0], [60.0, 60.0]])
+        offsets, _ = find_line_offsets(response, pixels, np.array([[1.0, 0.0], [1.0, 0.0]]), np.array([3.0, 9.0]))
+        self.assertTrue(np.isnan(offsets[0]))
+        self.assertAlmostEqual(float(offsets[1]), 6.0, delta=0.2)
+
+    def test_a_line_wider_than_a_small_radius_needs_a_radius_that_covers_it(self):
+        # Near the phone a painted line can be 15+ pixels wide.
+        response = ridge_image([(61.0, 8.0, 0.6)])
+        offsets, _ = find_line_offsets(response, np.array([[60.0, 40.0]]), np.array([[1.0, 0.0]]), 4.0)
+        self.assertTrue(np.isnan(offsets[0]))
+        offsets, _ = find_line_offsets(response, np.array([[60.0, 40.0]]), np.array([[1.0, 0.0]]), np.array([4.0 + 8.0 + 1.0]))
+        self.assertAlmostEqual(float(offsets[0]), 1.0, delta=0.3)
+
     def test_a_bright_area_wider_than_the_search_is_not_a_line(self):
         response = np.zeros((80, 120), dtype=np.float32)
         response[:, 30:90] = 0.8

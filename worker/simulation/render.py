@@ -11,6 +11,7 @@ from geometry.camera import Camera
 from geometry.court_model import (
     COLUMNS,
     COURT_LENGTH_M,
+    LINE_WIDTH_M,
     NET_CENTRE_HEIGHT_M,
     NET_POST_HEIGHT_M,
     NET_TAPE_WIDTH_M,
@@ -27,7 +28,6 @@ TAPE_BGR = (240, 240, 240)
 POST_BGR = (30, 30, 160)
 PLAYER_BGR = (60, 45, 35)
 SHUTTLE_BGR = (250, 250, 250)
-LINE_WIDTH_M = 0.04
 LINE_SEGMENT_M = 0.25
 NET_DEPTH_M = 0.76
 NET_OPACITY = 0.35
