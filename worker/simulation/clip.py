@@ -65,9 +65,11 @@ def make_clip(
     noise_sigma: float = 2.0,
     sound_delay: bool = True,
     occlusions: list[tuple[float, float]] | tuple = (),
+    render: bool = True,
 ) -> SyntheticClip:
     """occlusions: (start_s, end_s) stretches where something covers the lens (a hand, a
-    person walking past the phone); those frames are near-black and flagged in the truth."""
+    person walking past the phone); those frames are near-black and flagged in the truth.
+    render=False skips drawing the images (frames is empty) when only the truth is needed."""
     if image_size[0] % 2 or image_size[1] % 2:
         raise ValueError(f"frame size {image_size} must be even: the mp4v writer silently crops odd sizes")
     rally = rally or canned_rally()
@@ -82,12 +84,13 @@ def make_clip(
         time = index / fps
         position = rally.shuttle_at(time)
         previous = rally.shuttle_at(max(0.0, time - exposure)) if position is not None else None
-        players = list(player_positions(rally, time).values())
-        frame = render_frame(cameras[index], image_size, position, previous, players, noise_sigma, seed + index)
         covered = any(start <= time < end for start, end in occlusions)
-        if covered:
-            frame = np.clip(np.random.default_rng(seed + index).normal(18, 4, frame.shape), 0, 255).astype(np.uint8)
-        frames.append(frame)
+        if render:
+            players = list(player_positions(rally, time).values())
+            frame = render_frame(cameras[index], image_size, position, previous, players, noise_sigma, seed + index)
+            if covered:
+                frame = np.clip(np.random.default_rng(seed + index).normal(18, 4, frame.shape), 0, 255).astype(np.uint8)
+            frames.append(frame)
         shuttle.append(position)
         occluded.append(covered)
     # A hit is heard once its sound has travelled to the phone (~15-45 ms on a court).

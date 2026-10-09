@@ -45,3 +45,28 @@ Each step is pushed on its own.
 - **Audio alone is not a hit.** A neighbouring court's hits are as sharp as the rally's, and quieter only by distance. They pass only when the shuttle track agrees.
 - **One onset detector.** The labeller (JavaScript) and the worker (Python) must find the same onsets, so suggestions in the labeller match what the analysis will use. The labeller's test suite runs both on the same audio at 48 and 44.1 kHz.
 - **Sound travel.** At 343 m/s a hit 10 m from the phone is heard 29 ms late, nearly the whole ±33 ms budget. So hit times are corrected using the camera, not taken from the audio as heard.
+
+## Hits from sound and flight (2c)
+
+**How it works** (`worker/hits.py`, `worker/find_hits.py`):
+
+- **Turns in the flight.** For every gap between two detections, two smooth curves (five detections either side) are compared with one curve. The *gain* is how much better two curves explain the path, relative to the shuttle's speed. Where they help, the contact is timed where the two paths meet, between frames. The *jump* is how sharply the velocity changes there. A real hit reverses or swings the shuttle (jump ≥ 1); the curvature at the top of a flight, or the slowdown after a smash, does not.
+- **Sound leads.** A hit is heard 0–80 ms after it happens: travel to the phone plus any audio/video offset in the file. Each sound picks the best-fitting split in that window with a real turn there (gain ≥ 0.07, jump ≥ 0.8). Two sounds cannot claim one turn: the better fit wins, so a neighbouring court's sound just before a real hit cannot take its run-up.
+- **Serves and re-entries.** A sound with no turn but with the shuttle appearing right after it (a serve the detector did not see in the hand) is a hit, timed by the sound less the delay measured on this clip's own turn hits on the same half of the court. A track starting at the frame's edge is the shuttle coming back into view, not a hit.
+- **No sound.** Without a sound track, clear turns (gain ≥ 0.11, jump ≥ 1.0) are hits. With a sound track, a hit nobody heard must be clearer still (gain ≥ 0.2, jump ≥ 1.2).
+- **Missed frames at the hit.** Where the detector missed two or more frames right at a split, the hit is timed by its sound less the measured delay rather than by extrapolated paths.
+
+**Results** (synthetic rallies at 30 fps: a steadily held phone, the detector modelled as the true position with 1 px noise and 10 % of frames missed, sound delay, 3 neighbouring-court hits per rally):
+
+| | Tuned on (10 rallies) | Unseen (5 rallies) |
+| --- | --- | --- |
+| F1 at ±33 ms, with sound | 0.978 | 0.985 |
+| Median / 90th percentile / worst timing error | 3.0 / 11.7 / 23.8 ms | 2.0 / 12.3 / 16.0 ms |
+| Neighbouring-court sounds taken as hits | 0 | 0 |
+| F1 without sound (serves excluded) | — | 0.78 |
+
+**Gate passed:** F1 ≥ 0.95 at ±33 ms on synthetic rallies, with neighbouring-court hits. The thresholds were set by looking at true and false cases on the first ten rallies. The unseen rallies were only scored afterwards.
+
+**Real footage:** `find_hits.py` runs end to end on the Hendry clip (9 hits from the flight alone, since this laptop has no ffmpeg; the worker image has it). Real accuracy will come from your labelled hits: `find_hits.py` writes contact events in the worker's result format, so `python -m evaluation.evaluate` scores them against the golden contacts.
+
+**Deferred:** hitting the worker pipeline (with Phase 3, alongside the per-frame cameras); a wrist-speed cue from pose; frame rates above 30 fps are supported but not yet tuned on.

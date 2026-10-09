@@ -88,6 +88,18 @@ class SoundAndConventionTests(unittest.TestCase):
             make_clip(odd, (161, 91), SERVE_ONLY, fps=10.0)
 
 
+class NoRenderTests(unittest.TestCase):
+    def test_everything_but_the_images_without_rendering(self):
+        rendered = make_clip(CAMERA, SIZE, SERVE_ONLY, fps=10.0, handheld=True, seed=2)
+        bare = make_clip(CAMERA, SIZE, SERVE_ONLY, fps=10.0, handheld=True, seed=2, render=False)
+        self.assertEqual(bare.frames, [])
+        self.assertEqual(len(bare.cameras), len(rendered.cameras))
+        for a, b in zip(bare.shuttle, rendered.shuttle):
+            self.assertTrue((a is None and b is None) or np.allclose(a, b))
+        np.testing.assert_array_equal(bare.audio, rendered.audio)
+        self.assertEqual(bare.contact_audio_times, rendered.contact_audio_times)
+
+
 class OcclusionTests(unittest.TestCase):
     def test_frames_inside_an_occlusion_are_covered_and_flagged(self):
         clip = make_clip(CAMERA, SIZE, SERVE_ONLY, fps=10.0, occlusions=[(1.0, 1.5)])
