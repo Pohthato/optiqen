@@ -4,16 +4,16 @@ import unittest
 
 from geometry.calibration_adapter import UNSOLVED_REASON, corners_to_observations, summarise_calibration
 from geometry.camera import Camera
-from geometry.court_model import CORNER_LABEL_TO_KEYPOINT, KEYPOINTS
+from geometry.court_model import CORNER_KEYPOINTS, KEYPOINTS
 from geometry.synthetic import LANDSCAPE
 
 # High and far enough back that all four singles corners are inside the frame.
 WIDE = Camera.look_at((2.59, -5.5, 6.0), (2.59, 6.7, 0.0), 1000.0, LANDSCAPE)
 
 
-def percent_corners(camera: Camera, size: tuple[int, int]) -> list[dict]:
+def percent_corners(camera: Camera, size: tuple[int, int], court_type: str = "singles") -> list[dict]:
     corners = []
-    for label, name in CORNER_LABEL_TO_KEYPOINT.items():
+    for label, name in CORNER_KEYPOINTS[court_type].items():
         x, y = camera.project(KEYPOINTS[name][None, :])[0]
         corners.append({"label": label, "x": x / size[0] * 100, "y": y / size[1] * 100})
     return corners
@@ -23,6 +23,10 @@ class CornersToObservationsTests(unittest.TestCase):
     def test_percent_coordinates_become_pixels_keyed_by_keypoint(self):
         observed = corners_to_observations([{"label": "nearLeft", "x": 50, "y": 25}], (1920, 1080))
         self.assertEqual(observed, {"back0_sl": (960.0, 270.0)})
+
+    def test_doubles_corners_are_the_outer_corners(self):
+        observed = corners_to_observations([{"label": "farRight", "x": 50, "y": 25}], (1920, 1080), "doubles")
+        self.assertEqual(observed, {"back1_dr": (960.0, 270.0)})
 
     def test_unknown_labels_and_bad_values_are_skipped(self):
         corners = [
@@ -79,9 +83,21 @@ class SummariseCalibrationTests(unittest.TestCase):
         if summary is not None:
             self.assertEqual(summary["reasons"], [UNSOLVED_REASON])
 
-    def test_doubles_courts_are_not_summarised(self):
-        # v1 models the singles court; doubles taps would be solved against the wrong lines.
-        self.assertIsNone(summarise_calibration(percent_corners(WIDE, LANDSCAPE), LANDSCAPE, "doubles"))
+    def test_doubles_corners_give_the_same_camera(self):
+        singles = summarise_calibration(percent_corners(WIDE, LANDSCAPE), LANDSCAPE)
+        doubles = summarise_calibration(percent_corners(WIDE, LANDSCAPE, "doubles"), LANDSCAPE, "doubles")
+        self.assertIsNotNone(doubles)
+        self.assertNotEqual(doubles["cameraTier"], "unavailable")
+        self.assertLess(abs(doubles["focalPx"] - singles["focalPx"]) / singles["focalPx"], 0.05)
+
+    def test_singles_taps_sent_as_doubles_do_not_give_the_same_camera(self):
+        # The game type decides which corners the taps are: a mix-up must not pass silently.
+        singles = summarise_calibration(percent_corners(WIDE, LANDSCAPE), LANDSCAPE)
+        mixed = summarise_calibration(percent_corners(WIDE, LANDSCAPE), LANDSCAPE, "doubles")
+        self.assertTrue(mixed is None or abs(mixed["focalPx"] - singles["focalPx"]) / singles["focalPx"] > 0.05)
+
+    def test_an_unknown_game_type_is_not_summarised(self):
+        self.assertIsNone(summarise_calibration(percent_corners(WIDE, LANDSCAPE), LANDSCAPE, "mixed"))
 
 
 if __name__ == "__main__":

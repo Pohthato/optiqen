@@ -6,7 +6,7 @@ import math
 from typing import Any
 
 from geometry.calibrate import solve_camera
-from geometry.court_model import CORNER_LABEL_TO_KEYPOINT
+from geometry.court_model import CORNER_KEYPOINTS
 from geometry.quality import assess_geometry
 
 UNSOLVED_REASON = (
@@ -19,12 +19,16 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def corners_to_observations(corners: list[dict[str, Any]], image_size: tuple[int, int]) -> dict[str, tuple[float, float]]:
-    """UI corners are percent-of-frame; return pixel observations keyed by court keypoint."""
+def corners_to_observations(
+    corners: list[dict[str, Any]], image_size: tuple[int, int], court_type: str = "singles"
+) -> dict[str, tuple[float, float]]:
+    """UI corners are percent-of-frame; return pixel observations keyed by court keypoint. The
+    corners are the singles court's, or the doubles court's outer ones, by the game played."""
     width, height = image_size
+    labels = CORNER_KEYPOINTS[court_type]
     observed: dict[str, tuple[float, float]] = {}
     for corner in corners:
-        name = CORNER_LABEL_TO_KEYPOINT.get(corner.get("label"))
+        name = labels.get(corner.get("label"))
         x, y = corner.get("x"), corner.get("y")
         if name is None or not (_is_number(x) and _is_number(y)):
             continue
@@ -36,10 +40,9 @@ def summarise_calibration(
     corners: list[dict[str, Any]], image_size: tuple[int, int], court_type: str = "singles"
 ) -> dict[str, Any] | None:
     """Camera facts to attach to the accepted calibration; None when the corners cannot be solved."""
-    if court_type != "singles":
-        # v1 models the singles court only; doubles corners would be solved against the wrong lines.
+    if court_type not in CORNER_KEYPOINTS:
         return None
-    solution = solve_camera(corners_to_observations(corners, image_size), image_size)
+    solution = solve_camera(corners_to_observations(corners, image_size, court_type), image_size)
     if solution is None:
         return None
     quality = assess_geometry(solution.camera, image_size)

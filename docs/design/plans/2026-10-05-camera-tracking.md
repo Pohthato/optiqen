@@ -124,3 +124,8 @@ python -m evaluation.track runs/behind runs/corner runs/side --out track-report.
 - Frame-to-frame background flow for fast hand motion.
 - Rolling shutter.
 - Courts whose lines are yellow on a light floor (the response uses brightness only).
+
+## Follow-up (2026-10-08)
+
+- Overlays draw every line end to end. They had been drawn through the tracking samples, which stop 12 cm short of each line end, so service lines looked as if they missed the doubles sidelines.
+- Doubles is ready to be switched on: the model already has every doubles line, and corner taps for a doubles job are now solved as the doubles court's outer corners (`CORNER_KEYPOINTS`) instead of being refused. In/out calls (Phase 3) will take the game type.

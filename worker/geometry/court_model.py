@@ -69,12 +69,16 @@ FLOOR_KEYPOINT_NAMES: tuple[str, ...] = tuple(
     name for name, point in KEYPOINTS.items() if point[2] == 0.0 and not name.startswith("post_")
 )
 
-# The four singles corners the existing calibration UI asks the player to tap.
-CORNER_LABEL_TO_KEYPOINT: dict[str, str] = {
-    "nearLeft": "back0_sl",
-    "nearRight": "back0_sr",
-    "farRight": "back1_sr",
-    "farLeft": "back1_sl",
+# The four court corners the calibration UI asks the player to tap, for the game being played:
+# the singles court's corners, or the doubles court's outer corners.
+CORNER_KEYPOINTS: dict[str, dict[str, str]] = {
+    court_type: {
+        "nearLeft": f"back0_{left}",
+        "nearRight": f"back0_{right}",
+        "farRight": f"back1_{right}",
+        "farLeft": f"back1_{left}",
+    }
+    for court_type, (left, right) in {"singles": ("sl", "sr"), "doubles": ("dl", "dr")}.items()
 }
 
 
@@ -87,7 +91,7 @@ def court_lines() -> list[tuple[str, np.ndarray, np.ndarray]]:
     for column_name, x in COLUMNS.items():
         if column_name == "c":
             continue
-        lines.append((f"side_{column_name}", np.array([x, 0.0, 0.0]), np.array([x, COURT_LENGTH_M, 0.0])))
+        lines.append((f"side_{column_name}", np.array([x, ROWS["back0"], 0.0]), np.array([x, ROWS["back1"], 0.0])))
     centre = COLUMNS["c"]
     lines.append(("centre0", np.array([centre, 0.0, 0.0]), np.array([centre, ROWS["short0"], 0.0])))
     lines.append(("centre1", np.array([centre, ROWS["short1"], 0.0]), np.array([centre, COURT_LENGTH_M, 0.0])))

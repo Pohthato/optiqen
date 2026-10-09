@@ -4,7 +4,7 @@ import unittest
 import numpy as np
 
 from geometry.court_model import (
-    CORNER_LABEL_TO_KEYPOINT,
+    CORNER_KEYPOINTS,
     FLOOR_KEYPOINT_NAMES,
     KEYPOINTS,
     LINE_WIDTH_M,
@@ -70,11 +70,25 @@ class CourtModelTests(unittest.TestCase):
         np.testing.assert_allclose(right, KEYPOINTS["post_right_top"] - [0, 0, 0.0375])
         np.testing.assert_allclose(centre, KEYPOINTS["net_centre_top"] - [0, 0, 0.0375])
 
-    def test_ui_corner_labels_are_the_singles_corners(self):
+    def test_ui_corner_labels_are_the_corners_of_the_game_played(self):
+        def corners(court_type):
+            return {label: tuple(np.round(KEYPOINTS[name][:2], 2)) for label, name in CORNER_KEYPOINTS[court_type].items()}
+
         self.assertEqual(
-            {label: tuple(KEYPOINTS[name][:2]) for label, name in CORNER_LABEL_TO_KEYPOINT.items()},
+            corners("singles"),
             {"nearLeft": (0.02, 0.02), "nearRight": (5.16, 0.02), "farRight": (5.16, 13.38), "farLeft": (0.02, 13.38)},
         )
+        self.assertEqual(
+            corners("doubles"),
+            {"nearLeft": (-0.44, 0.02), "nearRight": (5.62, 0.02), "farRight": (5.62, 13.38), "farLeft": (-0.44, 13.38)},
+        )
+
+    def test_lines_end_where_they_meet_the_outermost_lines(self):
+        ends = {name: (start, end) for name, start, end in court_lines()}
+        np.testing.assert_allclose(ends["short0"][0][:2], KEYPOINTS["short0_dl"][:2])
+        np.testing.assert_allclose(ends["short0"][1][:2], KEYPOINTS["short0_dr"][:2])
+        np.testing.assert_allclose(ends["side_dl"][0][:2], KEYPOINTS["back0_dl"][:2])
+        np.testing.assert_allclose(ends["side_dl"][1][:2], KEYPOINTS["back1_dl"][:2])
 
 
 if __name__ == "__main__":

@@ -355,8 +355,15 @@ def iter_track(frames: Iterable[np.ndarray], anchor: Camera, fit_intrinsics: boo
         yield TrackedFrame(state, fit.camera, fit.inliers, fit.rms_px)
 
 
-def model_polylines(camera: Camera, size: tuple[int, int]) -> list[np.ndarray]:
-    """The court model as image polylines (one per model line, visible samples only), for drawing."""
-    _, _, line_ids = _model()
-    pixels, _, visible = _project(camera, size)
-    return [pixels[(line_ids == line) & visible] for line in range(len(_lines())) if ((line_ids == line) & visible).sum() >= 2]
+def model_polylines(camera: Camera) -> list[np.ndarray]:
+    """The court model as image polylines, each line drawn end to end (every 10 cm, so lens
+    distortion bends it), for overlays. Parts behind the phone are left out."""
+    polylines = []
+    for _, start, end in _lines():
+        count = max(2, int(np.ceil(np.linalg.norm(end - start) / 0.1)) + 1)
+        pixels = camera.project(start + np.linspace(0.0, 1.0, count)[:, None] * (end - start))
+        drawable = np.isfinite(pixels).all(axis=1) & (np.abs(pixels) < 1e5).all(axis=1)
+        for run in np.split(np.arange(count), np.flatnonzero(np.diff(drawable.astype(int))) + 1):
+            if drawable[run[0]] and len(run) >= 2:
+                polylines.append(pixels[run])
+    return polylines

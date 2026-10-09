@@ -3066,6 +3066,6 @@ git commit -m "feat(tools): add browser labeller for golden-set clips"
 The whole-branch review found defects in this plan's own code. The repository, not the code blocks above, is the reference for later phases:
 
 - `geometry/calibrate.py`: the pose sign is chosen from the observed points' depth (the court origin may be behind the camera), and cameras below the floor or with an inlier behind them are tier `unavailable` (mirrored labels fit a reflected camera almost exactly).
-- `geometry/calibration_adapter.py`: no capture advice from a camera the solver rejected (one `UNSOLVED_REASON` instead), and no summary for doubles courts in v1.
+- `geometry/calibration_adapter.py`: no capture advice from a camera the solver rejected (one `UNSOLVED_REASON` instead), and no summary for doubles courts in v1 (since 2026-10-08, doubles taps are solved as the outer corners).
 - `evaluation/evaluate.py`: unmatched verified shots count as false claims; summary numbers pool counts over clips; each clip reports `workerCamera` and names its calibration `source`; calibration is solved from one frame.
 - Golden keypoints and the labeller carry an optional `timeMs` (the frame a point was clicked on).

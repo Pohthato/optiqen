@@ -52,8 +52,7 @@ def _draw(frame: np.ndarray, index: int, step: TrackedFrame) -> np.ndarray:
     image = frame.copy()
     colour = STATE_COLOURS[step.state]
     if step.camera is not None:
-        height, width = image.shape[:2]
-        for line in model_polylines(step.camera, (width, height)):
+        for line in model_polylines(step.camera):
             cv2.polylines(image, [np.round(line).astype(np.int32)], False, colour, 2, cv2.LINE_AA)
     cv2.putText(image, f"{index} {step.state}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, colour, 2, cv2.LINE_AA)
     return image

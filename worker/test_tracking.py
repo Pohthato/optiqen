@@ -7,10 +7,10 @@ import numpy as np
 from evaluation.track import floor_error_cm
 from geometry.calibrate import solve_camera
 from geometry.camera import Camera
-from geometry.court_model import COLUMNS, ROWS
+from geometry.court_model import COLUMNS, KEYPOINTS, ROWS
 from geometry.lines import line_response
 from geometry.synthetic import PORTRAIT, observe
-from geometry.tracking import AnchorError, acquire, anchor_on_points, fit_frame, iter_track
+from geometry.tracking import AnchorError, acquire, anchor_on_points, fit_frame, iter_track, model_polylines
 from simulation.clip import make_clip
 from simulation.rally import Shot, build_rally
 from simulation.render import render_frame
@@ -88,6 +88,21 @@ class FitFrameTests(unittest.TestCase):
         response = line_response(render_frame(SIDE, SIZE, players=PLAYERS, seed=6))
         fit = fit_frame(response, TRUTH)
         self.assertTrue(fit is None or not fit.confident)
+
+
+class DrawingTests(unittest.TestCase):
+    def test_drawn_lines_run_all_the_way_to_the_lines_they_meet(self):
+        lines = model_polylines(TRUTH)
+        ends = TRUTH.project(np.array([KEYPOINTS["short0_dl"], KEYPOINTS["short0_dr"]]))
+        for end in ends:
+            nearest = min(float(np.linalg.norm(line[[0, -1]] - end, axis=1).min()) for line in lines)
+            self.assertLess(nearest, 0.5)
+
+    def test_parts_behind_the_phone_are_left_out(self):
+        close = Camera.look_at((2.59, 1.0, 1.5), (2.59, 8.0, 0.0), 650.0, SIZE)
+        for line in model_polylines(close):
+            self.assertTrue(np.isfinite(line).all())
+            self.assertGreaterEqual(len(line), 2)
 
 
 class NearLinesTests(unittest.TestCase):
