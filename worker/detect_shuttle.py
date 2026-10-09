@@ -52,14 +52,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS)
     args = parser.parse_args(argv)
 
+    video = VideoFile(args.video)
+    if not video.opened:
+        print(f"cannot read {args.video}", file=sys.stderr)
+        return 1
     try:
         detector = ShuttleDetector.load(args.weights)
     except FileNotFoundError as error:
         print(str(error), file=sys.stderr)
-        return 1
-    video = VideoFile(args.video)
-    if not video.opened:
-        print(f"cannot read {args.video}", file=sys.stderr)
         return 1
     every = max(1, video.frame_count // BACKGROUND_SAMPLES)
     background = detector.background([frame for index, (_, frame) in enumerate(video.frames()) if index % every == 0])

@@ -27,7 +27,11 @@ class DetectShuttleCliTests(unittest.TestCase):
 
     def test_missing_weights_are_reported(self):
         with tempfile.TemporaryDirectory() as tmp:
-            code, err = self.run_cli(str(Path(tmp) / "clip.mp4"), "--out", str(Path(tmp) / "s.json"), "--weights", tmp)
+            video = Path(tmp) / "clip.mp4"
+            writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"mp4v"), 30.0, SIZE)
+            writer.write(np.zeros((SIZE[1], SIZE[0], 3), np.uint8))
+            writer.release()
+            code, err = self.run_cli(str(video), "--out", str(Path(tmp) / "s.json"), "--weights", tmp)
         self.assertEqual(code, 1)
         self.assertIn("TrackNet_best.pt", err)
 
