@@ -11,6 +11,11 @@ The focal length and lens distortion are refined once, when the court is first f
 then held: a phone's main lens does not zoom mid-rally. When a frame cannot be fitted with
 confidence (a hand over the lens, a person walking past the phone) it is reported as lost,
 with no camera, and the court is searched for again from the last good camera.
+
+A court slid by one line spacing (the doubles sideline on the singles sideline, the baseline on
+the long service line) puts many model lines on real ones and passes every per-fit check, so
+whenever the court is searched for, the slid alternatives are fitted too and the one that
+explains clearly more of the court wins.
 """
 from __future__ import annotations
 
@@ -22,29 +27,30 @@ import cv2
 import numpy as np
 from scipy.optimize import least_squares
 
+from geometry.calibrate import PRIOR_FOCAL_PX_PER_LOG, PRIOR_K1_PX_PER_UNIT, solve_camera
 from geometry.camera import Camera
-from geometry.court_model import LINE_WIDTH_M, NET_TAPE_WIDTH_M, court_lines, net_tape_lines
+from geometry.court_model import COLUMNS, KEYPOINTS, LINE_WIDTH_M, NET_TAPE_WIDTH_M, ROWS, court_lines, net_tape_lines
 from geometry.lines import find_line_offsets, line_response, sample_lines
 
 SAMPLE_SPACING_M = 0.25
-REFERENCE_WIDTH_PX = 1280.0  # search radii below are for a frame this wide and scale with it
+REFERENCE_LONG_SIDE_PX = 1280.0  # search radii below are for a frame this long and scale with it
 TRACK_RADII_PX = (10.0, 5.0, 3.0)
 ACQUIRE_RADII_PX = (16.0, 8.0, 4.0, 3.0)
-ACQUIRE_SHIFT_FRACTION = 0.06  # how far (of the frame width) the court may have moved while lost
+ACQUIRE_SHIFT_FRACTION = 0.06  # how far (of the long side) the court may have moved while lost
 SHIFT_CANDIDATES = 3
 MIN_RADIUS_PX = 2.5
 TANGENT_STEP_M = 0.05
-INLIER_PX = 2.0
+INLIER_PX = 2.0  # up to a 1920 px long side; larger frames scale it
 MIN_INLIERS = 24
 MIN_INLIER_SHARE = 0.6
 MIN_COVERAGE = 0.35  # of the model that should be in view; a wrong lock explains little of it
 MIN_LINE_INLIERS = 3
 MIN_LINES = 4
-MAX_RMS_PX = 1.5
 MAX_STEP_DEG = 2.0  # a steadily held phone does not turn further than this between frames
 MAX_STEP_M = 0.25
-_PRIOR_FOCAL_PX_PER_LOG = 6.0
-_PRIOR_K1_PX_PER_UNIT = 30.0
+ALIAS_GAIN = 1.1  # a slid court must explain this many times the inliers to win
+ALIAS_ROUNDS = 3
+ANCHOR_TAP_FRACTION = 0.0075  # of the long side: how far the lines may put the labelled points (median)
 
 
 @dataclass(frozen=True)
@@ -53,7 +59,7 @@ class LineFit:
     visible: int  # model samples that project into the frame
     matched: int  # model samples with a line found near them
     inliers: int  # matched samples within INLIER_PX of the fitted model
-    rms_px: float  # RMS distance of the inliers from their lines
+    rms_px: float  # RMS distance of the inliers from their lines (reported, not a check)
     lines: int  # model lines with at least MIN_LINE_INLIERS inliers
     crossing: bool  # those lines include both along-court and across-court directions
 
@@ -63,7 +69,6 @@ class LineFit:
             self.inliers >= MIN_INLIERS
             and self.inliers >= MIN_INLIER_SHARE * self.matched
             and self.inliers >= MIN_COVERAGE * self.visible
-            and self.rms_px <= MAX_RMS_PX
             and self.lines >= MIN_LINES
             and self.crossing
         )
@@ -102,8 +107,16 @@ def _floor_directions() -> tuple[np.ndarray, np.ndarray]:
     return on_floor & across, on_floor & ~across
 
 
-def _radii(radii: tuple[float, ...], width: int) -> list[float]:
-    return [max(MIN_RADIUS_PX, radius * width / REFERENCE_WIDTH_PX) for radius in radii]
+class AnchorError(ValueError):
+    """The labelled court points and the lines in the frame do not give a trustworthy camera."""
+
+
+def _radii(radii: tuple[float, ...], size: tuple[int, int]) -> list[float]:
+    return [max(MIN_RADIUS_PX, radius * max(size) / REFERENCE_LONG_SIDE_PX) for radius in radii]
+
+
+def _inlier_px(size: tuple[int, int]) -> float:
+    return INLIER_PX * max(1.0, max(size) / 1920.0)
 
 
 def _project(camera: Camera, size: tuple[int, int]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -141,7 +154,7 @@ def _refine(camera: Camera, world: np.ndarray, targets: np.ndarray, normals: np.
         distance[~np.isfinite(distance)] = 50.0
         if not fit_intrinsics:
             return distance
-        priors = [_PRIOR_FOCAL_PX_PER_LOG * (params[6] - focal_start), _PRIOR_K1_PX_PER_UNIT * params[7]]
+        priors = [PRIOR_FOCAL_PX_PER_LOG * (params[6] - focal_start), PRIOR_K1_PX_PER_UNIT * params[7]]
         return np.concatenate([distance, priors])
 
     start = [*np.asarray(camera.rvec, dtype=np.float64).ravel(), *np.asarray(camera.tvec, dtype=np.float64).ravel()]
@@ -162,13 +175,13 @@ def fit_frame(
     points, _, line_ids = _model()
     height, width = response.shape
     current = camera
-    for radius in _radii(radii_px, width):
+    for radius in _radii(radii_px, (width, height)):
         pixels, normals, visible = _project(current, (width, height))
         candidates = np.flatnonzero(visible)
         # The search covers the position error plus half the line: near the phone a line is wide.
         depth = points[candidates] @ current.rotation[2] + float(np.asarray(current.tvec, dtype=np.float64).reshape(3)[2])
         search = radius + 0.5 * _widths()[candidates] * current.focal_px / depth + 1.0
-        offsets, _ = find_line_offsets(response, pixels[candidates], normals[candidates], search)
+        offsets = find_line_offsets(response, pixels[candidates], normals[candidates], search)
         found = np.isfinite(offsets)
         if found.sum() < MIN_INLIERS:
             return None
@@ -177,7 +190,7 @@ def fit_frame(
         current = _refine(current, points[matched], targets, normals[matched], fit_intrinsics)
     distance = ((current.project(points[matched]) - targets) * normals[matched]).sum(axis=1)
     _, _, visible = _project(current, (width, height))
-    inlier = np.abs(distance) <= INLIER_PX
+    inlier = np.abs(distance) <= _inlier_px((width, height))
     strong = np.bincount(line_ids[matched][inlier], minlength=len(_lines())) >= MIN_LINE_INLIERS
     across, along = _floor_directions()
     return LineFit(
@@ -241,14 +254,68 @@ def _shift_candidates(response: np.ndarray, camera: Camera, max_shift_px: float)
     return candidates
 
 
+def _moved(camera: Camera, dx: float, dy: float) -> Camera:
+    """The camera moved over the floor by (dx, dy) metres, facing the same way."""
+    centre = camera.centre + np.array([dx, dy, 0.0])
+    return Camera(camera.focal_px, camera.cx, camera.cy, camera.rvec, -camera.rotation @ centre, camera.k1)
+
+
+@lru_cache(maxsize=1)
+def _alias_slides() -> list[tuple[float, float]]:
+    """One line spacing in each direction: across, doubles to singles sideline and sideline to
+    centre line; along, baseline to long service line and the long gaps between service lines."""
+    across = {COLUMNS["sl"] - COLUMNS["dl"], COLUMNS["c"] - COLUMNS["sl"]}
+    along = {ROWS["long0"] - ROWS["back0"], ROWS["short0"] - ROWS["long0"], ROWS["short1"] - ROWS["short0"]}
+    return [(sign * step, 0.0) for step in across for sign in (1, -1)] + [(0.0, sign * step) for step in along for sign in (1, -1)]
+
+
+def _resolve_aliases(response: np.ndarray, fit: LineFit, fit_intrinsics: bool) -> LineFit:
+    """Refit from the court slid by each line spacing; move while a slide explains clearly more."""
+    for _ in range(ALIAS_ROUNDS):
+        rivals = (fit_frame(response, _moved(fit.camera, dx, dy), ACQUIRE_RADII_PX, fit_intrinsics) for dx, dy in _alias_slides())
+        best = max((rival for rival in rivals if rival is not None and rival.confident), key=lambda rival: rival.inliers, default=None)
+        if best is None or best.inliers < ALIAS_GAIN * fit.inliers:
+            return fit
+        fit = best
+    return fit
+
+
 def acquire(response: np.ndarray, camera: Camera, fit_intrinsics: bool = False) -> LineFit | None:
     """Find the court when the camera is only roughly known: after the first calibration, or
     after the court was lost. Coarse-to-fine fits from `camera` and from the best whole-court
     shifts of the model onto the lines; a partial lock can look confident, so the fit that
-    explains the most of the court wins."""
-    starts = [camera] + [_turn_to_shift(camera, shift) for shift in _shift_candidates(response, camera, ACQUIRE_SHIFT_FRACTION * response.shape[1])]
+    explains the most of the court wins, and then the slid courts are tried against it."""
+    max_shift = ACQUIRE_SHIFT_FRACTION * max(response.shape)
+    starts = [camera] + [_turn_to_shift(camera, shift) for shift in _shift_candidates(response, camera, max_shift)]
     fits = [fit for fit in (fit_frame(response, start, ACQUIRE_RADII_PX, fit_intrinsics) for start in starts) if fit is not None]
-    return max(fits, key=lambda fit: (fit.confident, fit.inliers), default=None)
+    best = max(fits, key=lambda fit: (fit.confident, fit.inliers), default=None)
+    if best is not None and best.confident:
+        best = _resolve_aliases(response, best, fit_intrinsics)
+    return best
+
+
+def anchor_on_points(frame: np.ndarray, points: dict[str, tuple[float, float]]) -> LineFit:
+    """The camera for a frame from court points placed on it (e.g. in the labeller): a first
+    camera from the points, then the lines refine it and fix the focal length. The lines must
+    put the points back where they were placed; a point with the wrong name (a doubles corner
+    as a singles corner, the long service line as the baseline) cannot pass."""
+    height, width = frame.shape[:2]
+    solution = solve_camera(points, (width, height))
+    if solution is None or solution.tier == "unavailable":
+        raise AnchorError("the labelled court points do not give a usable camera: place at least 4, and check their names and positions")
+    fit = acquire(line_response(frame), solution.camera, fit_intrinsics=True)
+    if fit is None or not fit.confident:
+        raise AnchorError("the court lines could not be found near the labelled points")
+    names = [name for name in points if name in KEYPOINTS]
+    placed = np.array([points[name] for name in names], dtype=np.float64)
+    reprojected = fit.camera.project(np.array([KEYPOINTS[name] for name in names]))
+    miss = float(np.median(np.linalg.norm(reprojected - placed, axis=1)))
+    if not miss <= ANCHOR_TAP_FRACTION * max(width, height):
+        raise AnchorError(
+            f"the court lines put the labelled points {miss:.0f} px (median) from where they were placed: "
+            "check each point's name and the frame it was placed on"
+        )
+    return fit
 
 
 def _small_step(previous: Camera, current: Camera) -> bool:
@@ -257,9 +324,14 @@ def _small_step(previous: Camera, current: Camera) -> bool:
 
 
 def iter_track(frames: Iterable[np.ndarray], anchor: Camera, fit_intrinsics: bool = True) -> Iterator[TrackedFrame]:
-    """A camera per frame, yielded as each frame is read, starting from `anchor` (e.g. solve_camera
-    on a few labelled court points). Frames before and after the anchor's frame both work: the
-    first frame is found from the anchor the same way as after a loss."""
+    """A camera per frame, yielded as each frame is read, starting from `anchor` (e.g. from
+    anchor_on_points). The first frame is searched for from the anchor the same way as after a
+    loss, so tracking can start before the anchor's frame as long as the phone was within that
+    search of the anchor's pose (otherwise those frames are lost until it is).
+
+    States: "anchored" (first found), "tracked" (fitted from the previous frame and within a
+    steady hand's step of it), "reanchored" (found again by the full search, after a loss or a
+    jump bigger than a steady hand makes), "lost" (no camera)."""
     last_good = anchor
     following = False
     anchored = False
@@ -281,10 +353,6 @@ def iter_track(frames: Iterable[np.ndarray], anchor: Camera, fit_intrinsics: boo
         assert fit is not None
         following, anchored, last_good = True, True, fit.camera
         yield TrackedFrame(state, fit.camera, fit.inliers, fit.rms_px)
-
-
-def track_video(frames: Iterable[np.ndarray], anchor: Camera, fit_intrinsics: bool = True) -> list[TrackedFrame]:
-    return list(iter_track(frames, anchor, fit_intrinsics))
 
 
 def model_polylines(camera: Camera, size: tuple[int, int]) -> list[np.ndarray]:

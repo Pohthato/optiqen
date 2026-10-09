@@ -5,8 +5,9 @@
 
 Each clip directory is a simulation.clip export (video.mp4 + truth.json). The tracker is
 anchored the way a person would: a few singles-court points tapped (with 1 px error) on the
-first frame where the lens is clear. The gate: median floor error under 5 cm and the court
-found again within half a second of the lens being uncovered.
+first frame where the lens is clear. The gate: median floor error under 5 cm, no frame given a
+camera that is more than 20 cm wrong, no camera while the lens is covered, and the court found
+again within half a second of the lens being uncovered.
 """
 from __future__ import annotations
 
@@ -19,14 +20,14 @@ from typing import Any, Sequence
 import cv2
 import numpy as np
 
-from geometry.calibrate import solve_camera
 from geometry.camera import Camera
 from geometry.court_model import COLUMNS, COURT_LENGTH_M
 from geometry.synthetic import observe
-from geometry.tracking import TrackedFrame, iter_track
+from geometry.tracking import TrackedFrame, anchor_on_points, iter_track
 from simulation.clip import camera_from_truth
 
 FALSE_CONFIDENT_CM = 20.0
+MISS_CM = 10_000.0  # a floor point the estimate cannot put on the floor at all (its ray misses it)
 GATE_MEDIAN_CM = 5.0
 GATE_RECOVERY_S = 0.5
 TAP_NAMES = [f"{row}_{column}" for row in ("back0", "short0", "short1", "back1") for column in ("sl", "sr")]
@@ -43,7 +44,8 @@ def floor_error_cm(truth: Camera, estimate: Camera, image_size: tuple[int, int])
     with np.errstate(invalid="ignore"):
         seen = (pixels[:, 0] >= 0) & (pixels[:, 0] < width) & (pixels[:, 1] >= 0) & (pixels[:, 1] < height)
     estimated = estimate.pixel_to_plane(pixels[seen], 0.0)
-    return np.linalg.norm(estimated - FLOOR_GRID[seen, :2], axis=1) * 100.0
+    errors = np.linalg.norm(estimated - FLOOR_GRID[seen, :2], axis=1) * 100.0
+    return np.where(np.isfinite(errors), np.minimum(errors, MISS_CM), MISS_CM)
 
 
 def evaluate_track(
@@ -86,13 +88,16 @@ def evaluate_track(
     }
 
 
-def _anchor(truth: Camera, image_size: tuple[int, int], seed: int) -> Camera:
-    """The camera a person's taps give: visible singles-court points, 1 px of tap error."""
-    taps = observe(truth, image_size, TAP_NAMES, noise_px=1.0, seed=seed)
-    solution = solve_camera(taps, image_size)
-    if solution is None:
-        raise ValueError("fewer than 4 singles-court points are in view to anchor on")
-    return solution.camera
+def _video_frames(path: Path):
+    capture = cv2.VideoCapture(str(path))
+    try:
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                return
+            yield frame
+    finally:
+        capture.release()
 
 
 def evaluate_clip_dir(directory: Path, seed: int = 0) -> dict[str, Any]:
@@ -101,21 +106,46 @@ def evaluate_clip_dir(directory: Path, seed: int = 0) -> dict[str, Any]:
     cameras = [camera_from_truth(entry) for entry in truth["cameras"]]
     occluded = truth.get("occluded") or [False] * len(cameras)
     first_clear = occluded.index(False)
-    capture = cv2.VideoCapture(str(directory / "video.mp4"))
-
-    def frames():
-        while True:
-            ok, frame = capture.read()
-            if not ok:
-                return
-            yield frame
-
-    track = list(iter_track(frames(), _anchor(cameras[first_clear], size, seed)))
-    capture.release()
+    frame = next(frame for index, frame in enumerate(_video_frames(directory / "video.mp4")) if index == first_clear)
+    taps = observe(cameras[first_clear], size, TAP_NAMES, noise_px=1.0, seed=seed)
+    anchor = anchor_on_points(frame, taps)
+    track = list(iter_track(_video_frames(directory / "video.mp4"), anchor.camera, fit_intrinsics=False))
     report = evaluate_track(cameras[: len(track)], track, size, occluded[: len(track)])
     report["clip"] = directory.name
     report["fps"] = truth["fps"]
     return report
+
+
+def summarise(clips: list[dict[str, Any]]) -> dict[str, Any]:
+    errors = [error for clip in clips for error in clip["perFrameFloorErrorCm"]]
+    recoveries = [frames for clip in clips for frames in clip["recoveryFrames"]]
+    worst_recovery_s = max(
+        [float("inf") if frames is None else frames / clip["fps"] for clip in clips for frames in clip["recoveryFrames"]],
+        default=0.0,
+    )
+    median = round(float(np.median(errors)), 3) if errors else None
+    false_confident = sum(clip["falseConfident"] for clip in clips)
+    while_covered = sum(clip["trackedWhileOccluded"] for clip in clips)
+    return {
+        "aggregation": "per-frame median floor errors pooled over clips",
+        "clips": len(clips),
+        "medianFloorErrorCm": median,
+        "falseConfident": false_confident,
+        "trackedWhileOccluded": while_covered,
+        "lostWhileVisible": sum(clip["lostWhileVisible"] for clip in clips),
+        "worstRecoveryFrames": None if None in recoveries else max(recoveries, default=0),
+        "gate": (
+            f"median floor error < {GATE_MEDIAN_CM} cm, no camera more than {FALSE_CONFIDENT_CM:.0f} cm wrong, "
+            f"no camera while covered, court found within {GATE_RECOVERY_S} s of the lens clearing"
+        ),
+        "gatePassed": bool(
+            median is not None
+            and median < GATE_MEDIAN_CM
+            and false_confident == 0
+            and while_covered == 0
+            and worst_recovery_s <= GATE_RECOVERY_S
+        ),
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -124,25 +154,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
     clips = [evaluate_clip_dir(directory) for directory in args.clips]
-    errors = [error for clip in clips for error in clip["perFrameFloorErrorCm"]]
-    recoveries = [frames for clip in clips for frames in clip["recoveryFrames"]]
-    worst_recovery_s = max(
-        [float("inf") if frames is None else frames / clip["fps"] for clip in clips for frames in clip["recoveryFrames"]],
-        default=0.0,
-    )
-    median = round(float(np.median(errors)), 3) if errors else None
-    summary = {
-        "aggregation": "per-frame median floor errors pooled over clips",
-        "clips": len(clips),
-        "medianFloorErrorCm": median,
-        "falseConfident": sum(clip["falseConfident"] for clip in clips),
-        "trackedWhileOccluded": sum(clip["trackedWhileOccluded"] for clip in clips),
-        "worstRecoveryFrames": None if None in recoveries else max(recoveries, default=0),
-        "gate": f"median floor error < {GATE_MEDIAN_CM} cm, court found within {GATE_RECOVERY_S} s of the lens clearing",
-        "gatePassed": bool(median is not None and median < GATE_MEDIAN_CM and worst_recovery_s <= GATE_RECOVERY_S),
-    }
-    report = {"clips": clips, "summary": summary}
-    text = json.dumps(report, indent=2)
+    report = {"clips": clips, "summary": summarise(clips)}
+    text = json.dumps(report, indent=2, allow_nan=False)
     if args.out:
         args.out.write_text(text, encoding="utf-8")
     print(text)

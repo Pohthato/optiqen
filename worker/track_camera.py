@@ -3,14 +3,15 @@
 
     python track_camera.py clip.mp4 --golden clip.json --out clip.track.json [--overlay clip.track.mp4]
 
-The labelled points of one frame give a first camera (geometry.calibrate); the court lines in
-that frame refine it and fix the focal length; then every frame is tracked from the start of
-the video (geometry.tracking). Lost frames get no camera.
+The labelled points of one frame give a first camera; the court lines in that frame refine it,
+fix the focal length and must agree with the points (geometry.tracking.anchor_on_points). Then
+every frame is tracked from the start of the video. Lost frames get no camera.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Iterator
@@ -19,20 +20,32 @@ import cv2
 import numpy as np
 
 from evaluation.golden import keypoint_frame
-from geometry.calibrate import solve_camera
-from geometry.lines import line_response
-from geometry.tracking import TrackedFrame, acquire, iter_track, model_polylines
+from geometry.tracking import AnchorError, TrackedFrame, anchor_on_points, iter_track, model_polylines
 
 STATE_COLOURS = {"anchored": (0, 255, 0), "tracked": (0, 255, 255), "reanchored": (255, 160, 0), "lost": (0, 0, 255)}
 
 
-def _frames(capture: cv2.VideoCapture, keep: list[np.ndarray]) -> Iterator[np.ndarray]:
-    while True:
-        ok, frame = capture.read()
-        if not ok:
-            return
-        keep[:] = [frame]
-        yield frame
+class _Video:
+    """Frames read in order, each with its container timestamp; no seeking (phone files seek unevenly)."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        probe = cv2.VideoCapture(str(path))
+        self.opened = probe.isOpened()
+        self.fps = probe.get(cv2.CAP_PROP_FPS)
+        self.size = (int(probe.get(cv2.CAP_PROP_FRAME_WIDTH)), int(probe.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+        probe.release()
+
+    def frames(self) -> Iterator[tuple[float, np.ndarray]]:
+        capture = cv2.VideoCapture(str(self.path))
+        try:
+            while True:
+                ok, frame = capture.read()
+                if not ok:
+                    return
+                yield capture.get(cv2.CAP_PROP_POS_MSEC), frame
+        finally:
+            capture.release()
 
 
 def _draw(frame: np.ndarray, index: int, step: TrackedFrame) -> np.ndarray:
@@ -46,12 +59,22 @@ def _draw(frame: np.ndarray, index: int, step: TrackedFrame) -> np.ndarray:
     return image
 
 
-def _frame_entry(step: TrackedFrame) -> dict:
-    entry = {"state": step.state, "inliers": step.inliers, "rmsPx": round(step.rms_px, 3) if np.isfinite(step.rms_px) else None}
+def _frame_entry(time_ms: float, step: TrackedFrame) -> dict:
+    entry = {
+        "timeMs": round(time_ms, 3),
+        "state": step.state,
+        "inliers": step.inliers,
+        "rmsPx": round(step.rms_px, 3) if np.isfinite(step.rms_px) else None,
+    }
     if step.camera is not None:
         entry["rvec"] = [round(float(v), 7) for v in np.asarray(step.camera.rvec).ravel()]
         entry["tvec"] = [round(float(v), 6) for v in np.asarray(step.camera.tvec).ravel()]
     return entry
+
+
+def _fail(message: str) -> int:
+    print(message, file=sys.stderr)
+    return 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -62,40 +85,46 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--overlay", type=Path, help="also write a video with the tracked court drawn on it")
     args = parser.parse_args(argv)
 
-    placed = keypoint_frame(json.loads(args.golden.read_text(encoding="utf-8")))
+    labels = json.loads(args.golden.read_text(encoding="utf-8"))
+    placed = keypoint_frame(labels)
     if placed is None or len(placed[1]) < 4:
-        print("the labels need at least 4 court points placed on one frame", file=sys.stderr)
-        return 1
-    capture = cv2.VideoCapture(str(args.video))
-    if not capture.isOpened():
-        print(f"cannot read {args.video}", file=sys.stderr)
-        return 1
-    fps = capture.get(cv2.CAP_PROP_FPS)
-    size = (int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)), int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+        return _fail("the labels need at least 4 court points placed on one frame")
+    video = _Video(args.video)
+    if not video.opened:
+        return _fail(f"cannot read {args.video}")
+    labelled_size = labels.get("imageSize")
+    if labelled_size and tuple(labelled_size) != video.size:
+        return _fail(
+            f"the labels were placed on a {labelled_size[0]}x{labelled_size[1]} video but this one is "
+            f"{video.size[0]}x{video.size[1]}: label the same file you track"
+        )
+    # The labeller times a frame as index * 1000 / fps with the clip's frame rate.
+    fps = labels.get("sourceFps") or video.fps
+    if not (isinstance(fps, (int, float)) and math.isfinite(fps) and fps > 0):
+        return _fail("the video has no frame rate: add sourceFps to the labels")
     time_ms, points = placed
     anchor_frame = int(round((time_ms or 0) / 1000 * fps))
-    capture.set(cv2.CAP_PROP_POS_FRAMES, anchor_frame)
-    ok, frame = capture.read()
-    solution = solve_camera(points, size)
-    if not ok or solution is None or solution.tier == "unavailable":
-        print("the labelled court points do not give a usable camera: check their names and positions", file=sys.stderr)
-        return 1
-    anchor = acquire(line_response(frame), solution.camera, fit_intrinsics=True)
-    if anchor is None or not anchor.confident:
-        print("the court lines could not be found near the labelled points", file=sys.stderr)
-        return 1
+    frame = next((frame for index, (_, frame) in enumerate(video.frames()) if index == anchor_frame), None)
+    if frame is None:
+        return _fail(f"the labelled frame ({anchor_frame}) is past the end of the video")
+    try:
+        anchor = anchor_on_points(frame, points)
+    except AnchorError as error:
+        return _fail(str(error))
 
-    capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
-    current: list[np.ndarray] = []
-    writer = None
-    if args.overlay:
-        writer = cv2.VideoWriter(str(args.overlay), cv2.VideoWriter_fourcc(*"mp4v"), fps, size)
+    writer = cv2.VideoWriter(str(args.overlay), cv2.VideoWriter_fourcc(*"mp4v"), fps, video.size) if args.overlay else None
+    current: list[tuple[float, np.ndarray]] = []
+
+    def remembered() -> Iterator[np.ndarray]:
+        for item in video.frames():
+            current[:] = [item]
+            yield item[1]
+
     frames = []
-    for index, step in enumerate(iter_track(_frames(capture, current), anchor.camera, fit_intrinsics=False)):
-        frames.append(_frame_entry(step))
+    for index, step in enumerate(iter_track(remembered(), anchor.camera, fit_intrinsics=False)):
+        frames.append(_frame_entry(current[0][0], step))
         if writer is not None:
-            writer.write(_draw(current[0], index, step))
-    capture.release()
+            writer.write(_draw(current[0][1], index, step))
     if writer is not None:
         writer.release()
 
@@ -105,12 +134,14 @@ def main(argv: list[str] | None = None) -> int:
     result = {
         "video": args.video.name,
         "fps": fps,
-        "imageSize": list(size),
+        "imageSize": list(video.size),
         "anchorFrame": anchor_frame,
         "intrinsics": {"focalPx": round(camera.focal_px, 3), "cx": camera.cx, "cy": camera.cy, "k1": round(camera.k1, 6)},
         "conventions": {
             "rvec/tvec": "world (court metres: x across, y along, z up) to camera (OpenCV: x right, y down, z forward)",
+            "timeMs": "the frame's timestamp in the video file",
             "lost": "no camera: the court could not be found with confidence in that frame",
+            "rmsPx": "RMS distance of the lines that agree with the camera (within the inlier tolerance)",
         },
         "summary": {
             "frames": len(frames),
@@ -120,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
         },
         "frames": frames,
     }
-    args.out.write_text(json.dumps(result), encoding="utf-8")
+    args.out.write_text(json.dumps(result, allow_nan=False), encoding="utf-8")
     print(json.dumps(result["summary"]))
     return 0
 

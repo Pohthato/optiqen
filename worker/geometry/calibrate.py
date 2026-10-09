@@ -28,8 +28,8 @@ VALIDATED_MAX_LOO_CM = 15.0
 APPROX_MAX_RMS_PX = 8.0
 APPROX_MAX_LOO_CM = 40.0
 VALIDATED_MIN_REDUNDANCY = 2
-_PRIOR_FOCAL_PX_PER_LOG = 6.0
-_PRIOR_K1_PX_PER_UNIT = 30.0
+PRIOR_FOCAL_PX_PER_LOG = 6.0
+PRIOR_K1_PX_PER_UNIT = 30.0
 
 
 @dataclass(frozen=True)
@@ -109,9 +109,9 @@ def _refine(
         projected = _unpack(params, cx, cy, fit_k1).project(world)
         flat = (projected - pixels).ravel()
         flat[~np.isfinite(flat)] = 1e3
-        terms = [flat, [_PRIOR_FOCAL_PX_PER_LOG * (params[6] - np.log(focal_typical))]]
+        terms = [flat, [PRIOR_FOCAL_PX_PER_LOG * (params[6] - np.log(focal_typical))]]
         if fit_k1:
-            terms.append([_PRIOR_K1_PX_PER_UNIT * params[7]])
+            terms.append([PRIOR_K1_PX_PER_UNIT * params[7]])
         return np.concatenate(terms)
 
     result = least_squares(residuals, start, loss="soft_l1", f_scale=2.0, method="trf", max_nfev=200)

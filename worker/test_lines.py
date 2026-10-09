@@ -84,59 +84,57 @@ class FindLineOffsetsTests(unittest.TestCase):
         points, directions, _ = sample_lines(court_lines(), 0.25)
         pixels, normals = normals_at(CAMERA, points, directions)
         inside = (pixels[:, 0] > 12) & (pixels[:, 0] < SIZE[0] - 12) & (pixels[:, 1] > 12) & (pixels[:, 1] < SIZE[1] - 12)
-        offsets, strengths = find_line_offsets(response, pixels[inside] + 2.5 * normals[inside], normals[inside], 8.0)
+        offsets = find_line_offsets(response, pixels[inside] + 2.5 * normals[inside], normals[inside], 8.0)
         found = np.isfinite(offsets)
         self.assertGreater(found.mean(), 0.8)
         self.assertLess(float(np.median(np.abs(offsets[found] + 2.5))), 0.3)
-        self.assertTrue((strengths[found] > 0).all())
 
     def test_nothing_to_find_gives_nan(self):
         response = np.zeros((80, 120), dtype=np.float32)
-        offsets, strengths = find_line_offsets(response, np.array([[60.0, 40.0]]), np.array([[1.0, 0.0]]), 8.0)
+        offsets = find_line_offsets(response, np.array([[60.0, 40.0]]), np.array([[1.0, 0.0]]), 8.0)
         self.assertTrue(np.isnan(offsets[0]))
-        self.assertEqual(strengths[0], 0.0)
 
     def test_points_outside_the_image_give_nan(self):
         response = ridge_image([(60.0, 1.0, 0.8)])
-        offsets, _ = find_line_offsets(response, np.array([[60.0, -5.0], [200.0, 40.0]]), np.array([[1.0, 0.0], [1.0, 0.0]]), 8.0)
+        offsets = find_line_offsets(response, np.array([[60.0, -5.0], [200.0, 40.0]]), np.array([[1.0, 0.0], [1.0, 0.0]]), 8.0)
         self.assertTrue(np.isnan(offsets).all())
 
     def test_prefers_the_nearer_of_two_strong_parallel_lines(self):
         # Singles and doubles sidelines can sit a few pixels apart far from the phone.
         response = ridge_image([(40.0, 1.0, 1.0), (52.0, 1.0, 0.7)])
-        offsets, _ = find_line_offsets(response, np.array([[50.0, 40.0]]), np.array([[1.0, 0.0]]), 14.0)
+        offsets = find_line_offsets(response, np.array([[50.0, 40.0]]), np.array([[1.0, 0.0]]), 14.0)
         self.assertAlmostEqual(float(offsets[0]), 2.0, delta=0.2)
 
     def test_a_faint_ridge_beside_a_strong_line_is_ignored(self):
         response = ridge_image([(40.0, 1.0, 1.0), (52.0, 1.0, 0.2)])
-        offsets, _ = find_line_offsets(response, np.array([[50.0, 40.0]]), np.array([[1.0, 0.0]]), 14.0)
+        offsets = find_line_offsets(response, np.array([[50.0, 40.0]]), np.array([[1.0, 0.0]]), 14.0)
         self.assertAlmostEqual(float(offsets[0]), -10.0, delta=0.2)
 
     def test_finds_the_centre_of_a_wide_line(self):
         rng = np.random.default_rng(0)
         response = ridge_image([(63.3, 6.0, 0.6)]) + rng.normal(0, 0.02, (80, 120)).astype(np.float32)
-        offsets, _ = find_line_offsets(response, np.array([[60.0, 40.0]]), np.array([[1.0, 0.0]]), 12.0)
+        offsets = find_line_offsets(response, np.array([[60.0, 40.0]]), np.array([[1.0, 0.0]]), 12.0)
         self.assertAlmostEqual(float(offsets[0]), 3.3, delta=0.4)
 
     def test_each_point_searches_its_own_radius(self):
         response = ridge_image([(66.0, 1.0, 0.8)])
         pixels = np.array([[60.0, 20.0], [60.0, 60.0]])
-        offsets, _ = find_line_offsets(response, pixels, np.array([[1.0, 0.0], [1.0, 0.0]]), np.array([3.0, 9.0]))
+        offsets = find_line_offsets(response, pixels, np.array([[1.0, 0.0], [1.0, 0.0]]), np.array([3.0, 9.0]))
         self.assertTrue(np.isnan(offsets[0]))
         self.assertAlmostEqual(float(offsets[1]), 6.0, delta=0.2)
 
     def test_a_line_wider_than_a_small_radius_needs_a_radius_that_covers_it(self):
         # Near the phone a painted line can be 15+ pixels wide.
         response = ridge_image([(61.0, 8.0, 0.6)])
-        offsets, _ = find_line_offsets(response, np.array([[60.0, 40.0]]), np.array([[1.0, 0.0]]), 4.0)
+        offsets = find_line_offsets(response, np.array([[60.0, 40.0]]), np.array([[1.0, 0.0]]), 4.0)
         self.assertTrue(np.isnan(offsets[0]))
-        offsets, _ = find_line_offsets(response, np.array([[60.0, 40.0]]), np.array([[1.0, 0.0]]), np.array([4.0 + 8.0 + 1.0]))
+        offsets = find_line_offsets(response, np.array([[60.0, 40.0]]), np.array([[1.0, 0.0]]), np.array([4.0 + 8.0 + 1.0]))
         self.assertAlmostEqual(float(offsets[0]), 1.0, delta=0.3)
 
     def test_a_bright_area_wider_than_the_search_is_not_a_line(self):
         response = np.zeros((80, 120), dtype=np.float32)
         response[:, 30:90] = 0.8
-        offsets, _ = find_line_offsets(response, np.array([[60.0, 40.0]]), np.array([[1.0, 0.0]]), 8.0)
+        offsets = find_line_offsets(response, np.array([[60.0, 40.0]]), np.array([[1.0, 0.0]]), 8.0)
         self.assertTrue(np.isnan(offsets[0]))
 
 
