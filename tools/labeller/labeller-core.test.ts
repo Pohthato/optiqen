@@ -362,6 +362,37 @@ describe("labeller core: hits from audio", () => {
     expect(core.detectOnsets(audio.samples, audio.rate)).toHaveLength(1);
   });
 
+  it("finds the same onsets as the worker's Python detector on the same audio", () => {
+    const script = [
+      "import base64, json, sys",
+      "from audio.onsets import detect_onsets",
+      "from simulation.audio import render_audio",
+      "rate = int(sys.argv[4])",
+      "samples, _ = render_audio(json.loads(sys.argv[1]), float(sys.argv[2]), sample_rate=rate, distractors=int(sys.argv[3]), seed=21)",
+      "samples = samples.astype('<f4')",
+      "onsets = [[o.time_ms, o.strength] for o in detect_onsets(samples, rate)]",
+      "print(json.dumps({'samples': base64.b64encode(samples.tobytes()).decode(), 'onsets': onsets}))",
+    ].join("\n");
+    const cases: [number[], number, number, number][] = [
+      [[0.5, 1.4, 2.2, 3.05], 3, 4.0, 48000],
+      [[0.7, 1.9], 1, 2.5, 44100],
+    ];
+    for (const [hits, distractors, seconds, rate] of cases) {
+      const out = JSON.parse(
+        execFileSync(python, ["-c", script, JSON.stringify(hits), String(seconds), String(distractors), String(rate)], {
+          cwd: workerDir,
+          encoding: "utf8",
+          maxBuffer: 64 * 1024 * 1024,
+        }),
+      );
+      const bytes = Buffer.from(out.samples, "base64");
+      const js = core.detectOnsets(new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4), rate);
+      expect(out.onsets.length).toBeGreaterThanOrEqual(hits.length);
+      expect(js.map((o: any) => o.timeMs)).toEqual(out.onsets.map((o: number[]) => o[0]));
+      js.forEach((o: any, i: number) => expect(Math.abs(o.strength - out.onsets[i][1])).toBeLessThanOrEqual(0.011));
+    }
+  });
+
   it("turns onsets into suggestions, skipping hits already labelled", () => {
     const state = freshState();
     core.addContact(state, 1000, "clear");
