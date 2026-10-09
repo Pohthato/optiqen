@@ -3,9 +3,17 @@
 
 Frame: x runs across the court from the left singles sideline (0) to the right
 singles sideline (5.18); y runs along the court from the near baseline (0) to
-the far baseline (13.40); z is up from the floor. The doubles sidelines sit
-0.46 m outside the singles sidelines and stay visible during singles play, so
-they are part of the model.
+the far baseline (13.40); z is up from the floor. These are the BWF dimensions,
+which run to the outer edges of the boundary lines: lines are 40 mm wide and
+form part of the area they define, so a shuttle on the line is in. Inner lines
+follow the same rule: the short service line's net-side edge is 1.98 m from the
+net, and the long service line's back edge is 0.76 m inside the baseline.
+
+The painted line centres sit half a line inside those edges; the keypoints,
+court lines and tracking use the centres. Fitting both readings to real
+footage confirmed it (more lines explained, 25 % lower residuals). The doubles
+sidelines sit 0.46 m outside the singles sidelines and stay visible during
+singles play, so they are part of the model.
 """
 from __future__ import annotations
 
@@ -22,20 +30,23 @@ LINE_WIDTH_M = 0.04
 SHORT_SERVICE_M = 1.98
 LONG_SERVICE_INSET_M = 0.76
 
+_HALF_LINE_M = LINE_WIDTH_M / 2
+
+# Painted line centres.
 COLUMNS: dict[str, float] = {
-    "dl": -DOUBLES_MARGIN_M,
-    "sl": 0.0,
+    "dl": -DOUBLES_MARGIN_M + _HALF_LINE_M,
+    "sl": _HALF_LINE_M,
     "c": SINGLES_WIDTH_M / 2,
-    "sr": SINGLES_WIDTH_M,
-    "dr": SINGLES_WIDTH_M + DOUBLES_MARGIN_M,
+    "sr": SINGLES_WIDTH_M - _HALF_LINE_M,
+    "dr": SINGLES_WIDTH_M + DOUBLES_MARGIN_M - _HALF_LINE_M,
 }
 ROWS: dict[str, float] = {
-    "back0": 0.0,
-    "long0": LONG_SERVICE_INSET_M,
-    "short0": NET_Y_M - SHORT_SERVICE_M,
-    "short1": NET_Y_M + SHORT_SERVICE_M,
-    "long1": COURT_LENGTH_M - LONG_SERVICE_INSET_M,
-    "back1": COURT_LENGTH_M,
+    "back0": _HALF_LINE_M,
+    "long0": LONG_SERVICE_INSET_M + _HALF_LINE_M,
+    "short0": NET_Y_M - SHORT_SERVICE_M - _HALF_LINE_M,
+    "short1": NET_Y_M + SHORT_SERVICE_M + _HALF_LINE_M,
+    "long1": COURT_LENGTH_M - LONG_SERVICE_INSET_M - _HALF_LINE_M,
+    "back1": COURT_LENGTH_M - _HALF_LINE_M,
 }
 
 

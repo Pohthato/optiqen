@@ -39,12 +39,27 @@
   const KEYPOINT_SOURCES = ["clicked", "adjusted", "proposed"];
 
   // Court geometry in metres, mirroring worker/geometry/court_model.py.
+  // BWF dimensions run to the outer edges of the 40 mm lines; points are line centres, half a line inside.
   const SINGLES_WIDTH_M = 5.18;
   const DOUBLES_MARGIN_M = 0.46;
   const COURT_LENGTH_M = 13.4;
   const NET_Y_M = COURT_LENGTH_M / 2;
-  const COLUMN_X = { dl: -DOUBLES_MARGIN_M, sl: 0, c: SINGLES_WIDTH_M / 2, sr: SINGLES_WIDTH_M, dr: SINGLES_WIDTH_M + DOUBLES_MARGIN_M };
-  const ROW_Y = { back0: 0, long0: 0.76, short0: NET_Y_M - 1.98, short1: NET_Y_M + 1.98, long1: COURT_LENGTH_M - 0.76, back1: COURT_LENGTH_M };
+  const HALF_LINE_M = 0.02;
+  const COLUMN_X = {
+    dl: -DOUBLES_MARGIN_M + HALF_LINE_M,
+    sl: HALF_LINE_M,
+    c: SINGLES_WIDTH_M / 2,
+    sr: SINGLES_WIDTH_M - HALF_LINE_M,
+    dr: SINGLES_WIDTH_M + DOUBLES_MARGIN_M - HALF_LINE_M,
+  };
+  const ROW_Y = {
+    back0: HALF_LINE_M,
+    long0: 0.76 + HALF_LINE_M,
+    short0: NET_Y_M - 1.98 - HALF_LINE_M,
+    short1: NET_Y_M + 1.98 + HALF_LINE_M,
+    long1: COURT_LENGTH_M - 0.76 - HALF_LINE_M,
+    back1: COURT_LENGTH_M - HALF_LINE_M,
+  };
   const KEYPOINT_POSITIONS = {};
   for (const row of ROWS) for (const column of COLUMNS) KEYPOINT_POSITIONS[`${row}_${column}`] = [COLUMN_X[column], ROW_Y[row], 0];
   KEYPOINT_POSITIONS.post_left_base = [COLUMN_X.dl, NET_Y_M, 0];

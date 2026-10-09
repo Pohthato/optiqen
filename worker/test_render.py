@@ -4,6 +4,7 @@ import unittest
 import numpy as np
 
 from geometry.camera import Camera
+from geometry.court_model import ROWS
 from simulation.render import render_frame
 
 SIZE = (640, 360)
@@ -37,8 +38,8 @@ class RenderFrameTests(unittest.TestCase):
     def test_a_player_hides_the_line_behind_them(self):
         clear = render_frame(CAMERA, SIZE, noise_sigma=0)
         hidden = render_frame(CAMERA, SIZE, players=[(1.5, 3.0)], noise_sigma=0)
-        self.assertTrue(np.all(pixel_at(clear, (1.3, 4.72, 0.0)) > 170))
-        self.assertLess(int(pixel_at(hidden, (1.3, 4.72, 0.0)).sum()), 300)
+        self.assertTrue(np.all(pixel_at(clear, (1.3, ROWS["short0"], 0.0)) > 170))
+        self.assertLess(int(pixel_at(hidden, (1.3, ROWS["short0"], 0.0)).sum()), 300)
 
     def test_the_shuttle_is_a_bright_blob_where_it_projects(self):
         without = render_frame(CAMERA, SIZE, noise_sigma=0)
