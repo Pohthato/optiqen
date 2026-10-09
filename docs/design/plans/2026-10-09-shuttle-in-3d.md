@@ -22,3 +22,23 @@ Each step is pushed on its own.
 - **Physics before learning.** Every number traces back to detections and a physical model whose assumptions are written down. A learned model can later propose; physics checks.
 - **Uncertainty is part of the answer.** A landing 3 cm from the line with a 20 cm uncertainty is "too close to call", not "in".
 - **Synthetic first, real second.** The synthetic generator has exact 3D truth, so it can measure everything. Real footage measures what labels allow: hits and shuttle clicks now, landing clicks next.
+
+## 3a results (one flight in 3D, hit times given)
+
+Synthetic flights from random rallies (`worker/test_flight_fit.py` setup): a steadily held phone from behind, the corner and the side; 30 and 60 fps; 2 px detector jitter; 10 % of frames missed. The error is at the flight's end point: the receive point, or the landing for a rally's last shot.
+
+| View, fps | Flights | End point, median / 90th pct | Apex height, median | Launch speed, median |
+| --- | --- | --- | --- | --- |
+| behind, 30 | 42 | 8.6 / 47.9 cm | 1.0 cm | 1.13 m/s |
+| behind, 60 | 42 | 6.8 / 24.3 cm | 0.7 cm | 0.72 m/s |
+| corner, 30 | 42 | 9.4 / 29.1 cm | 0.7 cm | 0.71 m/s |
+| corner, 60 | 42 | 8.0 / 15.6 cm | 0.4 cm | 0.47 m/s |
+| side, 30 | 27 | 3.9 / 15.9 cm | 0.8 cm | 0.31 m/s |
+| side, 60 | 32 | 3.7 / 59.3 cm | 0.7 cm | 0.23 m/s |
+| **all** | **227** | **7.2 / 28.7 cm** | | |
+
+**Gate passed:** median under 30 cm. Heights are the best-determined quantity, since gravity fixes them. Depth along the line of sight is the weakest, which is why the 90th percentile from behind the baseline is the largest; 3b's shared contact points between flights will tighten it.
+
+- **Uncertainty:** the fit's covariance is scaled ×1.5 in variance so the stated 95 % region holds the truth about 95 % of the time. Measured on 192 flights: 89.6 % unscaled, 96.4 % scaled. Real footage will need recalibration from labels.
+- **Robustness:** start seeds come from the first three sightings, so one stray detection at the start of a flight cannot mislead the depth; the loss is robust.
+- **Speed:** about 1.1 s per flight on this laptop's CPU (vectorised RK4 at 20 ms steps, within 2 mm of a fine step). 3b will need it faster.
