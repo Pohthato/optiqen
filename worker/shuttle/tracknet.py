@@ -272,11 +272,11 @@ class ShuttleDetector:
         inpaintnet.load_state_dict(inpaint_ckpt["model"])
         return cls(tracknet.to(device), inpaintnet.to(device), seq_len, int(inpaint_ckpt["param_dict"]["seq_len"]), device)
 
-    def background(self, frames: Sequence[np.ndarray] | Iterable[np.ndarray]) -> np.ndarray:
-        """The clip's empty court: the median of up to BACKGROUND_SAMPLES evenly spread frames."""
-        frames = list(frames) if not isinstance(frames, Sequence) else frames
-        step = max(1, len(frames) // BACKGROUND_SAMPLES)
-        return np.median(np.stack([to_input(frame) for frame in frames[::step]]), axis=0).astype(np.uint8)
+    def background(self, frames: Iterable[np.ndarray]) -> np.ndarray:
+        """The clip's empty court: the median of the given frames (pass a spread-out sample, e.g.
+        BACKGROUND_SAMPLES of them). Each is shrunk to the network's size as it arrives, so a
+        generator over a long 4K video holds only small images."""
+        return np.median(np.stack([to_input(frame) for frame in frames]), axis=0).astype(np.uint8)
 
     def _predict(self, background: np.ndarray) -> Callable[[list[list[np.ndarray]]], np.ndarray]:
         def predict(windows: list[list[np.ndarray]]) -> np.ndarray:

@@ -4,63 +4,99 @@ import unittest
 import numpy as np
 
 from audio.onsets import Onset, detect_onsets
+from evaluation.hits_benchmark import SIZE, Scenario, simulate
 from geometry.camera import Camera
-from hits import court_side, find_hits, flight_breaks
+from hits import ONSET_GAP_MS, court_side, find_hits
 from simulation.audio import SAMPLE_RATE
 from simulation.clip import make_clip
 from simulation.rally import canned_rally
 
-SIZE = (1280, 720)
 FPS = 30.0
 CAMERA = Camera.look_at((2.59, -5.0, 3.0), (2.59, 7.0, 0.0), 1300.0 * 1280 / 1920, SIZE)
-# The thresholds were tuned on seeds 0-9; these rallies were not looked at.
-SEEDS = (20, 21, 22, 23, 24)
 
 
-def clip_and_track(seed, distractors=3, noise_px=1.0, dropout=0.1):
-    """A synthetic rally and what a good detector gives: the true pixel with noise, some frames missed."""
-    clip = make_clip(CAMERA, SIZE, canned_rally(), fps=FPS, handheld=True, seed=seed, tail_s=0.3, distractors=distractors, render=False)
+def times(count: int, fps: float = FPS) -> list[float]:
+    return [index * 1000.0 / fps for index in range(count)]
+
+
+def truth_track(clip, seed: int, jitter_px: float = 1.0) -> list:
     rng = np.random.default_rng(seed)
     track = []
     for camera, position in zip(clip.cameras, clip.shuttle):
-        if position is None or rng.random() < dropout:
-            track.append(None)
-            continue
-        pixel = camera.project(np.array([position]))[0]
-        inside = 0 <= pixel[0] < SIZE[0] and 0 <= pixel[1] < SIZE[1]
-        track.append(tuple(pixel + rng.normal(0, noise_px, 2)) if inside else None)
-    return clip, track
+        pixel = None if position is None else camera.project(np.array([position]))[0]
+        inside = pixel is not None and 0 <= pixel[0] < SIZE[0] and 0 <= pixel[1] < SIZE[1]
+        track.append(tuple(pixel + rng.normal(0, jitter_px, 2)) if inside else None)
+    return track
 
 
-def f1_at(found_ms, truth_ms, tolerance_ms=33.0):
-    unused = list(found_ms)
-    matched = 0
-    for truth in truth_ms:
-        best = min(unused, key=lambda t: abs(t - truth), default=None)
-        if best is not None and abs(best - truth) <= tolerance_ms:
-            matched += 1
-            unused.remove(best)
-    return 2 * matched / (len(found_ms) + len(truth_ms)) if found_ms or truth_ms else 1.0
+def found(hits, truth_ms, tolerance=33.0):
+    return sum(any(abs(hit.time_ms - t) <= tolerance for hit in hits) for t in truth_ms)
 
 
-class FlightBreakTests(unittest.TestCase):
-    def test_clear_turns_are_timed_where_the_two_paths_meet(self):
-        clip, track = clip_and_track(20)
-        turns = [b for b in flight_breaks(track, FPS) if b.kind == "turn" and b.clear]
-        truth = [contact.time * 1000 for contact in clip.rally.contacts[1:]]  # the serve has no incoming path
-        errors = [min(abs(turn.time_ms - t) for t in truth) for turn in turns]
-        self.assertGreaterEqual(len(turns), len(truth) - 2)
+def flight(start_frame: int, count: int, origin=(400.0, 500.0), velocity=(9.0, -12.0)) -> list:
+    """A smooth, moving image path: `count` detections from `start_frame`."""
+    return [None] * start_frame + [(origin[0] + velocity[0] * i, origin[1] + velocity[1] * i + 0.4 * i * i) for i in range(count)]
+
+
+class TurnTests(unittest.TestCase):
+    def test_without_sound_turns_are_timed_where_the_two_paths_meet(self):
+        sim = simulate(Scenario(seed=5, jitter_px=1.0, dropout=0.05, false_per_s=0.0, neighbour_per_s=0.0, sound=False))
+        hits = find_hits(sim.track, sim.times_ms, None)
+        truth = [contact.time * 1000 for contact in sim.clip.rally.contacts[1:]]
+        errors = [min(abs(hit.time_ms - t) for t in truth) for hit in hits]
+        self.assertTrue(hits)
         self.assertLess(float(np.median(errors)), 10.0)
 
-    def test_where_the_shuttle_appears_and_disappears(self):
-        track = [None] * 5 + [(100.0 + 5 * i, 200.0) for i in range(10)] + [None] * 5
-        breaks = flight_breaks(track, FPS)
-        self.assertEqual([(b.kind, b.frame) for b in breaks], [("start", 5), ("end", 14)])
+    def test_a_smooth_flight_has_no_hit(self):
+        track = flight(0, 40)
+        self.assertEqual(find_hits(track, times(len(track)), None), [])
 
-    def test_a_smooth_flight_has_no_clear_turn(self):
-        t = np.arange(30) / FPS
-        track = [(100 + 300 * x, 500 - 400 * x + 600 * x * x) for x in t]
-        self.assertFalse([b for b in flight_breaks(track, FPS) if b.kind == "turn" and b.clear])
+    def test_hit_times_follow_the_frame_timestamps(self):
+        # Phone video often has uneven frame timing; the path's time axis is the timestamps.
+        rng = np.random.default_rng(1)
+        stamps = np.cumsum(rng.uniform(28.0, 39.0, 40))
+        turn_at = stamps[20]
+        track = [(500.0 + 0.6 * abs(t - turn_at), 300.0 + (t - turn_at) * 0.5) for t in stamps]  # the shuttle reverses
+        hits = find_hits(track, list(stamps), [Onset(float(turn_at) + 30.0, 3.0)])
+        self.assertEqual(len(hits), 1)
+        self.assertLess(abs(hits[0].time_ms - turn_at), 10.0)
+
+
+class StartTests(unittest.TestCase):
+    def test_a_serve_is_a_sound_followed_by_a_moving_flight(self):
+        track = flight(15, 20)
+        hits = find_hits(track, times(len(track)), [Onset(470.0, 3.0)])
+        self.assertEqual([hit.evidence for hit in hits], ["sound and start"])
+
+    def test_a_lone_false_detection_after_a_sound_is_not_a_serve(self):
+        track = [None] * 15 + [(400.0, 500.0)] + [None] * 20
+        self.assertEqual(find_hits(track, times(len(track)), [Onset(470.0, 3.0)]), [])
+
+    def test_a_still_object_after_a_sound_is_not_a_serve(self):
+        track = [None] * 15 + [(400.0 + 0.5 * (i % 2), 500.0) for i in range(12)]
+        self.assertEqual(find_hits(track, times(len(track)), [Onset(470.0, 3.0)]), [])
+
+    def test_the_shuttle_coming_back_into_view_is_not_a_hit(self):
+        track = flight(15, 20, origin=(640.0, 5.0), velocity=(1.0, 12.0))
+        self.assertEqual(find_hits(track, times(len(track)), [Onset(470.0, 3.0)], frame_size=SIZE), [])
+        self.assertEqual(len(find_hits(track, times(len(track)), [Onset(470.0, 3.0)])), 1)
+
+
+class NeighbouringCourtTests(unittest.TestCase):
+    def test_a_sound_80_ms_before_every_hit_does_not_hide_the_hits(self):
+        clip = make_clip(CAMERA, SIZE, canned_rally(), fps=FPS, handheld=True, seed=3, tail_s=0.3, render=False)
+        before = [heard - 0.08 for heard in clip.contact_audio_times]
+        clip = make_clip(CAMERA, SIZE, canned_rally(), fps=FPS, handheld=True, seed=3, tail_s=0.3, render=False, distractor_times=before)
+        track = truth_track(clip, seed=3)
+        onsets = detect_onsets(clip.audio, SAMPLE_RATE, min_gap_ms=ONSET_GAP_MS)
+        hits = find_hits(track, times(len(track)), onsets, side=lambda pixel, frame: court_side(clip.cameras[frame], pixel), frame_size=SIZE)
+        truth = [contact.time * 1000 for contact in clip.rally.contacts]
+        self.assertGreaterEqual(found(hits, truth), len(truth) - 1)
+        self.assertFalse(any(hit.heard_ms is not None and any(abs(hit.heard_ms - d * 1000) < 5 for d in before) for hit in hits))
+
+    def test_a_sound_with_nothing_in_the_flight_is_not_a_hit(self):
+        track = flight(0, 40)
+        self.assertEqual(find_hits(track, times(len(track)), [Onset(600.0, 3.0)]), [])
 
 
 class CourtSideTests(unittest.TestCase):
@@ -73,45 +109,6 @@ class CourtSideTests(unittest.TestCase):
     def test_a_ray_that_never_comes_down_to_racket_height_has_no_side(self):
         sky = CAMERA.project(np.array([[2.59, 60.0, 30.0]]))[0]
         self.assertIsNone(court_side(CAMERA, tuple(sky)))
-
-
-class FindHitsTests(unittest.TestCase):
-    def test_hits_are_found_within_33_ms_and_neighbouring_court_hits_are_not(self):
-        scores = []
-        for seed in SEEDS:
-            clip, track = clip_and_track(seed)
-            onsets = detect_onsets(clip.audio, SAMPLE_RATE)
-            hits = find_hits(track, onsets, FPS, side=lambda b: court_side(clip.cameras[b.frame], b.pixel), frame_size=SIZE)
-            scores.append(f1_at([hit.time_ms for hit in hits], [contact.time * 1000 for contact in clip.rally.contacts]))
-            for distractor in clip.distractor_times:
-                self.assertFalse(any(hit.heard_ms is not None and abs(hit.heard_ms - distractor * 1000) < 5 for hit in hits), (seed, distractor))
-        self.assertGreaterEqual(float(np.mean(scores)), 0.95, scores)
-
-    def test_the_serve_is_found_from_its_sound_and_the_shuttle_appearing(self):
-        clip, track = clip_and_track(21)
-        hits = find_hits(track, detect_onsets(clip.audio, SAMPLE_RATE), FPS, frame_size=SIZE)
-        serve = clip.rally.contacts[0].time * 1000
-        self.assertTrue(any(hit.evidence == "sound and start" and abs(hit.time_ms - serve) <= 33 for hit in hits), hits[:2])
-
-    def test_without_sound_clear_turns_are_still_hits(self):
-        scores = []
-        for seed in SEEDS:
-            clip, track = clip_and_track(seed, distractors=0)
-            hits = find_hits(track, None, FPS)
-            self.assertTrue(all(hit.heard_ms is None for hit in hits))
-            scores.append(f1_at([hit.time_ms for hit in hits], [contact.time * 1000 for contact in clip.rally.contacts[1:]]))
-        self.assertGreaterEqual(float(np.mean(scores)), 0.75, scores)
-
-    def test_the_shuttle_coming_back_into_view_is_not_a_hit(self):
-        track = [None] * 10 + [(640.0 + i, 5.0 + 12 * i) for i in range(12)]
-        self.assertEqual(find_hits(track, [Onset(300.0, 3.0)], FPS, frame_size=SIZE), [])
-        self.assertEqual(len(find_hits(track, [Onset(300.0, 3.0)], FPS)), 1)
-
-    def test_a_sound_with_no_turn_or_start_near_it_is_not_a_hit(self):
-        t = np.arange(40) / FPS
-        track = [(100 + 300 * x, 500 - 400 * x + 600 * x * x) for x in t]  # one smooth flight
-        hits = find_hits(track, [Onset(600.0, 3.0)], FPS)
-        self.assertEqual(hits, [])
 
 
 if __name__ == "__main__":

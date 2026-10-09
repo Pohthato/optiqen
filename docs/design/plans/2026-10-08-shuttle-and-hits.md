@@ -29,8 +29,8 @@ Each step is pushed on its own.
 
 ## Results so far (2b)
 
-- **Synthetic clip (1280×720, 30 fps):** 61 of 61 in-view shuttles found; median error 1.0 px, 90th percentile 2.7 px.
-- **Hendry clip (766 frames, fast mode):** 540 frames seen and 59 short gaps filled. The 167 frames with no shuttle are between rallies and in longer losses. The overlay shows clean flight arcs. Accuracy needs your clicks (2b′).
+- **Synthetic clip (1280×720, 30 fps):** 61 of 61 in-view shuttles found; median error 1.0 px, 90th percentile 2.7 px. That was a one-off measurement. The tests check a 640×360 clip: median error under 2.5 px, few misses, and false alarms (none with overlapping windows; fast mode shows a faint still blob for a few frames before the serve).
+- **Hendry clip (766 frames, fast mode):** 540 frames detected and 59 short gaps filled. The 167 frames with no shuttle are between rallies and in longer losses. The overlay shows clean flight arcs. Accuracy needs your clicks (2b′).
 - **Speed:** on this laptop's CPU, about 0.2 s per frame in fast mode, and about 8× that with overlapping windows. The worker's GPU is where it runs for real; the authors report 25 fps.
 
 ## Shuttle clicks (2b′)
@@ -56,16 +56,36 @@ Each step is pushed on its own.
 - **No sound.** Without a sound track, clear turns (gain ≥ 0.11, jump ≥ 1.0) are hits. With a sound track, a hit nobody heard must be clearer still (gain ≥ 0.2, jump ≥ 1.2).
 - **Missed frames at the hit.** Where the detector missed two or more frames right at a split, the hit is timed by its sound less the measured delay rather than by extrapolated paths.
 
-**Results** (synthetic rallies at 30 fps: a steadily held phone, the detector modelled as the true position with 1 px noise and 10 % of frames missed, sound delay, 3 neighbouring-court hits per rally):
+**Results, first claimed:** F1 0.985 at ±33 ms on "unseen" rallies. The review (2026-10-09) showed those were the same canned rally with different noise, at 1 px detector jitter and 30 fps, with neighbouring-court sounds never closer than 150 ms to a hit and no false detections. **That claim is withdrawn.**
 
-| | Tuned on (10 rallies) | Unseen (5 rallies) |
-| --- | --- | --- |
-| F1 at ±33 ms, with sound | 0.978 | 0.985 |
-| Median / 90th percentile / worst timing error | 3.0 / 11.7 / 23.8 ms | 2.0 / 12.3 / 16.0 ms |
-| Neighbouring-court sounds taken as hits | 0 | 0 |
-| F1 without sound (serves excluded) | — | 0.78 |
+**Results on the hard benchmark** (`python -m evaluation.hits_benchmark --scenarios 60`):
+- random rallies, filmed from behind, the corner and the side;
+- 30 and 60 fps;
+- 1–3 px detector jitter, 5–20 % missed frames and false detections;
+- neighbouring-court sounds at uniformly random times;
+- 2 s without play after each rally.
 
-**Gate passed:** F1 ≥ 0.95 at ±33 ms on synthetic rallies, with neighbouring-court hits. The thresholds were set by looking at true and false cases on the first ten rallies. The unseen rallies were only scored afterwards.
+| Scenarios | F1 at ±33 ms | Recall | Precision | Neighbouring-court sounds taken as hits |
+| --- | --- | --- | --- | --- |
+| All (60) | 0.77 | 0.73 | 0.82 | 23 of 225 |
+| With sound (50) | 0.82 | 0.81 | 0.83 | 23 of 193 |
+| Side view (20) | 0.66 | 0.52 | 0.88 | 0 of 68 |
+| 60 fps (30) | 0.70 | 0.65 | 0.75 | 11 of 105 |
+| No sound (10) | 0.46 | 0.33 | 0.75 | — |
+
+Misses by shot: serve 25, drop 17, clear 14, smash 13, lift 11, block 6, net 1. Found hits are timed well (median 3.9 ms, 90th percentile 14.6 ms).
+
+**Gate not met.** The cause is the method. Bends in the *image* path are not the game: perspective makes a shuttle flying away from the phone look as if it brakes, a far-court smash barely bends on screen, and the turn score is relative to speed rather than to the detector's noise. Phase 3 replaces it. It fits each flight as a 3D shuttle under gravity and drag through the per-frame cameras, and puts hits where one physically consistent flight ends and the next begins, timed by the sound. It must beat this baseline on the same benchmark.
+
+**Review fixes made now (2026-10-09):**
+- **Timestamps:** hits are timed from each frame's timestamp, so variable frame rate and missing fps metadata are handled.
+- **Onset spacing:** onsets for hit finding are kept 40 ms apart (the labeller keeps 120 ms), so a neighbouring court's sound can no longer hide a hit that follows it closely.
+- **Serves:** a start must open a moving, smooth flight of six detections, so a lone false detection or a still object cannot become a serve. Each start is claimed by one sound, the one that fits the clip's measured delay.
+- **Filled gaps:** these are not used as sightings for hits.
+- **First-sighting points:** a serve's reported point is labelled as the first sighting.
+- **Detector output:** it reports detected and filled frames separately.
+- **Background memory:** frames are shrunk as they are sampled, so 4K video no longer holds about 3 GB.
+- **Tests:** these now count false alarms and run the default overlapping mode.
 
 **Real footage:** `find_hits.py` runs end to end on the Hendry clip (9 hits from the flight alone, since this laptop has no ffmpeg; the worker image has it). Real accuracy will come from your labelled hits: `find_hits.py` writes contact events in the worker's result format, so `python -m evaluation.evaluate` scores them against the golden contacts.
 

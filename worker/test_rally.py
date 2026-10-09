@@ -5,7 +5,7 @@ import numpy as np
 
 from geometry.court_model import NET_POST_HEIGHT_M, NET_Y_M, SINGLES_WIDTH_M, COURT_LENGTH_M
 from geometry.shuttle_physics import simulate
-from simulation.rally import BODY_OFFSET_M, Shot, build_rally, canned_rally, player_positions
+from simulation.rally import BODY_OFFSET_M, Shot, build_rally, canned_rally, player_positions, random_rally
 
 
 def net_crossing_height(flight, terminal_velocity):
@@ -80,6 +80,36 @@ class BuildRallyRefusalTests(unittest.TestCase):
     def test_only_the_last_shot_may_land(self):
         with self.assertRaises(ValueError):
             build_rally((3.3, 3.6, 1.0), [Shot("serve", (1.5, 12.9), 1.9, None), Shot("clear", (3.5, 0.6), 1.8, None)])
+
+
+class RandomRallyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.rallies = [random_rally(np.random.default_rng(seed)) for seed in range(40)]
+
+    def test_rallies_are_varied(self):
+        kinds = {contact.kind for rally in self.rallies for contact in rally.contacts}
+        self.assertTrue({"serve", "clear", "drop", "smash", "lift", "net"} <= kinds, kinds)
+        lengths = {len(rally.contacts) for rally in self.rallies}
+        self.assertGreaterEqual(len(lengths), 5)
+        serve_depths = {rally.flights[0].end_time - rally.flights[0].start_time > 1.5 for rally in self.rallies}
+        self.assertEqual(serve_depths, {True, False})  # high and low serves
+
+    def test_every_rally_is_physically_valid(self):
+        for rally in self.rallies:
+            self.assertEqual(rally.contacts[0].kind, "serve")
+            hitters = [contact.hitter for contact in rally.contacts]
+            self.assertTrue(all(a != b for a, b in zip(hitters, hitters[1:])))
+            self.assertTrue(0.0 <= rally.landing[0] <= SINGLES_WIDTH_M and 0.0 <= rally.landing[1] <= COURT_LENGTH_M)
+
+    def test_smashes_are_hit_from_overhead(self):
+        smashes = [c for rally in self.rallies for c in rally.contacts if c.kind == "smash"]
+        self.assertTrue(smashes)
+        self.assertTrue(all(c.position[2] >= 1.8 for c in smashes))
+
+    def test_the_same_seed_gives_the_same_rally(self):
+        a, b = random_rally(np.random.default_rng(3)), random_rally(np.random.default_rng(3))
+        self.assertEqual(a.contacts, b.contacts)
 
 
 if __name__ == "__main__":

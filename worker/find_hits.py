@@ -20,7 +20,7 @@ import numpy as np
 from audio.extract import SAMPLE_RATE, read_audio
 from audio.onsets import detect_onsets
 from geometry.camera import Camera
-from hits import FlightBreak, court_side, find_hits
+from hits import ONSET_GAP_MS, court_side, find_hits
 
 
 def _cameras(track_doc: dict) -> list[Camera | None]:
@@ -42,25 +42,26 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     shuttle = json.loads(args.shuttle.read_text(encoding="utf-8"))
-    fps = shuttle["fps"]
     size = tuple(shuttle["imageSize"])
-    track = [(f["x"], f["y"]) if "x" in f else None for f in shuttle["frames"]]
+    # Filled gaps are InpaintNet's guesses, not sightings: a hit is judged on what was seen.
+    track = [(f["x"], f["y"]) if "x" in f and not f.get("inpainted") else None for f in shuttle["frames"]]
+    times_ms = [f["timeMs"] for f in shuttle["frames"]]
     sound_error = None
     try:
         audio = read_audio(args.video, SAMPLE_RATE)
     except RuntimeError as error:
         audio, sound_error = None, str(error)
         print(f"no sound used: {error}", file=sys.stderr)
-    onsets = detect_onsets(audio, SAMPLE_RATE) if audio is not None else None
+    onsets = detect_onsets(audio, SAMPLE_RATE, min_gap_ms=ONSET_GAP_MS) if audio is not None else None
     side = None
     if args.track:
         cameras = _cameras(json.loads(args.track.read_text(encoding="utf-8")))
 
-        def side(b: FlightBreak) -> str | None:
-            camera = cameras[b.frame] if b.frame < len(cameras) else None
-            return court_side(camera, b.pixel) if camera is not None else None
+        def side(pixel: tuple[float, float], frame: int) -> str | None:
+            camera = cameras[frame] if frame < len(cameras) else None
+            return court_side(camera, pixel) if camera is not None else None
 
-    hits = find_hits(track, onsets, fps, side=side, frame_size=size)
+    hits = find_hits(track, times_ms, onsets, side=side, frame_size=size)
     events = [
         {
             "type": "contact",
@@ -69,13 +70,15 @@ def main(argv: list[str] | None = None) -> int:
             "evidence": hit.evidence,
             "x": round(hit.pixel[0], 1),
             "y": round(hit.pixel[1], 1),
+            # A serve found from its sound and the flight that follows: x, y is the first sighting.
+            "point": "first sighting" if hit.evidence == "sound and start" else "contact",
         }
         for hit in hits
     ]
     evidence = [hit.evidence for hit in hits]
     result = {
         "video": args.video.name,
-        "fps": fps,
+        "fps": shuttle["fps"],
         "imageSize": list(size),
         "summary": {
             "hits": len(hits),

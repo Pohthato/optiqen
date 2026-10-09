@@ -88,6 +88,12 @@ class SoundAndConventionTests(unittest.TestCase):
             make_clip(odd, (161, 91), SERVE_ONLY, fps=10.0)
 
 
+class DistractorTimesTests(unittest.TestCase):
+    def test_neighbouring_court_hits_at_chosen_times(self):
+        clip = make_clip(CAMERA, SIZE, SERVE_ONLY, fps=10.0, seed=2, distractor_times=[0.52, 1.3], render=False)
+        self.assertEqual(clip.distractor_times, [0.52, 1.3])
+
+
 class NoRenderTests(unittest.TestCase):
     def test_everything_but_the_images_without_rendering(self):
         rendered = make_clip(CAMERA, SIZE, SERVE_ONLY, fps=10.0, handheld=True, seed=2)

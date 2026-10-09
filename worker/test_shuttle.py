@@ -152,12 +152,13 @@ class TrackNetOnSyntheticClipsTests(unittest.TestCase):
         inside = 0 <= pixel[0] < self.size[0] and 0 <= pixel[1] < self.size[1]
         return pixel if inside else None
 
-    def check(self, detections, max_median_px):
+    def check(self, detections, max_median_px, max_false_alarms):
         self.assertEqual(len(detections), len(self.clip.frames))
-        errors, missed = [], 0
+        errors, missed, false_alarms = [], 0, 0
         for index, detection in enumerate(detections):
             truth = self.truth_pixel(index)
             if truth is None:
+                false_alarms += detection is not None and not detection.inpainted
                 continue
             if detection is None:
                 missed += 1
@@ -165,10 +166,16 @@ class TrackNetOnSyntheticClipsTests(unittest.TestCase):
                 errors.append(float(np.hypot(detection.x - truth[0], detection.y - truth[1])))
         self.assertLessEqual(missed, 0.1 * (missed + len(errors)))
         self.assertLess(float(np.median(errors)), max_median_px)
+        self.assertLessEqual(false_alarms, max_false_alarms)
 
-    def test_finds_the_shuttle_in_flight(self):
+    def test_finds_the_shuttle_in_flight_with_overlapping_windows(self):
         background = self.detector.background(self.clip.frames)
-        self.check(self.detector.detect(self.clip.frames, background, self.size, overlap=False), 2.5)
+        self.check(self.detector.detect(self.clip.frames, background, self.size), 2.5, max_false_alarms=1)
+
+    def test_finds_the_shuttle_in_flight_in_fast_mode(self):
+        background = self.detector.background(self.clip.frames)
+        # One window per frame is noisier: here a faint still blob for a few frames before the serve.
+        self.check(self.detector.detect(self.clip.frames, background, self.size, overlap=False), 2.5, max_false_alarms=8)
 
     def test_a_short_gap_is_filled_along_the_flight(self):
         background = self.detector.background(self.clip.frames)

@@ -5,7 +5,7 @@ The shuttle's image path turns sharply at a hit. For every gap between two detec
 how much better two smooth curves, one either side, explain the nearby path than a single curve
 does (the gain, relative to the shuttle's speed), and where those two paths meet (the contact,
 between frames). Where the shuttle only appears (a serve from a hand the detector did not see)
-the path marks a start instead.
+and a moving flight follows, the path marks a start instead.
 
 Sound leads where there is sound: a hit is heard 0-80 ms after it happens (travel to the phone,
 plus any audio/video offset in the file), so each sound picks the best split just before it.
@@ -41,14 +41,18 @@ SAME_HIT_MS = 100.0
 SAME_TURN_MS = 150.0  # splits this close belong to one turn
 ENTRY_BORDER_FRACTION = 0.08  # a track starting this near the frame's edge is the shuttle coming back into view
 DEFAULT_DELAY_MS = 25.0  # sound travel plus A/V offset when this clip gives no measurement
+ONSET_GAP_MS = 40.0  # onsets for hit finding: a neighbouring court's sound must not hide a hit 40-120 ms later
+START_DETECTIONS = 6  # a start must open a flight: this many detections a smooth curve fits
+START_MAX_RMS_PX = 4.0
+START_MIN_MOVE_PX = 15.0
 CONTACT_HEIGHT_M = 1.5
 
 
 @dataclass(frozen=True)
 class FlightBreak:
-    kind: str  # "turn" | "start" | "end"
+    kind: str  # "turn" | "start"
     time_ms: float
-    strength: float  # turns: the gain at the chosen split; 0 for starts and ends
+    strength: float  # turns: the gain at the chosen split; 0 for starts
     pixel: tuple[float, float]
     frame: int
     jump: float = 0.0  # turns: velocity change where the two paths meet, relative to the faster
@@ -87,9 +91,9 @@ def _cost(t: np.ndarray, p: np.ndarray, curve: tuple[np.ndarray, np.ndarray]) ->
     return float(np.sum((np.polyval(curve[0], t) - p[:, 0]) ** 2 + (np.polyval(curve[1], t) - p[:, 1]) ** 2))
 
 
-def _splits(track: Sequence[tuple[float, float] | None], fps: float) -> list[_Split]:
+def _splits(track: Sequence[tuple[float, float] | None], times_ms: Sequence[float]) -> list[_Split]:
     seen = [index for index, point in enumerate(track) if point is not None]
-    times = np.array(seen, dtype=float) / fps  # seconds keep the polynomial fits well scaled
+    times = np.asarray(times_ms, dtype=float)[seen] / 1000.0  # seconds keep the polynomial fits well scaled
     points = np.array([track[index] for index in seen], dtype=float).reshape(-1, 2)
     side = SIDE_POINTS
     splits = []
@@ -104,7 +108,8 @@ def _splits(track: Sequence[tuple[float, float] | None], fps: float) -> list[_Sp
         speed2 = float(np.median(np.sum(np.diff(p, axis=0) ** 2, axis=1)))
         gain = (_cost(t, p, _fit(t, p)) - cost) / len(t) / (speed2 + 4.0)
         # The contact: where the two paths come closest, between the frames either side of the split.
-        taus = np.linspace(t[side - 1] - 0.5 / fps, t[side] + 0.5 / fps, 41)
+        half_frame = 0.5 * float(np.median(np.diff(t)))
+        taus = np.linspace(t[side - 1] - half_frame, t[side] + half_frame, 41)
         gap = np.hypot(np.polyval(before[0], taus) - np.polyval(after[0], taus), np.polyval(before[1], taus) - np.polyval(after[1], taus))
         best = taus[int(np.argmin(gap))]
         pixel = ((np.polyval(before[0], best) + np.polyval(after[0], best)) / 2, (np.polyval(before[1], best) + np.polyval(after[1], best)) / 2)
@@ -129,23 +134,24 @@ def _turns(splits: list[_Split], threshold: float) -> list[FlightBreak]:
     return turns
 
 
-def _starts(track: Sequence[tuple[float, float] | None], fps: float) -> list[FlightBreak]:
-    """Where the shuttle appears after, or vanishes before, a long enough gap."""
+def _starts(track: Sequence[tuple[float, float] | None], times_ms: Sequence[float]) -> list[FlightBreak]:
+    """Where a flight begins after a long enough gap: the shuttle appears and the next detections
+    follow one smooth, moving path (a lone false detection, or a shuttle lying still, is not one)."""
     seen = [index for index, point in enumerate(track) if point is not None]
     breaks = []
     for k, index in enumerate(seen):
         gap_before = index - seen[k - 1] - 1 if k > 0 else index
-        gap_after = seen[k + 1] - index - 1 if k + 1 < len(seen) else len(track) - 1 - index
-        if gap_before >= TRACK_GAP_FRAMES:
-            breaks.append(FlightBreak("start", index * 1000.0 / fps, 0.0, tuple(map(float, track[index])), index))
-        if gap_after >= TRACK_GAP_FRAMES and index < len(track) - 1:
-            breaks.append(FlightBreak("end", index * 1000.0 / fps, 0.0, tuple(map(float, track[index])), index))
+        following = seen[k : k + START_DETECTIONS]
+        if gap_before < TRACK_GAP_FRAMES or len(following) < START_DETECTIONS:
+            continue
+        if following[-1] - index > START_DETECTIONS + MAX_WINDOW_GAP_FRAMES:
+            continue
+        t = np.asarray(times_ms, dtype=float)[following] / 1000.0
+        p = np.array([track[i] for i in following], dtype=float)
+        rms = np.sqrt(_cost(t - t[0], p, _fit(t - t[0], p)) / len(t))
+        if rms <= START_MAX_RMS_PX and np.linalg.norm(p[-1] - p[0]) >= START_MIN_MOVE_PX:
+            breaks.append(FlightBreak("start", float(times_ms[index]), 0.0, tuple(map(float, track[index])), index))
     return breaks
-
-
-def flight_breaks(track: Sequence[tuple[float, float] | None], fps: float) -> list[FlightBreak]:
-    """Turns, starts and ends in a per-frame shuttle track (pixel or None per frame)."""
-    return sorted(_turns(_splits(track, fps), TURN_GAIN) + _starts(track, fps), key=lambda b: b.time_ms)
 
 
 def _at_border(pixel: tuple[float, float], frame_size: tuple[int, int]) -> bool:
@@ -164,16 +170,17 @@ def court_side(camera: Camera, pixel: tuple[float, float]) -> str | None:
 
 def find_hits(
     track: Sequence[tuple[float, float] | None],
+    times_ms: Sequence[float],
     onsets: Sequence | None,
-    fps: float,
-    side: Callable[[FlightBreak], str | None] | None = None,
+    side: Callable[[tuple[float, float], int], str | None] | None = None,
     frame_size: tuple[int, int] | None = None,
 ) -> list[Hit]:
-    """Hits from a per-frame shuttle track and sound onsets (None when the video has no sound).
-    `side` names the hitter's half ("near"/"far") so sound delays are measured per half: from a
-    phone behind one baseline, hits on the far half are heard ~30 ms later. With `frame_size`, a
-    track starting at the frame's edge is the shuttle coming back into view, not a hit."""
-    splits = _splits(track, fps)
+    """Hits from a per-frame shuttle track (pixel or None per frame, with each frame's timestamp)
+    and sound onsets (None when the video has no sound; detect them with min_gap_ms=ONSET_GAP_MS).
+    `side(pixel, frame)` names the hitter's half ("near"/"far") so sound delays are measured per
+    half: from a phone behind one baseline, hits on the far half are heard ~30 ms later. With
+    `frame_size`, a track starting at the frame's edge is the shuttle coming back into view."""
+    splits = _splits(track, times_ms)
     turns = _turns(splits, TURN_GAIN)
     if onsets is None:
         return [Hit(t.time_ms, None, "turn", t.pixel, t.frame) for t in turns if t.clear]
@@ -199,7 +206,7 @@ def find_hits(
         claims.append((best, onset))
     # Sound delays (travel to the phone plus any audio/video offset) from turns timed cleanly.
     def half(pixel: tuple[float, float], frame: int) -> str | None:
-        return side(FlightBreak("turn", 0.0, 0.0, pixel, frame)) if side else None
+        return side(pixel, frame) if side else None
 
     delays: dict[str | None, list[float]] = {}
     for split, onset in claims:
@@ -216,13 +223,15 @@ def find_hits(
         # gap; the sound, less this clip's measured delay, is the better clock.
         time_ms = split.time_ms if split.gap < GAP_TIMING_FRAMES else onset.time_ms - delay_for(split.pixel, split.frame)
         hits.append(Hit(time_ms, onset.time_ms, "sound and turn", split.pixel, split.frame))
-    starts = [b for b in _starts(track, fps) if b.kind == "start" and not (frame_size and _at_border(b.pixel, frame_size))]
-    for onset in unexplained:
-        low, high = onset.time_ms + TRACK_AFTER_SOUND_MS[0], onset.time_ms + TRACK_AFTER_SOUND_MS[1]
-        candidates = [s for s in starts if low <= s.time_ms <= high]
-        if not candidates:
+    starts = [b for b in _starts(track, times_ms) if not (frame_size and _at_border(b.pixel, frame_size))]
+    # Each start is claimed by one sound: the one whose timing fits this clip's measured delay.
+    for start in starts:
+        expected = start.time_ms + delay_for(start.pixel, start.frame)
+        heard = [o for o in unexplained if o.time_ms + TRACK_AFTER_SOUND_MS[0] <= start.time_ms <= o.time_ms + TRACK_AFTER_SOUND_MS[1]]
+        if not heard:
             continue
-        start = min(candidates, key=lambda s: abs(s.time_ms - onset.time_ms))
+        onset = min(heard, key=lambda o: abs(o.time_ms - expected))
+        unexplained.remove(onset)
         hits.append(Hit(onset.time_ms - delay_for(start.pixel, start.frame), onset.time_ms, "sound and start", start.pixel, start.frame))
     for turn in turns:
         quiet_hit = turn.strength >= QUIET_HIT_GAIN and turn.jump >= QUIET_HIT_JUMP

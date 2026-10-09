@@ -61,8 +61,10 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError as error:
         print(str(error), file=sys.stderr)
         return 1
-    every = max(1, video.frame_count // BACKGROUND_SAMPLES)
-    background = detector.background([frame for index, (_, frame) in enumerate(video.frames()) if index % every == 0])
+    # About BACKGROUND_SAMPLES frames spread over the clip; containers that do not state their
+    # frame count get one frame in ten.
+    every = max(1, video.frame_count // BACKGROUND_SAMPLES) if video.frame_count > 0 else 10
+    background = detector.background(frame for index, (_, frame) in enumerate(video.frames()) if index % every == 0)
     times: list[float] = []
 
     def frames():
@@ -73,14 +75,15 @@ def main(argv: list[str] | None = None) -> int:
     track = detector.detect(frames(), background, video.size, overlap=not args.fast)
     if args.overlay:
         _write_overlay(video, track, args.overlay)
-    seen = sum(detection is not None for detection in track)
+    filled = sum(bool(detection and detection.inpainted) for detection in track)
+    detected = sum(detection is not None for detection in track) - filled
     result = {
         "video": args.video.name,
         "fps": video.fps,
         "imageSize": list(video.size),
         "model": "TrackNetV3",
         "mode": "fast" if args.fast else "overlapping windows",
-        "summary": {"frames": len(track), "seen": seen, "inpainted": sum(bool(d and d.inpainted) for d in track)},
+        "summary": {"frames": len(track), "detected": detected, "filled": filled, "none": len(track) - detected - filled},
         "frames": [_entry(time_ms, detection) for time_ms, detection in zip(times, track)],
     }
     args.out.write_text(json.dumps(result, allow_nan=False), encoding="utf-8")

@@ -56,6 +56,8 @@ class DetectShuttleCliTests(unittest.TestCase):
             capture.release()
         self.assertEqual(code, 0)
         self.assertEqual(result["model"], "TrackNetV3")
+        summary = result["summary"]
+        self.assertEqual(summary["detected"] + summary["filled"] + summary["none"], len(clip.frames))
         self.assertEqual(result["imageSize"], list(SIZE))
         self.assertEqual(len(result["frames"]), len(clip.frames))
         self.assertEqual(overlay_frames, len(clip.frames))

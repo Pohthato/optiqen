@@ -41,6 +41,12 @@ class RenderAudioTests(unittest.TestCase):
             self.assertTrue(all(abs(time - hit) >= DISTRACTOR_SPACING_S for hit in HITS))
             self.assertTrue(0.05 < peak(samples, time) < 0.2)
 
+    def test_distractors_can_be_placed_at_given_times_even_right_before_a_hit(self):
+        samples, times = render_audio([1.0], 2.0, distractor_times=[0.95, 1.5], seed=3)
+        self.assertEqual(times, [0.95, 1.5])
+        quiet, _ = render_audio([1.0], 2.0, seed=3)
+        self.assertGreater(float(np.abs(samples[int(0.95 * SAMPLE_RATE) : int(0.97 * SAMPLE_RATE)]).max()), 3 * float(np.abs(quiet[int(0.95 * SAMPLE_RATE) : int(0.97 * SAMPLE_RATE)]).max()))
+
     def test_same_seed_same_audio(self):
         a, _ = render_audio(HITS, 3.0, seed=9, distractors=2)
         b, _ = render_audio(HITS, 3.0, seed=9, distractors=2)
