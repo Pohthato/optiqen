@@ -37,6 +37,8 @@
   // A suggested hit is accepted only at a frame this close to it; anything further is a different hit.
   const SUGGESTION_WINDOW_MS = 250;
   const KEYPOINT_SOURCES = ["clicked", "adjusted", "proposed"];
+  // Shuttle clicks: just before each hit (incoming), just after, then early and mid flight.
+  const SHUTTLE_OFFSETS_MS = [-130, 70, 200, 400];
 
   // Court geometry in metres, mirroring worker/geometry/court_model.py.
   // BWF dimensions run to the outer edges of the 40 mm lines; points are line centres, half a line inside.
@@ -96,6 +98,7 @@
       rallies: [],
       selectedPlayer: null,
       poses: {},
+      shuttle: {},
       hitSuggestions: [],
     };
   }
@@ -107,6 +110,7 @@
       ...state,
       ...saved,
       poses: saved.poses || {},
+      shuttle: saved.shuttle || {},
       hitSuggestions: saved.hitSuggestions || [],
       selectedPlayer: saved.selectedPlayer || null,
     };
@@ -604,6 +608,31 @@
     delete state.poses[String(Math.round(timeMs))];
   }
 
+  /** Frames (ms) to click the shuttle on: fixed offsets around every labelled hit, inside the clip. */
+  function shuttleTargets(state, durationMs) {
+    const times = new Set();
+    for (const contact of state.contacts) {
+      for (const offset of SHUTTLE_OFFSETS_MS) {
+        const time = frameTimeMs(frameIndexAt((contact.timeMs + offset) / 1000, state.fps), state.fps);
+        if (contact.timeMs + offset >= 0 && time < durationMs) times.add(time);
+      }
+    }
+    return [...times].sort((a, b) => a - b);
+  }
+
+  function setShuttle(state, timeMs, x, y) {
+    state.shuttle[String(Math.round(finite(timeMs, "Shuttle time")))] = { x: round2(finite(x, "Shuttle x")), y: round2(finite(y, "Shuttle y")) };
+  }
+
+  /** The shuttle cannot be seen on this frame: hidden, out of the picture, or not in play. */
+  function setShuttleHidden(state, timeMs) {
+    state.shuttle[String(Math.round(finite(timeMs, "Shuttle time")))] = { visible: false };
+  }
+
+  function removeShuttle(state, timeMs) {
+    delete state.shuttle[String(Math.round(timeMs))];
+  }
+
   /** Hit times that still need the selected player's pose. */
   function poseTargets(state) {
     return state.contacts.map(contact => contact.timeMs).filter(time => !state.poses[String(time)]);
@@ -749,6 +778,10 @@
     if (orphans > 0) warnings.push(`${orphans} pose(s) are not on a hit and were left out of the export.`);
     const poses = allPoses.filter(pose => contactTimes.has(pose.timeMs)).sort((a, b) => a.timeMs - b.timeMs);
     if (poses.length) doc.poses = poses;
+    const shuttle = Object.entries(state.shuttle || {})
+      .map(([time, point]) => (point.visible === false ? { timeMs: Number(time), visible: false } : { timeMs: Number(time), x: point.x, y: point.y }))
+      .sort((a, b) => a.timeMs - b.timeMs);
+    if (shuttle.length) doc.shuttlePoints = shuttle;
     return { doc, warnings };
   }
 
@@ -770,6 +803,9 @@
     }
     state.selectedPlayer = doc.selectedPlayer || null;
     for (const pose of doc.poses || []) state.poses[String(pose.timeMs)] = { player: pose.player, keypoints: pose.keypoints };
+    for (const point of doc.shuttlePoints || []) {
+      state.shuttle[String(point.timeMs)] = point.visible === false ? { visible: false } : { x: point.x, y: point.y };
+    }
     return state;
   }
 
@@ -836,6 +872,19 @@
       if (seen.has(item.timeMs)) errors.push(`${where}: duplicate pose`);
       seen.add(item.timeMs);
       if (PLAYERS.includes(doc.selectedPlayer) && PLAYERS.includes(item.player) && item.player !== doc.selectedPlayer) errors.push(`${where}: player must be the selectedPlayer`);
+    });
+    const shuttle = doc.shuttlePoints === undefined ? [] : doc.shuttlePoints;
+    if (!Array.isArray(shuttle)) errors.push("shuttlePoints must be a list");
+    const shuttleTimes = new Set();
+    (Array.isArray(shuttle) ? shuttle : []).forEach((item, i) => {
+      const where = `shuttlePoints[${i}]`;
+      if (!item || typeof item !== "object" || !isNumber(item.timeMs) || item.timeMs < 0) { errors.push(`${where}: timeMs must be a non-negative number`); return; }
+      if ("visible" in item && item.visible !== false) errors.push(`${where}: visible, when given, must be false`);
+      else if (item.visible === false) { if ("x" in item || "y" in item) errors.push(`${where}: a shuttle not seen has no x and y`); }
+      else if (!isNumber(item.x) || !isNumber(item.y)) errors.push(`${where}: x and y must be numbers`);
+      else if (!inside(item.x, item.y)) errors.push(`${where}: shuttle is outside the image`);
+      if (shuttleTimes.has(item.timeMs)) errors.push(`${where}: duplicate frame`);
+      shuttleTimes.add(item.timeMs);
     });
     return errors;
   }
@@ -929,6 +978,11 @@
     setPose,
     removePose,
     poseTargets,
+    SHUTTLE_OFFSETS_MS,
+    shuttleTargets,
+    setShuttle,
+    setShuttleHidden,
+    removeShuttle,
     candidatesFromDetections,
     pickPlayer,
     previousPose,

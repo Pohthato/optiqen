@@ -820,3 +820,73 @@ describe("review fixes: audio onsets need a sharp attack", () => {
     expect(onsets.some((o: any) => Math.abs(o.timeMs - 2000) <= 5)).toBe(true);
   });
 });
+
+describe("labeller core: shuttle clicks", () => {
+  const validate = (doc: any) =>
+    JSON.parse(runPython("import json,sys; from evaluation.golden import validate_golden; print(json.dumps(validate_golden(json.load(sys.stdin))))", JSON.stringify(doc)));
+
+  it("asks for the shuttle on frames around each labelled hit", () => {
+    const state = freshState(); // 60 fps
+    core.addContact(state, 1000, "clear");
+    core.addContact(state, 1050, "drop");
+    const targets = core.shuttleTargets(state, 5000);
+    const expected = new Set<number>();
+    for (const hit of [1000, 1050]) {
+      for (const offset of core.SHUTTLE_OFFSETS_MS) {
+        expected.add(core.frameTimeMs(core.frameIndexAt((hit + offset) / 1000, 60), 60));
+      }
+    }
+    expect(targets).toEqual([...expected].sort((a, b) => a - b));
+    expect(targets.every((t: number) => t === core.frameTimeMs(core.frameIndexAt(t / 1000, 60), 60))).toBe(true);
+  });
+
+  it("leaves out frames before the clip starts or after it ends", () => {
+    const state = freshState();
+    core.addContact(state, 50, "serve");
+    core.addContact(state, 4900, "smash");
+    const targets = core.shuttleTargets(state, 5000);
+    expect(targets.every((t: number) => t >= 0 && t < 5000)).toBe(true);
+  });
+
+  it("records a click, a shuttle that cannot be seen, and a removal", () => {
+    const state = freshState();
+    core.setShuttle(state, 1067, 640.25, 211.5);
+    core.setShuttleHidden(state, 1117);
+    expect(state.shuttle["1067"]).toEqual({ x: 640.25, y: 211.5 });
+    expect(state.shuttle["1117"]).toEqual({ visible: false });
+    core.removeShuttle(state, 1117);
+    expect(state.shuttle["1117"]).toBeUndefined();
+    expect(() => core.setShuttle(state, 1200, Number.NaN, 5)).toThrow();
+  });
+
+  it("exports shuttle points that the Python validator accepts, and loads them back", () => {
+    const state = freshState();
+    core.addContact(state, 1000, "clear");
+    core.setShuttle(state, 1067, 640.25, 211.5);
+    core.setShuttleHidden(state, 883);
+    const { doc } = core.buildGolden(state);
+    expect(doc.shuttlePoints).toEqual([{ timeMs: 883, visible: false }, { timeMs: 1067, x: 640.25, y: 211.5 }]);
+    expect(validate(doc)).toEqual([]);
+    expect(core.stateFromGolden(doc).shuttle).toEqual(state.shuttle);
+  });
+
+  it("validates shuttle points exactly as the Python validator would", () => {
+    const valid = core.buildGolden(freshState()).doc;
+    const docs = [
+      { ...valid, shuttlePoints: [{ timeMs: 100, x: 5, y: 5 }, { timeMs: 200, visible: false }] },
+      { ...valid, shuttlePoints: [{ timeMs: 100, x: 5000, y: 5 }] },
+      { ...valid, shuttlePoints: [{ timeMs: 100, x: 5 }] },
+      { ...valid, shuttlePoints: [{ timeMs: 100, x: 5, y: 5 }, { timeMs: 100, visible: false }] },
+      { ...valid, shuttlePoints: [{ timeMs: 100, visible: "no" }] },
+      { ...valid, shuttlePoints: [{ timeMs: 100, visible: false, x: 1, y: 1 }] },
+      { ...valid, shuttlePoints: "all of them" },
+    ];
+    for (const doc of docs) expect(core.validateGolden(doc).length > 0).toBe(validate(doc).length > 0);
+  });
+
+  it("older autosaves without shuttle points still load", () => {
+    const saved = { ...freshState() } as any;
+    delete saved.shuttle;
+    expect(core.normalizeState(saved).shuttle).toEqual({});
+  });
+});

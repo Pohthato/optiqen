@@ -107,6 +107,7 @@
   <button data-step="hits"><span class="num">2</span><span><b>Hits</b><small id="progress-hits"></small></span></button>
   <button data-step="rallies"><span class="num">3</span><span><b>Rallies</b><small id="progress-rallies"></small></span></button>
   <button data-step="body"><span class="num">4</span><span><b>Body</b><small id="progress-body"></small></span></button>
+  <button data-step="shuttle"><span class="num">5</span><span><b>Shuttle</b><small id="progress-shuttle"></small></span></button>
 </nav>
 
 <main>
@@ -168,6 +169,13 @@
       <ul id="pose-list" class="list"></ul>
     </section>
 
+    <section data-panel="shuttle">
+      <h2>Shuttle</h2>
+      <p class="hint">This measures the shuttle detector on your footage, so its guesses are not shown. <kbd>N</kbd> goes to the next frame to label (a few around each hit). Click the centre of the shuttle's head; if you can't see it on that frame (hidden, out of the picture) press <kbd>H</kbd>. Either moves on to the next frame.</p>
+      <div class="row"><button id="next-shuttle" class="btn primary">Next frame <kbd>N</kbd></button><button id="shuttle-hidden" class="btn ghost">Can't see it <kbd>H</kbd></button><button id="shuttle-clear" class="btn ghost small">Clear this frame <kbd>Del</kbd></button></div>
+      <p id="shuttle-status" class="muted"></p>
+    </section>
+
     <details class="keys">
       <summary>All keyboard shortcuts</summary>
       <dl>
@@ -182,6 +190,7 @@
         <dt><kbd>R</kbd></dt><dd>Start / end a rally here</dd>
         <dt><kbd>N</kbd> <kbd>F</kbd> <kbd>U</kbd></dt><dd>Rallies: near / far / unclear won</dd>
         <dt><kbd>B</kbd> <kbd>Enter</kbd> <kbd>H</kbd></dt><dd>Body: next frame / confirm / skip joint when placing by hand</dd>
+        <dt><kbd>N</kbd> <kbd>H</kbd> <kbd>Del</kbd></dt><dd>Shuttle: next frame / can't see it / clear this frame</dd>
       </dl>
     </details>
   </aside>
@@ -409,6 +418,25 @@
     const s = scale();
     if (step === "court") drawCourt(s);
     if (step === "body") drawBody(s);
+    if (step === "shuttle") drawShuttle(s);
+  }
+
+  function drawShuttle(s) {
+    const point = state.shuttle[String(currentMs())];
+    if (!point) return;
+    if (point.visible === false) {
+      ctx.fillStyle = "#fbbf24";
+      ctx.font = "14px system-ui, sans-serif";
+      ctx.fillText("shuttle not visible on this frame", 12, 22);
+      return;
+    }
+    ctx.strokeStyle = "#ffcc00";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(point.x * s, point.y * s, 9, 0, Math.PI * 2);
+    ctx.moveTo(point.x * s - 14, point.y * s); ctx.lineTo(point.x * s - 4, point.y * s);
+    ctx.moveTo(point.x * s + 4, point.y * s); ctx.lineTo(point.x * s + 14, point.y * s);
+    ctx.stroke();
   }
 
   function drawTimeline() {
@@ -451,17 +479,21 @@
   function renderSteps() {
     const contacts = state.contacts.length;
     const posesDone = state.contacts.filter(c => state.poses[String(c.timeMs)]).length;
+    const shuttleFrames = C.shuttleTargets(state, durationMs());
+    const shuttleDone = shuttleFrames.filter(t => state.shuttle[String(t)]).length;
     const progress = {
       court: `${Object.keys(state.keypoints).length} points`,
       hits: `${contacts} hits${state.hitSuggestions.some(s => s.status === "pending") ? ` · ${state.hitSuggestions.filter(s => s.status === "pending").length} to check` : ""}`,
       rallies: `${state.rallies.length} rallies`,
       body: state.selectedPlayer ? `${posesDone} / ${contacts} poses` : "choose a player",
+      shuttle: `${shuttleDone} / ${shuttleFrames.length} frames`,
     };
     const done = {
       court: Object.keys(state.keypoints).length >= 6,
       hits: contacts > 0 && !state.hitSuggestions.some(s => s.status === "pending"),
       rallies: state.rallies.length > 0 && state.rallies.every(r => r.endMs !== null && r.winner !== "unknown"),
       body: contacts > 0 && posesDone === contacts,
+      shuttle: shuttleFrames.length > 0 && shuttleDone === shuttleFrames.length,
     };
     document.querySelectorAll("#steps button").forEach(button => {
       const name = button.dataset.step;
@@ -470,7 +502,7 @@
       $(`progress-${name}`).textContent = progress[name];
     });
     document.querySelectorAll("aside.panel section").forEach(section => section.classList.toggle("active", section.dataset.panel === step));
-    overlay.classList.toggle("placing", step === "court" || step === "body");
+    overlay.classList.toggle("placing", step === "court" || step === "body" || step === "shuttle");
   }
 
   function renderCourt() {
@@ -771,6 +803,30 @@
     render();
   }
 
+  // ---------- shuttle ----------
+  async function nextShuttle() {
+    const targets = C.shuttleTargets(state, durationMs());
+    if (!targets.length) { say("Label hits first (step 2): the shuttle frames are around each hit."); return; }
+    const open = targets.filter(t => !state.shuttle[String(t)]);
+    if (!open.length) { say(`All ${targets.length} shuttle frames are labelled.`); return; }
+    const time = open.find(t => t > currentMs()) ?? open[0];
+    seekToMs(time);
+    await seeked();
+    $("shuttle-status").textContent = `Frame at ${(time / 1000).toFixed(3)} s — ${open.length} to go.`;
+    render();
+  }
+
+  function shuttleHidden() {
+    C.setShuttleHidden(state, currentMs());
+    render();
+    nextShuttle();
+  }
+
+  function clearShuttle() {
+    C.removeShuttle(state, currentMs());
+    render();
+  }
+
   // ---------- overlay mouse ----------
   function grabbables() {
     if (step === "court") {
@@ -786,7 +842,7 @@
   }
 
   function updateLoupe(event, at) {
-    if (!(step === "court" || step === "body") || !video.videoWidth || !at) { loupe.style.display = "none"; return; }
+    if (!(step === "court" || step === "body" || step === "shuttle") || !video.videoWidth || !at) { loupe.style.display = "none"; return; }
     const half = loupe.width / (2 * LOUPE_ZOOM * scale());
     loupeCtx.imageSmoothingEnabled = false;
     loupeCtx.drawImage(video, at[0] - half, at[1] - half, half * 2, half * 2, 0, 0, loupe.width, loupe.height);
@@ -825,6 +881,10 @@
         const next = nextPointToClick();
         if (next) $("kp-select").value = next;
         render();
+      } else if (step === "shuttle") {
+        C.setShuttle(state, currentMs(), at[0], at[1]);
+        render();
+        nextShuttle();
       } else if (step === "body" && pose) {
         if (pose.manualNext !== undefined) {
           pose.keypoints[pose.manualNext] = [at[0], at[1], 2];
@@ -922,6 +982,10 @@
     const name = event.target.dataset.removeKp;
     if (name) { C.removeKeypoint(state, name); refreshProposals(); render(); }
   });
+
+  $("next-shuttle").addEventListener("click", nextShuttle);
+  $("shuttle-hidden").addEventListener("click", shuttleHidden);
+  $("shuttle-clear").addEventListener("click", clearShuttle);
 
   $("find-hits").addEventListener("click", findHits);
   $("next-hit").addEventListener("click", nextHit);
@@ -1147,6 +1211,9 @@
       else if (step === "body" && lower === "b") nextPose();
       else if (step === "body" && key === "Enter") confirmPose();
       else if (step === "body" && lower === "h" && pose && pose.manualNext !== undefined) advanceManual();
+      else if (step === "shuttle" && lower === "n") nextShuttle();
+      else if (step === "shuttle" && lower === "h") shuttleHidden();
+      else if (step === "shuttle" && (key === "Delete" || key === "Backspace")) clearShuttle();
       else handled = false;
     } catch (error) { say(error.message, true); }
     if (handled) event.preventDefault();

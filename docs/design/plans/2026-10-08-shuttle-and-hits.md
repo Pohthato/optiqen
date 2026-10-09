@@ -33,6 +33,13 @@ Each step is pushed on its own.
 - **Hendry clip (766 frames, fast mode):** 540 frames seen and 59 short gaps filled. The 167 frames with no shuttle are between rallies and in longer losses. The overlay shows clean flight arcs. Accuracy needs your clicks (2b′).
 - **Speed:** on this laptop's CPU, about 0.2 s per frame in fast mode, and about 8× that with overlapping windows. The worker's GPU is where it runs for real; the authors report 25 fps.
 
+## Shuttle clicks (2b′)
+
+- The labeller has a fifth step, **Shuttle**: `N` goes to the next frame to label (130 ms before each hit, then 70, 200 and 400 ms after), a click places the shuttle, `H` marks it as not visible, and either moves on. The detector's guesses are not shown, so they cannot anchor the clicks.
+- The golden schema has optional `shuttlePoints`; the Python and JavaScript validators agree (cross-checked).
+- `python -m evaluation.shuttle` scores `detect_shuttle.py` output against the clicks: found within the TrackNet tolerance, wrong place, missed, false alarm, and pixel error.
+- Checked in the browser on the Hendry clip: one hit gave four frames to label; a click and `H` were both saved and moved on.
+
 ## Decisions
 
 - **Audio alone is not a hit.** A neighbouring court's hits are as sharp as the rally's, and quieter only by distance. They pass only when the shuttle track agrees.

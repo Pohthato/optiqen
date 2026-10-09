@@ -78,6 +78,12 @@ version.
    knees, ankles) as `[x, y, visibility]` in pixels: visibility `2` visible, `1`
    hidden but placed, `0` not labelled. Stored as
    `"poses": [{ "timeMs": 1200, "player": "near", "keypoints": [[x, y, v], …17] }]`.
+6. **Shuttle** — on a few frames around each hit (130 ms before it, then 70,
+   200 and 400 ms after), where the shuttle's head is, or that it cannot be seen
+   on that frame. The labeller does not show the detector's guesses here, because
+   they are what is being measured. Clicks land on screen pixels, so a bigger
+   window gives more precise points. Stored as `"shuttlePoints": [{ "timeMs":
+   1267, "x": 980.5, "y": 412.0 }, { "timeMs": 1300, "visible": false }]`.
 
 ## Format
 
@@ -96,7 +102,11 @@ version.
     { "timeMs": 1200, "label": "serve", "landing": { "x": 2.4, "y": 9.8 } },
     { "timeMs": 2100, "label": "clear", "landing": null }
   ],
-  "rallies": [{ "startMs": 800, "endMs": 4300, "winner": "near" }]
+  "rallies": [{ "startMs": 800, "endMs": 4300, "winner": "near" }],
+  "shuttlePoints": [
+    { "timeMs": 1267, "x": 980.5, "y": 412.0 },
+    { "timeMs": 1300, "visible": false }
+  ]
 }
 ```
 
@@ -120,3 +130,18 @@ scores. Each clip also shows the camera solved from your labelled points
 (`calibration`: tier, pixel RMS, leave-one-out floor error) next to the worker's
 own camera summary (`workerCamera`). Commit the baseline report before changing
 any model so every later phase can show lift.
+
+## Scoring the shuttle detector
+
+From `worker/`, with the TrackNetV3 weights in `worker/weights/`:
+
+```bash
+python detect_shuttle.py ../clips/clip-001.mp4 --out ../results/clip-001.shuttle.json
+python -m evaluation.shuttle --golden ../golden/clip-001.json --detections ../results/clip-001.shuttle.json
+```
+
+A clicked shuttle counts as found when a detection is within the TrackNet tolerance (4 px at the
+network's 512 px width: 15 px on a 1920 px video). The report gives recall over the frames you
+saw the shuttle on, precision over all detections on labelled frames, the median and 90th
+percentile pixel error, false alarms on frames marked "can't see it", and how many finds came
+from filled gaps.

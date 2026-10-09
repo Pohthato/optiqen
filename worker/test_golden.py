@@ -122,6 +122,26 @@ class AnswerKeyConsistencyTests(unittest.TestCase):
         self.assertTrue(any("source" in error for error in validate_golden(bad)))
 
 
+class ShuttlePointTests(unittest.TestCase):
+    def test_shuttle_points_are_optional_but_validated(self):
+        points = [{"timeMs": 1167, "x": 640.5, "y": 210.0}, {"timeMs": 1233, "visible": False}]
+        self.assertEqual(validate_golden(corrupted(shuttlePoints=points)), [])
+
+    def test_reports_each_kind_of_shuttle_problem(self):
+        cases = {
+            "outside the image": [{"timeMs": 100, "x": 5000.0, "y": 10.0}],
+            "x and y": [{"timeMs": 100, "x": 5.0}],
+            "timems": [{"timeMs": -5, "x": 5.0, "y": 5.0}],
+            "duplicate": [{"timeMs": 100, "x": 5.0, "y": 5.0}, {"timeMs": 100, "visible": False}],
+            "visible": [{"timeMs": 100, "visible": "no"}],
+            "not seen": [{"timeMs": 100, "visible": False, "x": 5.0, "y": 5.0}],
+        }
+        for needle, points in cases.items():
+            errors = validate_golden(corrupted(shuttlePoints=points))
+            self.assertTrue(any(needle in error.lower() for error in errors), (needle, errors))
+        self.assertTrue(validate_golden(corrupted(shuttlePoints="all of them")))
+
+
 class KeypointFrameTests(unittest.TestCase):
     def test_picks_the_frame_with_the_most_placed_points(self):
         doc = corrupted(courtKeypoints=[

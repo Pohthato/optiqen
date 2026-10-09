@@ -112,6 +112,33 @@ def validate_golden(doc: Any) -> list[str]:
             seen_pose_times.add(time)
         if doc.get("selectedPlayer") in PLAYERS and item.get("player") in PLAYERS and item["player"] != doc["selectedPlayer"]:
             errors.append(f"{where}: player must be the selectedPlayer ({doc['selectedPlayer']})")
+    errors.extend(_shuttle_errors(doc.get("shuttlePoints", []), size if size_ok else None))
+    return errors
+
+
+def _shuttle_errors(points: Any, size: list[int] | None) -> list[str]:
+    """Shuttle clicks: per frame, where the shuttle is, or visible false when it cannot be seen."""
+    if not isinstance(points, list):
+        return ["shuttlePoints must be a list"]
+    errors: list[str] = []
+    seen: set[float] = set()
+    for index, item in enumerate(points):
+        where = f"shuttlePoints[{index}]"
+        if not isinstance(item, dict) or not _is_number(item.get("timeMs")) or item["timeMs"] < 0:
+            errors.append(f"{where}: timeMs must be a non-negative number")
+            continue
+        if "visible" in item and item["visible"] is not False:
+            errors.append(f"{where}: visible, when given, must be false (the shuttle was not seen)")
+        elif item.get("visible") is False:
+            if "x" in item or "y" in item:
+                errors.append(f"{where}: a shuttle not seen has no x and y")
+        elif not (_is_number(item.get("x")) and _is_number(item.get("y"))):
+            errors.append(f"{where}: x and y must be numbers")
+        elif size is not None and not (0 <= item["x"] < size[0] and 0 <= item["y"] < size[1]):
+            errors.append(f"{where}: shuttle is outside the image")
+        if item["timeMs"] in seen:
+            errors.append(f"{where}: duplicate frame at {item['timeMs']} ms")
+        seen.add(item["timeMs"])
     return errors
 
 
