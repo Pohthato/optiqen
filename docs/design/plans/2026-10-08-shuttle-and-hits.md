@@ -69,4 +69,4 @@ Each step is pushed on its own.
 
 **Real footage:** `find_hits.py` runs end to end on the Hendry clip (9 hits from the flight alone, since this laptop has no ffmpeg; the worker image has it). Real accuracy will come from your labelled hits: `find_hits.py` writes contact events in the worker's result format, so `python -m evaluation.evaluate` scores them against the golden contacts.
 
-**Deferred:** hitting the worker pipeline (with Phase 3, alongside the per-frame cameras); a wrist-speed cue from pose; frame rates above 30 fps are supported but not yet tuned on.
+**Deferred:** wiring into the worker pipeline (with Phase 3, alongside the per-frame cameras); a wrist-speed cue from pose; frame rates above 30 fps are supported but not yet tuned on.
