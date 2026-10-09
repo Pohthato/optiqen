@@ -21,31 +21,9 @@ import numpy as np
 
 from evaluation.golden import keypoint_frame
 from geometry.tracking import AnchorError, TrackedFrame, anchor_on_points, iter_track, model_polylines
+from video import VideoFile
 
 STATE_COLOURS = {"anchored": (0, 255, 0), "tracked": (0, 255, 255), "reanchored": (255, 160, 0), "lost": (0, 0, 255)}
-
-
-class _Video:
-    """Frames read in order, each with its container timestamp; no seeking (phone files seek unevenly)."""
-
-    def __init__(self, path: Path):
-        self.path = path
-        probe = cv2.VideoCapture(str(path))
-        self.opened = probe.isOpened()
-        self.fps = probe.get(cv2.CAP_PROP_FPS)
-        self.size = (int(probe.get(cv2.CAP_PROP_FRAME_WIDTH)), int(probe.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-        probe.release()
-
-    def frames(self) -> Iterator[tuple[float, np.ndarray]]:
-        capture = cv2.VideoCapture(str(self.path))
-        try:
-            while True:
-                ok, frame = capture.read()
-                if not ok:
-                    return
-                yield capture.get(cv2.CAP_PROP_POS_MSEC), frame
-        finally:
-            capture.release()
 
 
 def _draw(frame: np.ndarray, index: int, step: TrackedFrame) -> np.ndarray:
@@ -88,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
     placed = keypoint_frame(labels)
     if placed is None or len(placed[1]) < 4:
         return _fail("the labels need at least 4 court points placed on one frame")
-    video = _Video(args.video)
+    video = VideoFile(args.video)
     if not video.opened:
         return _fail(f"cannot read {args.video}")
     labelled_size = labels.get("imageSize")
