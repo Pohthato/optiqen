@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from typing import Sequence
 
 import numpy as np
-from scipy.optimize import least_squares
 from scipy.stats import chi2
 
 from geometry.camera import Camera
@@ -27,11 +26,13 @@ SEED_DISTANCES_M = (4.0, 8.0, 13.0, 20.0)  # and by distance, for rays close to 
 COURT_BOX = ((-3.0, 8.2), (-4.0, 17.4), (0.0, 12.0))  # generous: where a flight can be at all
 INLIER_SIGMAS = 3.0
 FIT_STEP_S = 0.02  # RK4 step inside the fit: within 2 mm of a fine step even for smashes
-FULL_FIT_SEEDS = 2  # seeds whose velocity-only fit is best go on to the full fit
+PRUNE_AFTER = 15  # iterations before only the best few starts keep going
+KEEP_STARTS = 5
 SEED_SIGHTINGS = 3  # start seeds come from the first few sightings' rays (the first may be a stray)
 # The fit's covariance, scaled so its 95 % region holds the truth 95 % of the time: on 192 synthetic
 # flights (three views, 2 px jitter) it held 89.6 % unscaled and 96.4 % with variance x 1.5.
 COVARIANCE_INFLATION = 1.5
+WARM_OK_SIGMAS = 2.5  # a warm start whose median miss is within this many jitters needs no depth search
 
 
 def simulate_batch(
@@ -64,6 +65,47 @@ def simulate_batch(
             t += h
         out[:, index] = p
     return out
+
+
+def simulate_grid(
+    p0: np.ndarray, v0: np.ndarray, times_s: np.ndarray, terminal_velocity: float = FEATHER_TERMINAL_VELOCITY, step_s: float = FIT_STEP_S
+) -> np.ndarray:
+    """Like simulate_batch, but faster: RK4 on a uniform grid, positions at the requested times
+    by cubic Hermite interpolation from the grid's positions and velocities (within a millimetre
+    of the exact path at 20 ms steps). Coordinates are stepped as (3, B) rows: fewer, larger
+    array operations per step."""
+    p = np.array(p0, dtype=np.float64).reshape(-1, 3).T.copy()
+    v = np.array(v0, dtype=np.float64).reshape(-1, 3).T.copy()
+    times_s = np.asarray(times_s, dtype=np.float64)
+    k = GRAVITY / terminal_velocity**2
+    steps = max(1, int(np.ceil(times_s.max() / step_s))) if len(times_s) else 1
+    grid_p = np.empty((steps + 1, 3, p.shape[1]))
+    grid_v = np.empty_like(grid_p)
+    grid_p[0], grid_v[0] = p, v
+    half, sixth = 0.5 * step_s, step_s / 6.0
+
+    def acceleration(vel: np.ndarray) -> np.ndarray:
+        a = vel * (-k * np.sqrt(vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2]))
+        a[2] -= GRAVITY
+        return a
+
+    for step in range(steps):
+        a1 = acceleration(v)
+        v2 = v + half * a1
+        a2 = acceleration(v2)
+        v3 = v + half * a2
+        a3 = acceleration(v3)
+        v4 = v + step_s * a3
+        a4 = acceleration(v4)
+        p = p + sixth * (v + 2 * (v2 + v3) + v4)
+        v = v + sixth * (a1 + 2 * (a2 + a3) + a4)
+        grid_p[step + 1], grid_v[step + 1] = p, v
+    node = np.clip((times_s // step_s).astype(int), 0, steps - 1)
+    u = ((times_s - node * step_s) / step_s)[:, None, None]
+    p_a, p_b = grid_p[node], grid_p[node + 1]
+    m_a, m_b = grid_v[node] * step_s, grid_v[node + 1] * step_s
+    out = (2 * u**3 - 3 * u**2 + 1) * p_a + (u**3 - 2 * u**2 + u) * m_a + (-2 * u**3 + 3 * u**2) * p_b + (u**3 - u**2) * m_b
+    return out.transpose(2, 0, 1)  # (B, T, 3)
 
 
 class _Views:
@@ -147,6 +189,66 @@ def _seeds(camera: Camera, pixel: np.ndarray) -> list[np.ndarray]:
     return [seed for seed in seeds if _inside_box(seed)]
 
 
+def _robust_cost(residuals: np.ndarray, f_scale: float) -> np.ndarray:
+    """Soft-L1 cost per problem of (S, 2N) residuals, on each detection's pixel miss."""
+    miss2 = np.sum(residuals.reshape(len(residuals), -1, 2) ** 2, axis=2)
+    return np.sum(2 * f_scale**2 * (np.sqrt(1 + miss2 / f_scale**2) - 1), axis=1)
+
+
+def _jacobians(residuals_batch, x: np.ndarray) -> np.ndarray:
+    """(S, n, m) forward-difference Jacobians of S problems, in one batched evaluation."""
+    count, n = x.shape
+    steps = 1e-6 * (1.0 + np.abs(x))
+    batch = np.repeat(x[:, None, :], n + 1, axis=1)
+    batch[:, 1:] += steps[:, :, None] * np.eye(n)[None]
+    values = residuals_batch(batch.reshape(-1, n)).reshape(count, n + 1, -1)
+    return (values[:, 1:] - values[:, :1]) / steps[:, :, None]
+
+
+def _lm_batch(residuals_batch, x0: np.ndarray, f_scale: float, iterations: int = 40):
+    """Levenberg-Marquardt on S problems at once (same data, different starts), with soft-L1
+    weights on each detection's miss (re-weighted every step). After PRUNE_AFTER iterations only
+    the KEEP_STARTS best starts continue. Returns (x, residuals, cost)."""
+    x = np.array(x0, dtype=float)
+    r = residuals_batch(x)
+    cost = _robust_cost(r, f_scale)
+    damping = np.full(len(x), 1e-2)
+    settled = np.zeros(len(x), dtype=int)
+    for iteration in range(iterations):
+        if iteration == PRUNE_AFTER and len(x) > KEEP_STARTS:
+            keep = np.argsort(cost)[:KEEP_STARTS]
+            x, r, cost, damping, settled = x[keep], r[keep], cost[keep], damping[keep], settled[keep]
+        jac = _jacobians(residuals_batch, x)
+        miss2 = np.repeat(np.sum(r.reshape(len(r), -1, 2) ** 2, axis=2), 2, axis=1)
+        weight = 1.0 / np.sqrt(1.0 + miss2 / f_scale**2)
+        normal = np.einsum("snm,sm,skm->snk", jac, weight, jac)
+        gradient = np.einsum("snm,sm,sm->sn", jac, weight, r)
+        diagonal = np.einsum("snn->sn", normal)
+        system = normal + (damping[:, None] * diagonal + 1e-9)[:, :, None] * np.eye(x.shape[1])[None]
+        try:
+            step = -np.linalg.solve(system, gradient[:, :, None])[:, :, 0]
+        except np.linalg.LinAlgError:
+            break
+        trial = x + step
+        trial_r = residuals_batch(trial)
+        trial_cost = _robust_cost(trial_r, f_scale)
+        better = trial_cost < cost
+        improvement = np.where(better, cost - trial_cost, 0.0)
+        x[better], r[better], cost[better] = trial[better], trial_r[better], trial_cost[better]
+        damping = np.where(better, damping / 3, damping * 4)
+        stalled = (improvement <= 1e-5 * (1 + cost)) | (damping > 1e6)
+        settled = np.where(stalled, settled + 1, 0)
+        if np.all(settled >= 3):  # three steps in a row without real progress: done
+            break
+    return x, r, cost
+
+
+def _best(result) -> tuple[np.ndarray, np.ndarray]:
+    x, r, cost = result
+    k = int(np.argmin(cost))
+    return x[k], r[k]
+
+
 def fit_flight(
     times_ms: Sequence[float],
     pixels: np.ndarray,
@@ -154,9 +256,12 @@ def fit_flight(
     start_ms: float | None = None,
     terminal_velocity: float = FEATHER_TERMINAL_VELOCITY,
     jitter_px: float = 2.0,
+    initial: Sequence[np.ndarray] = (),
 ) -> FlightFit | None:
     """The physical flight that best explains the detections (time, pixel, camera per detection).
     The flight is parameterised at start_ms (the hit, if known; else the first detection).
+    `initial` holds starting guesses (position and velocity at that start, 6 numbers each), e.g.
+    from neighbouring fits; when one fits well the depth search is skipped.
     None when there are too few detections or no start reproduces them."""
     times_ms = np.asarray(times_ms, dtype=float)
     pixels = np.asarray(pixels, dtype=float).reshape(-1, 2)
@@ -171,54 +276,36 @@ def fit_flight(
 
     def residuals_batch(params: np.ndarray) -> np.ndarray:
         with np.errstate(all="ignore"):  # absurd trial launches overflow; they just score badly
-            positions = simulate_batch(params[:, :3], params[:, 3:6], relative, terminal_velocity, FIT_STEP_S)
+            positions = simulate_grid(params[:, :3], params[:, 3:6], relative, terminal_velocity)
             values = views.project(positions).reshape(len(params), -1) - observed
         return np.where(np.isfinite(values), values, 1e6)
 
-    def fun(x: np.ndarray) -> np.ndarray:
-        return residuals_batch(x[None])[0]
-
-    def jac(x: np.ndarray) -> np.ndarray:
-        steps = 1e-6 * (1.0 + np.abs(x))
-        batch = np.repeat(x[None], len(x) + 1, axis=0)
-        batch[1:] += np.diag(steps)
-        values = residuals_batch(batch)
-        return ((values[1:] - values[0]) / steps[:, None]).T
-
+    f_scale = 2 * jitter_px
     duration = max(relative[-1], 1e-3)
-    # Velocity first, with the start held at each seed; the best few then fit everything.
-    staged = []
-    seeds = [seed for i in range(min(SEED_SIGHTINGS, len(pixels))) for seed in _seeds(cameras[i], pixels[i])]
-    for p_seed in seeds:
-        last_ray = cameras[-1].pixel_to_plane(pixels[-1][None], p_seed[2])[0]
-        towards = (np.array([last_ray[0], last_ray[1], p_seed[2]]) - p_seed) / duration if np.isfinite(last_ray).all() else np.zeros(3)
-        v_seed = towards + np.array([0.0, 0.0, 0.5 * GRAVITY * duration])
-        try:
-            velocity = least_squares(
-                lambda v, p=p_seed: fun(np.concatenate([p, v])), v_seed, jac=lambda v, p=p_seed: jac(np.concatenate([p, v]))[:, 3:],
-                loss="soft_l1", f_scale=2 * jitter_px, max_nfev=12, ftol=1e-6, xtol=1e-6,
-            )
-        except (ValueError, np.linalg.LinAlgError):
-            continue
-        if np.isfinite(velocity.cost):
-            staged.append((velocity.cost, np.concatenate([p_seed, velocity.x])))
-    best = None
-    for _, start_params in sorted(staged, key=lambda item: item[0])[:FULL_FIT_SEEDS]:
-        try:
-            result = least_squares(fun, start_params, jac=jac, loss="soft_l1", f_scale=2 * jitter_px, max_nfev=60, ftol=1e-6, xtol=1e-6)
-        except (ValueError, np.linalg.LinAlgError):
-            continue
-        if np.isfinite(result.cost) and (best is None or result.cost < best.cost):
-            best = result
-    if best is None:
+    best_x, best_r = None, None
+    if len(initial):
+        best_x, best_r = _best(_lm_batch(residuals_batch, np.array(initial, dtype=float), f_scale))
+    warm_ok = best_r is not None and float(np.median(np.hypot(*best_r.reshape(-1, 2).T))) <= WARM_OK_SIGMAS * jitter_px
+    if not warm_ok:
+        starts = []
+        for i in range(min(SEED_SIGHTINGS, len(pixels))):
+            for p_seed in _seeds(cameras[i], pixels[i]):
+                last_ray = cameras[-1].pixel_to_plane(pixels[-1][None], p_seed[2])[0]
+                towards = (np.array([last_ray[0], last_ray[1], p_seed[2]]) - p_seed) / duration if np.isfinite(last_ray).all() else np.zeros(3)
+                starts.append(np.concatenate([p_seed, towards + np.array([0.0, 0.0, 0.5 * GRAVITY * duration])]))
+        if starts:
+            x, r = _best(_lm_batch(residuals_batch, np.array(starts), f_scale))
+            if best_r is None or _robust_cost(r[None], f_scale)[0] < _robust_cost(best_r[None], f_scale)[0]:
+                best_x, best_r = x, r
+    if best_x is None or not np.isfinite(best_r).all():
         return None
-    error = np.hypot(*best.fun.reshape(-1, 2).T)
+    error = np.hypot(*best_r.reshape(-1, 2).T)
     inlier = error <= INLIER_SIGMAS * 2 * jitter_px
     if inlier.sum() < MIN_DETECTIONS:
         return None
     rows = np.repeat(inlier, 2)
-    jacobian = jac(best.x)[rows]
+    jacobian = _jacobians(residuals_batch, best_x[None])[0].T[rows]
     dof = max(1, rows.sum() - 6)
-    variance = float(np.sum(best.fun[rows] ** 2) / dof)
+    variance = float(np.sum(best_r[rows] ** 2) / dof)
     covariance = COVARIANCE_INFLATION * variance * np.linalg.pinv(jacobian.T @ jacobian)
-    return FlightFit(start, best.x[:3].copy(), best.x[3:].copy(), terminal_velocity, covariance, float(np.sqrt(np.mean(error[inlier] ** 2))), int(inlier.sum()), len(error))
+    return FlightFit(start, best_x[:3].copy(), best_x[3:].copy(), terminal_velocity, covariance, float(np.sqrt(np.mean(error[inlier] ** 2))), int(inlier.sum()), len(error))

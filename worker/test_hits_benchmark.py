@@ -29,11 +29,10 @@ class SimulateTests(unittest.TestCase):
         self.assertEqual(clean.clip.distractor_times, [])
         self.assertIsNone(clean.onsets)
 
-    def test_the_standard_set_spans_views_frame_rates_and_sound(self):
-        scenarios = standard_scenarios(12)
-        self.assertEqual({s.view for s in scenarios}, {"behind", "corner", "side"})
-        self.assertEqual({s.fps for s in scenarios}, {30.0, 60.0})
-        self.assertEqual({s.sound for s in scenarios}, {True, False})
+    def test_the_standard_set_has_every_view_and_frame_rate_with_sound_and_without(self):
+        scenarios = standard_scenarios(18)
+        self.assertEqual({(s.view, s.fps, s.sound) for s in scenarios}, {(v, f, s) for v in ("behind", "corner", "side") for f in (30.0, 60.0) for s in (True, False)})
+        self.assertNotEqual([s.seed for s in standard_scenarios(6, 5000)], [s.seed for s in standard_scenarios(6)])
 
 
 class ScoreTests(unittest.TestCase):
@@ -41,9 +40,9 @@ class ScoreTests(unittest.TestCase):
         sim = simulate(Scenario(seed=11, neighbour_per_s=0.0))
         first, second = (contact.time * 1000 for contact in sim.clip.rally.contacts[:2])
         hits = [
-            Hit(first + 10, None, "turn", (0.0, 0.0), 0),
-            Hit(first + 20, None, "turn", (0.0, 0.0), 0),  # a second claim on the same hit
-            Hit(second + 50, None, "turn", (0.0, 0.0), 0),  # too far
+            Hit(first + 10, None, first + 10, "flights", (0.0, 0.0, 1.0), 0, 100.0),
+            Hit(first + 20, None, first + 20, "flights", (0.0, 0.0, 1.0), 0, 100.0),  # a second claim on the same hit
+            Hit(second + 50, None, second + 50, "flights", (0.0, 0.0, 1.0), 0, 100.0),  # too far
         ]
         result = score(sim.clip, hits)
         self.assertEqual(result["found"], 1)
@@ -53,7 +52,7 @@ class ScoreTests(unittest.TestCase):
     def test_neighbouring_sounds_taken_as_hits_are_counted(self):
         sim = simulate(Scenario(seed=12, neighbour_per_s=1.0))
         heard = sim.clip.distractor_times[0] * 1000
-        result = score(sim.clip, [Hit(heard - 25, heard, "sound and turn", (0.0, 0.0), 0)])
+        result = score(sim.clip, [Hit(heard - 25, heard, heard - 25, "sound and flights", (0.0, 0.0, 1.0), 0, 100.0)])
         expected = 0 if any(abs(heard - 25 - c.time * 1000) <= 33 for c in sim.clip.rally.contacts) else 1
         self.assertEqual(result["neighbourHits"], expected)
 
@@ -65,6 +64,7 @@ class RunTests(unittest.TestCase):
         pooled = report["summary"]["pooled"]
         self.assertIn("all", pooled)
         self.assertTrue(any(key.startswith("view=") for key in pooled))
+        self.assertTrue(any(key.endswith(",sound=True") for key in pooled))
         self.assertTrue(0.0 <= pooled["all"]["f1"] <= 1.0)
 
 

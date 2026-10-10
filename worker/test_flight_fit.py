@@ -102,6 +102,19 @@ class FitFlightTests(unittest.TestCase):
                 inside += fit.within(flight.end_time * 1000.0, truth, confidence=0.95)
         self.assertGreaterEqual(inside / total, 0.8, (inside, total))
 
+    def test_a_good_starting_guess_is_refined_without_a_depth_search(self):
+        flight, vt, times, pixels, cams = observed_flights(1, "corner", 30.0)[2]
+        guess = np.concatenate([np.asarray(flight.p0) + 0.3, np.asarray(flight.v0) * 1.05])
+        warm = fit_flight(times, pixels, cams, start_ms=flight.start_time * 1000, terminal_velocity=vt, initial=[guess])
+        cold = fit_flight(times, pixels, cams, start_ms=flight.start_time * 1000, terminal_velocity=vt)
+        self.assertLess(end_error_m(flight, vt, warm), max(0.3, 1.5 * end_error_m(flight, vt, cold)))
+
+    def test_a_bad_starting_guess_falls_back_to_the_depth_search(self):
+        flight, vt, times, pixels, cams = observed_flights(1, "corner", 30.0)[2]
+        nonsense = np.array([0.0, 0.0, 9.0, 40.0, 40.0, 40.0])
+        fit = fit_flight(times, pixels, cams, start_ms=flight.start_time * 1000, terminal_velocity=vt, initial=[nonsense])
+        self.assertLess(end_error_m(flight, vt, fit), 0.5)
+
     def test_too_few_detections_give_no_flight(self):
         flight, vt, times, pixels, cams = observed_flights(1, "behind", 30.0)[1]
         self.assertIsNone(fit_flight(times[:4], pixels[:4], cams[:4], start_ms=flight.start_time * 1000))

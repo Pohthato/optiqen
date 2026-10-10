@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -23,7 +24,7 @@ import numpy as np
 
 from audio.onsets import detect_onsets
 from geometry.camera import Camera
-from hits import ONSET_GAP_MS, Hit, court_side, find_hits
+from hits import ONSET_GAP_MS, Hit, find_hits
 from simulation.audio import SAMPLE_RATE
 from simulation.clip import SyntheticClip, make_clip
 from simulation.rally import random_rally
@@ -36,6 +37,8 @@ VIEWS = {
     "side": ((-4.5, 6.7, 3.0), (2.59, 6.7, 0.0)),
 }
 TOLERANCE_MS = 33.0
+OBSERVABLE_MS = 250.0  # a hit is observable when the shuttle is detected this close before and after it
+OBSERVABLE_DETECTIONS = 3
 IDLE_AFTER_S = 2.0
 
 
@@ -95,9 +98,28 @@ def simulate(scenario: Scenario) -> Simulated:
     return Simulated(clip, track, times_ms, onsets, false_frames)
 
 
-def score(clip: SyntheticClip, hits: list[Hit]) -> dict[str, Any]:
-    """Hits matched to true contacts one to one within the tolerance (nearest first)."""
+def observable(clip: SyntheticClip, track: list, times_ms: list[float]) -> list[bool]:
+    """Per true hit: whether the shuttle (the real one, not a false detection) was detected at
+    least OBSERVABLE_DETECTIONS times within OBSERVABLE_MS after it, and before it too unless it is
+    the serve. A hit the camera never saw is beyond any method that only has this video."""
+    real = [
+        t for t, point, shuttle in zip(times_ms, track, clip.shuttle)
+        if point is not None and shuttle is not None
+    ]
+    flags = []
+    for index, contact in enumerate(clip.rally.contacts):
+        at = contact.time * 1000.0
+        after = sum(1 for t in real if at < t <= at + OBSERVABLE_MS)
+        before = sum(1 for t in real if at - OBSERVABLE_MS <= t < at)
+        flags.append(after >= OBSERVABLE_DETECTIONS and (index == 0 or before >= OBSERVABLE_DETECTIONS))
+    return flags
+
+
+def score(clip: SyntheticClip, hits: list[Hit], seen: list[bool] | None = None) -> dict[str, Any]:
+    """Hits matched to true contacts one to one within the tolerance (nearest first). With `seen`
+    (per true hit, from observable()), recall is also given over the hits the camera saw."""
     truth = [(contact.time * 1000.0, contact.kind) for contact in clip.rally.contacts]
+    seen = seen if seen is not None else [True] * len(truth)
     pairs = sorted(
         ((abs(hit.time_ms - time), h, t) for h, hit in enumerate(hits) for t, (time, _) in enumerate(truth) if abs(hit.time_ms - time) <= TOLERANCE_MS),
     )
@@ -114,25 +136,34 @@ def score(clip: SyntheticClip, hits: list[Hit]) -> dict[str, Any]:
     return {
         "truth": len(truth),
         "found": len(used_truth),
+        "observable": sum(seen),
+        "foundObservable": sum(1 for t in used_truth if seen[t]),
         "claimed": len(hits),
         "neighbourSounds": len(clip.distractor_times),
         "neighbourHits": neighbour_hits,
         "errorsMs": errors,
-        "missedKinds": [kind for t, (_, kind) in enumerate(truth) if t not in used_truth],
+        "missedKinds": [kind for t, (_, kind) in enumerate(truth) if t not in used_truth and seen[t]],
+        "unseenKinds": [kind for t, (_, kind) in enumerate(truth) if not seen[t]],
     }
 
 
-def run(scenarios: list[Scenario], finder: Callable[[Simulated, Scenario], list[Hit]] | None = None) -> dict[str, Any]:
-    """Scores per scenario and pooled; `finder` defaults to hits.find_hits."""
-    def default(sim: Simulated, scenario: Scenario) -> list[Hit]:
-        cameras = sim.clip.cameras
-        return find_hits(sim.track, sim.times_ms, sim.onsets, side=lambda pixel, frame: court_side(cameras[frame], pixel), frame_size=SIZE)
+def _default_finder(sim: Simulated, scenario: Scenario) -> list[Hit]:
+    return find_hits(sim.track, sim.times_ms, sim.clip.cameras, sim.onsets).hits
 
-    finder = finder or default
-    rows = []
-    for scenario in scenarios:
-        sim = simulate(scenario)
-        rows.append({**asdict(scenario), **score(sim.clip, finder(sim, scenario))})
+
+def _scored(scenario: Scenario, finder=_default_finder) -> dict[str, Any]:
+    sim = simulate(scenario)
+    return {**asdict(scenario), **score(sim.clip, finder(sim, scenario), observable(sim.clip, sim.track, sim.times_ms))}
+
+
+def run(scenarios: list[Scenario], finder: Callable[[Simulated, Scenario], list[Hit]] | None = None, workers: int = 1) -> dict[str, Any]:
+    """Scores per scenario and pooled; `finder` defaults to hits.find_hits. With workers > 1
+    the scenarios run in parallel processes (the default finder only)."""
+    if workers > 1 and finder is None:
+        with ProcessPoolExecutor(workers) as pool:
+            rows = list(pool.map(_scored, scenarios))
+    else:
+        rows = [_scored(scenario, finder or _default_finder) for scenario in scenarios]
     return {"scenarios": rows, "summary": summarise(rows)}
 
 
@@ -147,6 +178,8 @@ def summarise(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "scenarios": len(subset),
             "f1": round(2 * found / (claimed + truth), 3) if claimed + truth else None,
             "recall": round(found / truth, 3) if truth else None,
+            "recallOfObservable": round(sum(r["foundObservable"] for r in subset) / max(1, sum(r["observable"] for r in subset)), 3),
+            "observableShare": round(sum(r["observable"] for r in subset) / truth, 3) if truth else None,
             "precision": round(found / claimed, 3) if claimed else None,
             "medianErrorMs": round(float(np.median(errors)), 1) if errors else None,
             "p90ErrorMs": round(float(np.percentile(errors, 90)), 1) if errors else None,
@@ -154,20 +187,32 @@ def summarise(rows: list[dict[str, Any]]) -> dict[str, Any]:
         }
 
     missed: dict[str, int] = {}
+    unseen: dict[str, int] = {}
     for row in rows:
         for kind in row["missedKinds"]:
             missed[kind] = missed.get(kind, 0) + 1
+        for kind in row["unseenKinds"]:
+            unseen[kind] = unseen.get(kind, 0) + 1
     by = {
         "all": pooled(rows),
         **{f"view={view}": pooled([r for r in rows if r["view"] == view]) for view in sorted({r["view"] for r in rows})},
         **{f"fps={fps:g}": pooled([r for r in rows if r["fps"] == fps]) for fps in sorted({r["fps"] for r in rows})},
         **{f"sound={sound}": pooled([r for r in rows if r["sound"] == sound]) for sound in sorted({r["sound"] for r in rows})},
+        # The gate holds on every view and frame rate, with sound and without.
+        **{
+            f"{name}={value:g},sound={sound}" if isinstance(value, float) else f"{name}={value},sound={sound}": pooled(subset)
+            for name in ("view", "fps")
+            for value in sorted({r[name] for r in rows})
+            for sound in (True, False)
+            if (subset := [r for r in rows if r[name] == value and r["sound"] == sound])
+        },
     }
-    return {"tolerance": f"±{TOLERANCE_MS:g} ms", "pooled": by, "missedByKind": missed}
+    return {"tolerance": f"±{TOLERANCE_MS:g} ms", "pooled": by, "missedObservableByKind": missed, "unobservableByKind": unseen}
 
 
 def standard_scenarios(count: int, first_seed: int = 1000) -> list[Scenario]:
-    """A fixed spread: every view, 30 and 60 fps, 1-3 px jitter, sound on in 5 of 6."""
+    """A fixed spread: every view at 30 and 60 fps, each with sound and without (one in three
+    silent), 1-3 px jitter, 5-20 % dropout."""
     scenarios = []
     for index in range(count):
         rng = np.random.default_rng(first_seed + index)
@@ -178,7 +223,7 @@ def standard_scenarios(count: int, first_seed: int = 1000) -> list[Scenario]:
                 fps=(30.0, 60.0)[(index // len(VIEWS)) % 2],
                 jitter_px=float(rng.uniform(1.0, 3.0)),
                 dropout=float(rng.uniform(0.05, 0.2)),
-                sound=index % 6 != 5,
+                sound=(index // (2 * len(VIEWS))) % 3 != 2,
             )
         )
     return scenarios
@@ -187,9 +232,11 @@ def standard_scenarios(count: int, first_seed: int = 1000) -> list[Scenario]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Benchmark hit finding on hard synthetic rallies.")
     parser.add_argument("--scenarios", type=int, default=60)
+    parser.add_argument("--first-seed", type=int, default=1000, help="another seed gives rallies the method was not tuned on")
     parser.add_argument("--out", type=Path)
+    parser.add_argument("--workers", type=int, default=1, help="parallel processes")
     args = parser.parse_args(argv)
-    report = run(standard_scenarios(args.scenarios))
+    report = run(standard_scenarios(args.scenarios, args.first_seed), workers=args.workers)
     text = json.dumps(report, indent=2, allow_nan=False)
     if args.out:
         args.out.write_text(text, encoding="utf-8")
