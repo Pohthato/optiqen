@@ -66,10 +66,13 @@ class FindHitsCliTests(unittest.TestCase):
         self.assertEqual((code, result["events"]), (0, []))
 
     def test_a_track_of_another_video_is_refused(self):
-        track = track_doc(SIM)
-        track["frames"] = track["frames"][:-5]
-        code, result = self.run_cli(shuttle_doc(SIM), track, SIM.clip.audio)
-        self.assertEqual((code, result), (1, None))
+        shorter, shifted = track_doc(SIM), track_doc(SIM)
+        shorter["frames"] = shorter["frames"][:-5]
+        for frame in shifted["frames"]:
+            frame["timeMs"] += 40.0
+        for track in (shorter, shifted):
+            code, result = self.run_cli(shuttle_doc(SIM), track, SIM.clip.audio)
+            self.assertEqual((code, result), (1, None))
 
     def test_a_video_without_sound_still_gives_hits_from_the_flights(self):
         code, result = self.run_cli(shuttle_doc(SIM), track_doc(SIM), None)

@@ -67,6 +67,7 @@ def make_clip(
     occlusions: list[tuple[float, float]] | tuple = (),
     render: bool = True,
     distractor_times: list[float] | None = None,
+    hit_levels: list[float] | None = None,
 ) -> SyntheticClip:
     """occlusions: (start_s, end_s) stretches where something covers the lens (a hand, a
     person walking past the phone); those frames are near-black and flagged in the truth.
@@ -103,7 +104,7 @@ def make_clip(
             delay = float(np.linalg.norm(np.asarray(contact.position) - camera.centre)) / SPEED_OF_SOUND_M_S
         heard.append(contact.time + delay)
     audio, distractor_times = render_audio(
-        heard, duration, seed=seed, distractors=distractors, offset_s=audio_offset_s, distractor_times=distractor_times
+        heard, duration, seed=seed, distractors=distractors, offset_s=audio_offset_s, distractor_times=distractor_times, hit_levels=hit_levels
     )
     contact_audio_times = [time + audio_offset_s for time in heard]
     return SyntheticClip(

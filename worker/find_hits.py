@@ -46,9 +46,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     shuttle = json.loads(args.shuttle.read_text(encoding="utf-8"))
-    cameras = _cameras(json.loads(args.track.read_text(encoding="utf-8")))
-    if len(cameras) != len(shuttle["frames"]):
-        print(f"the camera track has {len(cameras)} frames and the shuttle detections {len(shuttle['frames'])}", file=sys.stderr)
+    track_doc = json.loads(args.track.read_text(encoding="utf-8"))
+    cameras = _cameras(track_doc)
+    times_ms = [f["timeMs"] for f in shuttle["frames"]]
+    if len(cameras) != len(times_ms) or any(abs(f["timeMs"] - t) > 1.0 for f, t in zip(track_doc["frames"], times_ms)):
+        print("the camera track and the shuttle detections are not of the same frames", file=sys.stderr)
         return 1
     # Filled gaps are InpaintNet's guesses, not sightings, and a frame without a camera cannot be
     # placed in 3D: a hit is judged on what was seen through a known camera.
@@ -56,9 +58,7 @@ def main(argv: list[str] | None = None) -> int:
         (f["x"], f["y"]) if "x" in f and not f.get("inpainted") and camera is not None else None
         for f, camera in zip(shuttle["frames"], cameras)
     ]
-    known = next((camera for camera in cameras if camera is not None), None)
-    cameras = [camera or known for camera in cameras]  # placeholders where nothing is seen
-    times_ms = [f["timeMs"] for f in shuttle["frames"]]
+    known = any(camera is not None for camera in cameras)
     sound_error = None
     try:
         audio = read_audio(args.video, SAMPLE_RATE)
@@ -67,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"no sound used: {error}", file=sys.stderr)
     onsets = detect_onsets(audio, SAMPLE_RATE, min_gap_ms=ONSET_GAP_MS) if audio is not None else None
 
-    result = find_hits(track, times_ms, cameras, onsets) if known is not None else None
+    result = find_hits(track, times_ms, cameras, onsets) if known else None
     hits = result.hits if result is not None else []
     events = [
         {

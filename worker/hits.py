@@ -20,7 +20,7 @@ back into view mid-flight is not a hit, whatever is heard.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Sequence
 
 import numpy as np
@@ -59,6 +59,12 @@ SOUND_NEAR_FRAMES = 2.5  # a sound this close to the flights' time times the hit
 SERVE_MAX_HEIGHT_M = 1.6  # the service law's 1.15 m at contact, plus what a serve rises before it is seen
 MAX_FLIGHT_MS = 2500.0  # no shot stays up longer: a flight out of view this long has landed
 MIN_HIT_INTERVAL_MS = 150.0  # no two hits come closer, even in the fastest exchanges
+SEGMENT_GAP_MS = 3000.0  # nothing seen for this long: what follows is read on its own
+SEGMENT_MARGIN_MS = 500.0
+OFFSET_RERUN_MS = 15.0  # an audio offset larger than this is taken off the sounds and the clip read again
+UNMEASURED_SOUND_MS = 60.0  # with no offset measured, a sound further than this from the flights' time is not the hit's
+NOISE_WINDOW = 7  # detections in a stretch of path the detector's noise is measured on
+DEFAULT_NOISE_PX = 2.0
 SERVE_QUIET_MS = 1500.0  # without sound, a serve needs this long with no shuttle before it
 
 
@@ -105,8 +111,9 @@ def link_tracklets(track: Sequence[tuple[float, float] | None], times_ms: Sequen
             last = np.asarray(track[current[-1]])
             elapsed = times_ms[index] - times_ms[current[-1]]
             start_reach = max(3 * LINK_MIN_PX, focal_px * START_SPEED_RAD_S * elapsed / 1000.0)
-            if len(current) >= 2:
-                rate = (last - np.asarray(track[current[-2]])) / (times_ms[current[-1]] - times_ms[current[-2]])
+            spacing = times_ms[current[-1]] - times_ms[current[-2]] if len(current) >= 2 else 0.0
+            if spacing > 0:
+                rate = (last - np.asarray(track[current[-2]])) / spacing
                 predicted, reach = last + rate * elapsed, max(LINK_MIN_PX, 0.5 * float(np.linalg.norm(rate)) * elapsed)
             else:
                 predicted, reach = last, start_reach
@@ -124,6 +131,21 @@ def link_tracklets(track: Sequence[tuple[float, float] | None], times_ms: Sequen
     return [t for t in tracklets if len(t) >= 2 and np.ptp(np.array([track[i] for i in t]), axis=0).max() >= STILL_PX]
 
 
+def detector_noise(track, times_ms: Sequence[float], tracklets: list[list[int]]) -> float | None:
+    """The detector's pixel noise: the median misfit of a quadratic in time to every stretch of
+    NOISE_WINDOW detections of a tracklet (a stretch over a hit misfits, the median ignores it)."""
+    times = np.asarray(times_ms, dtype=float)
+    sigmas = []
+    for tracklet in tracklets:
+        for start in range(0, len(tracklet) - NOISE_WINDOW + 1, 3):
+            sel = tracklet[start : start + NOISE_WINDOW]
+            t = (times[sel] - times[sel[0]]) / 1000.0
+            p = np.array([track[i] for i in sel], dtype=float)
+            misfit = sum(np.sum((np.polyval(np.polyfit(t, p[:, axis], 2), t) - p[:, axis]) ** 2) for axis in (0, 1))
+            sigmas.append(np.sqrt(misfit / (2 * (NOISE_WINDOW - 3))))
+    return float(np.clip(np.median(sigmas), 0.5, 5.0)) if len(sigmas) >= 5 else None
+
+
 class _Fitter:
     def __init__(self, track, times_ms, cameras, jitter_px):
         self.track, self.times, self.cameras, self.jitter = track, np.asarray(times_ms, dtype=float), cameras, jitter_px
@@ -137,7 +159,9 @@ class _Fitter:
         if len(indices) >= MIN_PIECE:
             piece.fit = fit_flight(
                 self.times[indices], np.array([self.track[i] for i in indices]), [self.cameras[i] for i in indices],
-                start_ms=start_ms, jitter_px=self.jitter, initial=initial,
+                # The fit's robust scale and its "warm start is good enough" test keep a floor: below
+                # it they turn every small model difference into a slow depth search.
+                start_ms=start_ms, jitter_px=max(self.jitter, DEFAULT_NOISE_PX), initial=initial,
             )
             if piece.fit is not None:
                 piece.cost = float(np.sum(np.minimum(self.misfits(piece), OUTLIER_SIGMAS * self.jitter) ** 2) / self.jitter**2)
@@ -154,12 +178,12 @@ class _Fitter:
         return self.fit(a.indices + b.indices, a.start_ms, initial)
 
 
-def _meet(a: FlightFit, b: FlightFit, low_ms: float, high_ms: float) -> tuple[float, np.ndarray]:
-    """When and where flight a (running on) and flight b come closest, between low and high."""
+def _meeting_point(a: FlightFit, b: FlightFit, low_ms: float, high_ms: float) -> np.ndarray:
+    """Where flight a (running on) and flight b come closest in 3D, between low and high."""
     times = np.linspace(low_ms, high_ms, 41)
     gap = np.linalg.norm(a.positions_at(times) - b.positions_at(np.maximum(times, b.start_ms)), axis=1)
-    best = int(np.argmin(gap))
-    return float(times[best]), (a.position_at(times[best]) + b.position_at(max(times[best], b.start_ms))) / 2
+    best = float(times[int(np.argmin(gap))])
+    return (a.position_at(best) + b.position_at(max(best, b.start_ms))) / 2
 
 
 def _projected_meet(a: FlightFit, b: FlightFit, camera: Camera, low_ms: float, high_ms: float) -> float:
@@ -181,6 +205,8 @@ def _image_meet(track, times: np.ndarray, before: list[int], after: list[int], j
     centre_ms = 0.5 * (times[before[-1]] + times[after[0]])
     joint = [i for i in before + after if abs(times[i] - centre_ms) <= IMAGE_WINDOW_MS]
     middle = sum(1 for i in joint if i in set(before))
+    if middle < 3 or len(joint) - middle < 3:
+        return None  # a curve needs three detections a side
     t_all = (np.asarray(times[joint], dtype=float) - centre_ms) / 1000.0
     p_all = np.array([track[i] for i in joint], dtype=float)
 
@@ -200,7 +226,7 @@ def _image_meet(track, times: np.ndarray, before: list[int], after: list[int], j
     gap = np.hypot(*(np.polyval(c_left[axis], taus) - np.polyval(c_right[axis], taus) for axis in (0, 1)))
     if gap.min() > IMAGE_MEET_PX * jitter_px:
         return None
-    return float(centre_ms + 1000.0 * taus[int(np.argmin(gap))])
+    return float(np.clip(centre_ms + 1000.0 * taus[int(np.argmin(gap))], times[before[-1]], times[after[0]]))
 
 
 def _image_turns(track, times: np.ndarray, tracklet: list[int], jitter_px: float) -> list[int]:
@@ -237,22 +263,68 @@ def _spread(fit: FlightFit, time_ms: float) -> np.ndarray:
 def find_hits(
     track: Sequence[tuple[float, float] | None],
     times_ms: Sequence[float],
-    cameras: Sequence[Camera],
+    cameras: Sequence[Camera | None],
     onsets: Sequence | None = None,
-    jitter_px: float = 2.0,
-    trace: list | None = None,
+    jitter_px: float | None = None,
 ) -> RallyAnalysis:
     """Hits and the flights between them, from per-frame shuttle detections (pixel or None),
-    their timestamps, the camera of every frame, and sound onsets (None for a silent video;
-    detect them with min_gap_ms=ONSET_GAP_MS)."""
+    their timestamps, the camera of every frame with a detection, and sound onsets (None for a
+    silent video; detect them with min_gap_ms=ONSET_GAP_MS). The detector's noise is measured
+    from the detections unless given. Stretches with nothing seen for SEGMENT_GAP_MS are read on
+    their own. The audio offset is one for the clip; when it is large the clip is read again with
+    it taken off the sounds, so every sound window sits where a hit's sound arrives."""
     times = np.asarray(times_ms, dtype=float)
+    focal = next((camera.focal_px for camera in cameras if camera is not None), 1000.0)
+    if jitter_px is None:
+        jitter_px = detector_noise(track, times, link_tracklets(track, times, focal)) or DEFAULT_NOISE_PX
+    sounds = sorted(onset.time_ms for onset in onsets) if onsets is not None else None
+    runs: list[list[int]] = []
+    for i, point in enumerate(track):
+        if point is None:
+            continue
+        if runs and times[i] - times[runs[-1][1]] < SEGMENT_GAP_MS:
+            runs[-1][1] = i
+        else:
+            runs.append([i, i])
+    segments = [
+        (int(np.searchsorted(times, times[a] - SEGMENT_MARGIN_MS)), int(np.searchsorted(times, times[b] + SEGMENT_MARGIN_MS, side="right")))
+        for a, b in runs
+    ]
+
+    def read(shift: float, offset: float | None):
+        parts = []
+        for lo, hi in segments:
+            near = None if sounds is None else [s - shift for s in sounds if times[lo] - SEGMENT_MARGIN_MS <= s - shift <= times[hi - 1] + SEGMENT_MARGIN_MS]
+            parts.append((lo, *_read(track[lo:hi], times[lo:hi], cameras[lo:hi], near, jitter_px, focal, offset)))
+        return parts
+
+    parts = read(0.0, None)
+    offset = _consensus([value for _, _, samples in parts for value in samples])
+    shift = 0.0
+    if offset is not None and (abs(offset) > OFFSET_RERUN_MS or any(a.audio_offset_ms is None or abs(a.audio_offset_ms - offset) > 5.0 for _, a, _ in parts)):
+        shift = offset if abs(offset) > OFFSET_RERUN_MS else 0.0
+        parts = read(shift, offset - shift)
+    hits, flights = [], []
+    for lo, analysis, _ in parts:
+        hits += [replace(hit, frame=hit.frame + lo, heard_ms=None if hit.heard_ms is None else hit.heard_ms + shift) for hit in analysis.hits]
+        flights += [replace(piece, indices=[i + lo for i in piece.indices]) for piece in analysis.flights]
+    used = {hit.heard_ms for hit in hits}
+    rejected = [s for s in sounds if s not in used] if sounds is not None else []
+    noise = float(np.median([analysis.noise_px for _, analysis, _ in parts])) if parts else jitter_px
+    return RallyAnalysis(sorted(hits, key=lambda h: h.time_ms), flights, noise, offset, rejected)
+
+
+def _read(track, times: np.ndarray, cameras, sounds: list[float] | None, jitter_px: float, focal: float, offset: float | None):
+    """One stretch of a clip: its analysis, and the audio offset each sound-backed hit measures.
+    `sounds` is None when the video is silent; `offset`, when known, is used as is."""
     fitter = _Fitter(track, times, cameras, jitter_px)
-    tracklets = link_tracklets(track, times, cameras[0].focal_px if len(cameras) else 1000.0)
+    tracklets = link_tracklets(track, times, focal)
     kept = sorted(i for tracklet in tracklets for i in tracklet)
+    sounds = sounds or []
     if not kept:
-        return RallyAnalysis([], [], jitter_px)
+        return RallyAnalysis([], [], jitter_px, offset, list(sounds)), []
     tracklet_starts = {tracklet[0] for tracklet in tracklets}
-    sounds = sorted(onset.time_ms for onset in onsets) if onsets is not None else []
+    kept_times = times[kept]
 
     # Where a hit might be, as positions in `kept` (a boundary before kept[k]), and the sound behind it.
     hard = {k for k in range(1, len(kept)) if times[kept[k]] - times[kept[k - 1]] > HARD_GAP_MS}
@@ -263,7 +335,8 @@ def find_hits(
             if position[index] not in hard:
                 soft.setdefault(position[index], None)
     for heard in sounds:
-        window = [k for k in range(1, len(kept)) if k not in hard and heard - HEARD_AFTER_HIT_MS <= times[kept[k - 1]] <= heard]
+        first, last = np.searchsorted(kept_times, [heard - HEARD_AFTER_HIT_MS, heard], side="left")[0], np.searchsorted(kept_times, heard, side="right")
+        window = [k for k in range(max(1, first + 1), min(len(kept), last + 1)) if k not in hard]
         if window:
             k = min(window, key=lambda k: abs(times[kept[k]] - (heard - 20.0)))
             if soft.get(k) is None:
@@ -274,9 +347,6 @@ def find_hits(
         for lo, hi in zip(edges, edges[1:])
     ]
     sound_of = [soft.get(edge) for edge in edges[1:-1]]  # the sound at the boundary after pieces[i]
-    if trace is not None:
-        trace.append(("tracklets", [(times[t[0]], times[t[-1]], len(t)) for t in tracklets]))
-        trace.append(("pieces", [(times[p.indices[0]], times[p.indices[-1]], len(p.indices), p.fit is not None, round(p.cost, 1)) for p in pieces], list(sound_of)))
     joinable = [edge not in hard for edge in edges[1:-1]]
 
     # Merge, weakest boundary first, while one flight explains a pair nearly as well as two.
@@ -300,8 +370,6 @@ def find_hits(
         i = int(np.argmin(scores))
         if scores[i] >= 0:
             break
-        if trace is not None:
-            trace.append(("merge", times[pieces[i].indices[-1]], sound_of[i], round(float(scores[i]), 1)))
         joined = fitter.merged(pieces[i], pieces[i + 1])
         if joined.fit is None:  # both halves unfittable: keep them together without a flight
             joined = Piece(pieces[i].indices + pieces[i + 1].indices, pieces[i].start_ms)
@@ -353,8 +421,12 @@ def find_hits(
 
     frame_ms = float(np.median(np.diff(times))) if len(times) > 1 else 0.0
 
+    (x_low, x_high), (y_low, y_high) = CONTACT_BOX
+
     def travel_ms(where: np.ndarray, frame: int) -> float:
-        return float(np.linalg.norm(np.asarray(where) - cameras[frame].centre)) / SPEED_OF_SOUND_M_S * 1000.0
+        # From where a racket can be: a poorly fitted contact point must not make the sound absurd.
+        point = np.clip(np.asarray(where, dtype=float), (x_low, y_low, 0.0), (x_high, y_high, MAX_CONTACT_HEIGHT_M))
+        return float(np.linalg.norm(point - cameras[frame].centre)) / SPEED_OF_SOUND_M_S * 1000.0
 
     def first_seen(piece: Piece) -> int:
         """The piece's first detection its flight explains: a false one before it is not the shuttle."""
@@ -367,7 +439,7 @@ def find_hits(
         a, b = pieces[i], pieces[i + 1]
         low, high = float(times[a.indices[-1]]), float(times[b.indices[0]])
         if a.fit is not None and b.fit is not None:
-            return _projected_meet(a.fit, b.fit, cameras[b.indices[0]], low, high), _meet(a.fit, b.fit, low, high)[1]
+            return _projected_meet(a.fit, b.fit, cameras[b.indices[0]], low, high), _meeting_point(a.fit, b.fit, low, high)
         # One side is too short for its own flight: the contact is where the other one ends.
         where = a.fit.position_at(low) if a.fit is not None else b.fit.position_at(high)
         return _image_meet(track, times, a.indices, b.indices, jitter_px), where
@@ -397,17 +469,15 @@ def find_hits(
         if not _plausible_contact(origin):
             continue
         heard = [s for s in sounds if HEARD_BEFORE_FLIGHT_MS[0] <= first_ms - s <= HEARD_BEFORE_FLIGHT_MS[1]]
-        if onsets is not None and not heard:
-            continue
         # A serve comes after a pause, from below the service law's height (half a frame back from
-        # where it is first seen). Anything else is a hit whose incoming flight went unseen: with
-        # a sound to time it, a hit; with none, a shuttle coming back into view.
-        earlier = [times[j] for j in kept if times[j] < first_ms]
+        # where it is first seen), heard or not. Anything else is a hit whose incoming flight went
+        # unseen: with a sound to time it, a hit; with none, a shuttle coming back into view.
+        earlier = kept_times[: int(np.searchsorted(kept_times, first_ms))]
         rise = (piece.fit.position_at(first_ms + 1.0)[2] - origin[2]) * 1000.0
         height = origin[2] - rise * 0.5 * frame_ms / 1000.0
         # Along the line of sight depth, and with it height, is uncertain: low enough within two
         # standard deviations is low enough.
-        if (not earlier or first_ms - max(earlier) >= SERVE_QUIET_MS) and height - _spread(piece.fit, first_ms)[2] <= SERVE_MAX_HEIGHT_M:
+        if (not len(earlier) or first_ms - earlier[-1] >= SERVE_QUIET_MS) and height - _spread(piece.fit, first_ms)[2] <= SERVE_MAX_HEIGHT_M:
             kind = "serve"
         elif heard and not continues(i):
             kind = "outgoing flight"
@@ -424,7 +494,8 @@ def find_hits(
         low, high = float(times[pieces[i].indices[-1]]), float(times[pieces[i + 1].indices[0]])
         reference = met if met is not None else 0.5 * (low + high)
         travel = travel_ms(where, pieces[i + 1].indices[0])
-        options += [(abs(heard - travel - reference), n, heard) for heard in sounds if low - SOUND_SEARCH_MS <= heard - travel <= high + SOUND_SEARCH_MS]
+        lo_s, hi_s = np.searchsorted(sounds, [low - SOUND_SEARCH_MS + travel, high + SOUND_SEARCH_MS + travel], side="left")[0], np.searchsorted(sounds, high + SOUND_SEARCH_MS + travel, side="right")
+        options += [(abs(heard - travel - reference), n, heard) for heard in sounds[lo_s:hi_s]]
     for _, n, heard in sorted(options):
         if boundaries[n][3] is None and heard not in taken:
             boundaries[n][3] = heard
@@ -433,7 +504,9 @@ def find_hits(
     # A hit is heard after its sound travels from the contact point to the phone, plus whatever the
     # phone's audio runs behind its video: one offset for the clip, taken from the boundaries whose
     # flights time them and on which enough of them agree. With it, the sound times a hit to a few ms.
-    offset = _consensus([heard - travel_ms(where, pieces[i + 1].indices[0]) - met for i, met, where, heard in boundaries if heard is not None and met is not None])
+    samples = [heard - travel_ms(where, pieces[i + 1].indices[0]) - met for i, met, where, heard in boundaries if heard is not None and met is not None]
+    if offset is None:
+        offset = _consensus(samples)
     hits = []
     for entry in boundaries:
         i, met, where, heard = entry
@@ -454,8 +527,6 @@ def find_hits(
                 cut = int(np.searchsorted(times[joint], by_sound))
                 moved = resplit(a, b, cut) if MIN_PIECE <= cut <= len(joint) - MIN_PIECE else (Piece([], 0.0), Piece([], 0.0))
                 fits = moved[0].fit is not None and moved[1].fit is not None and moved[0].cost + moved[1].cost - a.cost - b.cost <= SOUND_RESPLIT_COST
-                if trace is not None:
-                    trace.append(("sound check", met, by_sound, heard, cut, len(a.indices), moved[0].cost + moved[1].cost - a.cost - b.cost))
                 if fits:
                     pieces[i], pieces[i + 1] = moved
                     a, b = moved
@@ -465,6 +536,8 @@ def find_hits(
                     when = by_sound
                 else:
                     heard = None  # someone else's sound
+        elif heard is not None and abs(met - (heard - travel_ms(where, frame))) > UNMEASURED_SOUND_MS:
+            heard = None  # no offset to time it by, and too far from the flights' time to be the hit's
         if when is None:
             when = float(times[frame]) - 0.5 * frame_ms  # between the sightings either side
         gain = fitter.merged(a, b).cost - own(a) - own(b)
@@ -492,7 +565,7 @@ def find_hits(
         else:
             k += 1
     used = {hit.heard_ms for hit in hits}
-    return RallyAnalysis(sorted(hits, key=lambda h: h.time_ms), pieces, noise, offset, [s for s in sounds if s not in used])
+    return RallyAnalysis(hits, pieces, noise, offset, [s for s in sounds if s not in used]), samples
 
 
 def _consensus(values: Sequence[float]) -> float | None:

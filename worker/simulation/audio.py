@@ -31,10 +31,12 @@ def render_audio(
     hit_amplitude: float = 0.5,
     noise_amplitude: float = 0.01,
     distractor_times: list[float] | None = None,
+    hit_levels: list[float] | None = None,
 ) -> tuple[np.ndarray, list[float]]:
     """Mono float32 track and the times of the distractor hits (a neighbouring court). With
     `distractor_times` they are placed exactly there, however close to the rally's hits;
-    otherwise `distractors` of them are placed at random, away from the rally's hits."""
+    otherwise `distractors` of them are placed at random, away from the rally's hits.
+    `hit_levels` scales each hit's loudness (a mishit or a soft touch is quieter)."""
     rng = np.random.default_rng(seed)
     samples = (noise_amplitude * rng.normal(size=int(round(duration_s * sample_rate)))).astype(np.float32)
 
@@ -45,8 +47,8 @@ def render_audio(
             end = min(len(samples), start + len(sound))
             samples[start:end] += sound[: end - start]
 
-    for time in contact_times:
-        place(time + offset_s, hit_amplitude)
+    for index, time in enumerate(contact_times):
+        place(time + offset_s, hit_amplitude * (hit_levels[index] if hit_levels is not None else 1.0))
     heard = [time + offset_s for time in contact_times]
     if distractor_times is not None:
         for time in distractor_times:

@@ -16,14 +16,16 @@ import argparse
 import json
 import sys
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
+import cv2
 import numpy as np
 
 from audio.onsets import detect_onsets
 from geometry.camera import Camera
+from geometry.shuttle_physics import FEATHER_TERMINAL_VELOCITY
 from hits import ONSET_GAP_MS, Hit, find_hits
 from simulation.audio import SAMPLE_RATE
 from simulation.clip import SyntheticClip, make_clip
@@ -52,6 +54,7 @@ class Scenario:
     false_per_s: float = 0.5  # false detections (each a still blob lasting 1-6 frames)
     neighbour_per_s: float = 0.4  # a neighbouring court's hits, heard at random times
     sound: bool = True
+    stress: bool = False  # the world differs from the method's models: see simulate()
 
 
 @dataclass
@@ -61,19 +64,45 @@ class Simulated:
     times_ms: list[float]
     onsets: list | None
     false_frames: int
+    cameras: list[Camera]  # what the method is given: the clip's own, or miscalibrated ones under stress
+
+
+def _miscalibrated(cameras: list[Camera], rng: np.random.Generator) -> list[Camera]:
+    """The cameras as a court calibration would give them: one pose error for the clip (about
+    0.2 degrees, 3 cm, 1 % in focal length) and a little frame-to-frame jitter (0.03 degrees)."""
+
+    def turned(rvec, degrees: float) -> np.ndarray:
+        axis = rng.normal(size=3)
+        delta = cv2.Rodrigues(axis / np.linalg.norm(axis) * np.radians(degrees))[0]
+        return cv2.Rodrigues(delta @ cv2.Rodrigues(np.asarray(rvec, dtype=float).reshape(3, 1))[0])[0].ravel()
+
+    angle, shift, scale = rng.normal(0.0, 0.2), rng.normal(0.0, 0.03, 3), 1.0 + rng.normal(0.0, 0.01)
+    out = []
+    for camera in cameras:
+        rvec = turned(turned(camera.rvec, angle), rng.normal(0.0, 0.03))
+        out.append(Camera(camera.focal_px * scale, camera.cx, camera.cy, rvec, np.asarray(camera.tvec, dtype=float).ravel() + shift, camera.k1))
+    return out
 
 
 def simulate(scenario: Scenario) -> Simulated:
+    """A scenario's clip and what a detector would report. Under `stress` the world differs from
+    the method's models, from its own random stream: the shuttle's terminal velocity is up to
+    10 % off the 6.7 m/s the fit assumes, the audio runs -20 to +80 ms off the video, one hit in
+    five is 12 dB quieter, false detections drift, and the cameras are miscalibrated."""
     rng = np.random.default_rng(scenario.seed)
+    stress = np.random.default_rng(scenario.seed + 104_729) if scenario.stress else None
     position, target = VIEWS[scenario.view]
     position = tuple(np.asarray(position) + rng.uniform(-0.5, 0.5, 3) * (1, 1, 0.4))
     camera = Camera.look_at(position, target, FOCAL_PX, SIZE)
-    rally = random_rally(rng)
+    terminal = FEATHER_TERMINAL_VELOCITY * (stress.uniform(0.9, 1.1) if stress is not None else 1.0)
+    rally = random_rally(rng, terminal_velocity=terminal)
     duration = rally.end_time + IDLE_AFTER_S
     neighbours = sorted(rng.uniform(0.0, duration - 0.05, rng.poisson(scenario.neighbour_per_s * duration)).tolist())
     clip = make_clip(
         camera, SIZE, rally, fps=scenario.fps, handheld=True, seed=scenario.seed, tail_s=IDLE_AFTER_S,
         distractor_times=neighbours, render=False,
+        audio_offset_s=stress.uniform(-0.02, 0.08) if stress is not None else 0.0,
+        hit_levels=[0.25 if stress.random() < 0.2 else 1.0 for _ in rally.contacts] if stress is not None else None,
     )
     track: list[tuple[float, float] | None] = []
     blob: tuple[np.ndarray, int] | None = None
@@ -86,16 +115,18 @@ def simulate(scenario: Scenario) -> Simulated:
                 seen = pixel + rng.normal(0.0, scenario.jitter_px, 2)
         if blob is None and rng.random() < scenario.false_per_s / scenario.fps:
             blob = (np.array([rng.uniform(0.1, 0.9) * SIZE[0], rng.uniform(0.35, 0.95) * SIZE[1]]), int(rng.integers(1, 7)))
+            drift = stress.normal(0.0, 150.0, 2) / scenario.fps if stress is not None else np.zeros(2)  # px per frame
         if blob is not None:
-            # A still white object (a shoe, a line end) wins over the shuttle some of the time.
+            # A white object (a shoe, a line end) wins over the shuttle some of the time.
             if seen is None or rng.random() < 0.3:
                 seen = blob[0] + rng.normal(0.0, scenario.jitter_px, 2)
                 false_frames += 1
-            blob = (blob[0], blob[1] - 1) if blob[1] > 1 else None
+            blob = (blob[0] + drift, blob[1] - 1) if blob[1] > 1 else None
         track.append(None if seen is None else (float(seen[0]), float(seen[1])))
     times_ms = [index * 1000.0 / scenario.fps for index in range(len(track))]
     onsets = detect_onsets(clip.audio, SAMPLE_RATE, min_gap_ms=ONSET_GAP_MS) if scenario.sound else None
-    return Simulated(clip, track, times_ms, onsets, false_frames)
+    cameras = _miscalibrated(clip.cameras, stress) if stress is not None else list(clip.cameras)
+    return Simulated(clip, track, times_ms, onsets, false_frames, cameras)
 
 
 def observable(clip: SyntheticClip, track: list, times_ms: list[float]) -> list[bool]:
@@ -148,7 +179,7 @@ def score(clip: SyntheticClip, hits: list[Hit], seen: list[bool] | None = None) 
 
 
 def _default_finder(sim: Simulated, scenario: Scenario) -> list[Hit]:
-    return find_hits(sim.track, sim.times_ms, sim.clip.cameras, sim.onsets).hits
+    return find_hits(sim.track, sim.times_ms, sim.cameras, sim.onsets).hits
 
 
 def _scored(scenario: Scenario, finder=_default_finder) -> dict[str, Any]:
@@ -233,10 +264,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Benchmark hit finding on hard synthetic rallies.")
     parser.add_argument("--scenarios", type=int, default=60)
     parser.add_argument("--first-seed", type=int, default=1000, help="another seed gives rallies the method was not tuned on")
+    parser.add_argument("--stress", action="store_true", help="a world that differs from the method's models (see simulate)")
     parser.add_argument("--out", type=Path)
     parser.add_argument("--workers", type=int, default=1, help="parallel processes")
     args = parser.parse_args(argv)
-    report = run(standard_scenarios(args.scenarios, args.first_seed), workers=args.workers)
+    scenarios = [replace(s, stress=args.stress) for s in standard_scenarios(args.scenarios, args.first_seed)]
+    report = run(scenarios, workers=args.workers)
     text = json.dumps(report, indent=2, allow_nan=False)
     if args.out:
         args.out.write_text(text, encoding="utf-8")

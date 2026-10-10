@@ -6,7 +6,7 @@ import numpy as np
 from audio.onsets import detect_onsets
 from evaluation.hits_benchmark import SIZE
 from geometry.camera import Camera
-from hits import ONSET_GAP_MS, _consensus, find_hits, link_tracklets
+from hits import ONSET_GAP_MS, _consensus, _image_meet, detector_noise, find_hits, link_tracklets
 from simulation.audio import SAMPLE_RATE
 from simulation.clip import make_clip
 from simulation.rally import canned_rally
@@ -95,12 +95,16 @@ class SoundTests(unittest.TestCase):
         self.assertLess(float(np.median(errors(result.hits))), 5.0)
         self.assertEqual(result.hits[0].evidence, "sound and serve")
 
-    def test_the_phones_audio_offset_is_measured_and_taken_off(self):
-        clip = clip_of(audio_offset_s=0.06)
+    def test_a_large_audio_offset_is_measured_and_taken_off_the_sounds(self):
+        # 100 ms: beyond every window that assumes a hit is heard soon after it; the clip is read
+        # again with the offset taken off, so even the serve keeps its sound.
+        clip = clip_of(audio_offset_s=0.1)
         onsets = detect_onsets(clip.audio, SAMPLE_RATE, min_gap_ms=ONSET_GAP_MS)
         result = find_hits(seen(clip), times(len(clip.cameras)), clip.cameras, onsets)
-        self.assertAlmostEqual(result.audio_offset_ms, 60.0, delta=8.0)
-        self.assertLess(float(np.median(errors(result.hits))), 5.0)
+        self.assertAlmostEqual(result.audio_offset_ms, 100.0, delta=8.0)
+        self.assertTrue(all(e <= 33 for e in errors(result.hits)))
+        self.assertEqual([hit.evidence for hit in result.hits][0], "sound and serve")
+        self.assertTrue(all(hit.heard_ms is not None for hit in result.hits))
 
     def test_a_neighbouring_courts_sound_in_mid_flight_is_not_a_hit(self):
         middles = [(f.start_time + f.end_time) / 2 for f in RALLY.flights]
@@ -132,7 +136,41 @@ class SoundTests(unittest.TestCase):
         self.assertEqual(near(result.hits, gap[1] * 1000, 200.0), [])
 
 
+class LongVideoTests(unittest.TestCase):
+    def test_rallies_apart_are_read_apart_and_all_their_hits_found(self):
+        clip = clip_of()
+        gap = 150  # 5 s at 30 fps with nothing seen
+        track = seen(clip) + [None] * gap + seen(clip, seed=4)
+        cameras = list(clip.cameras) + [None] * gap + list(clip.cameras)
+        result = find_hits(track, times(len(track)), cameras, None)
+        later = (len(clip.cameras) + gap) * 1000.0 / FPS
+        second = [t + later for t in TRUTH_MS]
+        self.assertGreaterEqual(sum(e <= 33 for e in errors(result.hits, TRUTH_MS + second)), 2 * len(TRUTH_MS) - 2)
+        self.assertTrue(all(result.flights[k].indices[0] < result.flights[k + 1].indices[0] for k in range(len(result.flights) - 1)))
+
+
 class PartTests(unittest.TestCase):
+    def test_the_detectors_noise_is_measured_from_the_path(self):
+        rng = np.random.default_rng(2)
+        stamps = times(120)
+        path = [(300.0 + 9.0 * i, 500.0 - 14.0 * i + 0.3 * i * i) for i in range(120)]
+        track = [tuple(np.asarray(p) + rng.normal(0, 1.5, 2)) for p in path]
+        noise = detector_noise(track, stamps, link_tracklets(track, stamps))
+        self.assertAlmostEqual(noise, 1.5, delta=0.3)
+
+    def test_an_image_crossing_needs_three_detections_a_side(self):
+        stamps = np.array(times(12))
+        track = [(100.0 + 10 * i, 300.0 + 2 * i) for i in range(6)] + [(150.0 - 10 * i, 312.0 - 2 * i) for i in range(6)]
+        self.assertIsNone(_image_meet(track, stamps, [4, 5], [6, 7, 8, 9], 1.0))
+        met = _image_meet(track, stamps, [0, 1, 2, 3, 4, 5], [6, 7, 8, 9, 10, 11], 1.0)
+        self.assertTrue(stamps[5] <= met <= stamps[6])
+
+    def test_a_repeated_timestamp_does_not_break_a_tracklet(self):
+        stamps = times(10)
+        stamps[5] = stamps[4]
+        track = [(100.0 + 12 * i, 300.0) for i in range(10)]
+        self.assertEqual(len(link_tracklets(track, stamps)), 1)
+
     def test_the_offset_is_what_enough_hits_agree_on(self):
         self.assertAlmostEqual(_consensus([31.0, 29.0, 30.0, 140.0, -80.0]), 30.0)
         self.assertIsNone(_consensus([10.0, 60.0, 120.0]))

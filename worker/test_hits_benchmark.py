@@ -29,6 +29,18 @@ class SimulateTests(unittest.TestCase):
         self.assertEqual(clean.clip.distractor_times, [])
         self.assertIsNone(clean.onsets)
 
+    def test_under_stress_the_world_differs_from_the_methods_models_reproducibly(self):
+        plain, stressed = simulate(Scenario(seed=7)), simulate(Scenario(seed=7, stress=True))
+        self.assertEqual(plain.cameras, list(plain.clip.cameras))
+        self.assertEqual(plain.clip.audio_offset_s, 0.0)
+        self.assertNotAlmostEqual(stressed.clip.rally.terminal_velocity, plain.clip.rally.terminal_velocity)
+        self.assertNotEqual(stressed.clip.audio_offset_s, 0.0)
+        floor = np.array([[2.0, 3.0, 0.0]])
+        miss = np.linalg.norm(stressed.cameras[5].project(floor) - stressed.clip.cameras[5].project(floor))
+        self.assertTrue(0.1 < miss < 30.0)  # miscalibrated by pixels, not by metres
+        again = simulate(Scenario(seed=7, stress=True))
+        self.assertEqual(again.track, stressed.track)
+
     def test_the_standard_set_has_every_view_and_frame_rate_with_sound_and_without(self):
         scenarios = standard_scenarios(18)
         self.assertEqual({(s.view, s.fps, s.sound) for s in scenarios}, {(v, f, s) for v in ("behind", "corner", "side") for f in (30.0, 60.0) for s in (True, False)})

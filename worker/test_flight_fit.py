@@ -5,7 +5,7 @@ import numpy as np
 
 from evaluation.hits_benchmark import FOCAL_PX, SIZE, VIEWS
 from geometry.camera import Camera
-from geometry.flight_fit import fit_flight, simulate_batch
+from geometry.flight_fit import fit_flight, simulate_batch, simulate_grid
 from geometry.shuttle_physics import simulate
 from simulation.camera_path import stable_handheld
 from simulation.rally import random_rally
@@ -46,6 +46,18 @@ def end_error_m(flight, terminal_velocity, fit) -> float:
     """Where the fit puts the shuttle when the flight ended (a receive point, or the landing)."""
     truth = simulate(flight.p0, flight.v0, [flight.end_time - flight.start_time], terminal_velocity)[0]
     return float(np.linalg.norm(fit.position_at(flight.end_time * 1000.0) - truth))
+
+
+class SimulateGridTests(unittest.TestCase):
+    def test_the_fits_fast_simulator_stays_close_to_the_exact_path(self):
+        rng = np.random.default_rng(0)
+        times = np.linspace(0.0, 1.5, 76)
+        for top, tolerance in ((60.0, 0.0005), (110.0, 0.01)):
+            p0 = rng.uniform((0, 1, 0.5), (5, 12, 3), (100, 3))
+            direction = rng.normal(size=(100, 3))
+            v0 = direction / np.linalg.norm(direction, axis=1)[:, None] * rng.uniform(0.5 * top, top, (100, 1))
+            exact = simulate_batch(p0, v0, times, step_s=0.001)
+            self.assertLess(float(np.linalg.norm(simulate_grid(p0, v0, times) - exact, axis=2).max()), tolerance)
 
 
 class SimulateBatchTests(unittest.TestCase):
