@@ -11,11 +11,11 @@ from simulation.camera_path import stable_handheld
 from simulation.rally import random_rally
 
 
-def observed_flights(seed: int, view: str, fps: float, jitter_px: float = 2.0, dropout: float = 0.1, outliers: float = 0.0):
+def observed_flights(seed: int, view: str, fps: float, jitter_px: float = 2.0, dropout: float = 0.1, outliers: float = 0.0, terminal_velocity: float = 6.7):
     """Every flight of a random rally as a steadily held phone sees it: per-frame cameras, the
     detections inside the frame (jittered, some missed, some wild), and the true 3D flight."""
     rng = np.random.default_rng(seed)
-    rally = random_rally(rng)
+    rally = random_rally(rng, terminal_velocity=terminal_velocity)
     position, target = VIEWS[view]
     base = Camera.look_at(tuple(np.asarray(position) + rng.uniform(-0.5, 0.5, 3) * (1, 1, 0.4)), target, FOCAL_PX, SIZE)
     count = int(np.ceil((rally.end_time + 0.2) * fps))

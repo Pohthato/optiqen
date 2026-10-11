@@ -54,6 +54,7 @@ class Scenario:
     false_per_s: float = 0.5  # false detections (each a still blob lasting 1-6 frames)
     neighbour_per_s: float = 0.4  # a neighbouring court's hits, heard at random times
     sound: bool = True
+    final_near_line: bool = False  # aim the rally's last shot within 40 cm of a line, in or out
     stress: bool = False  # the world differs from the method's models: see simulate()
 
 
@@ -95,7 +96,7 @@ def simulate(scenario: Scenario) -> Simulated:
     position = tuple(np.asarray(position) + rng.uniform(-0.5, 0.5, 3) * (1, 1, 0.4))
     camera = Camera.look_at(position, target, FOCAL_PX, SIZE)
     terminal = FEATHER_TERMINAL_VELOCITY * (stress.uniform(0.9, 1.1) if stress is not None else 1.0)
-    rally = random_rally(rng, terminal_velocity=terminal)
+    rally = random_rally(rng, terminal_velocity=terminal, final_near_line=scenario.final_near_line)
     duration = rally.end_time + IDLE_AFTER_S
     neighbours = sorted(rng.uniform(0.0, duration - 0.05, rng.poisson(scenario.neighbour_per_s * duration)).tolist())
     clip = make_clip(

@@ -172,10 +172,22 @@ def _try_shot(position: np.ndarray, kind: str, target: np.ndarray, flight_time: 
     return simulate(position, v0, [duration], terminal_velocity)[0]
 
 
-def random_rally(rng: np.random.Generator, terminal_velocity: float = FEATHER_TERMINAL_VELOCITY) -> Rally:
+def _near_line(rng: np.random.Generator, near: bool) -> np.ndarray:
+    """A landing within 40 cm of one of the receiving half's singles boundary lines, either side."""
+    off = rng.uniform(-0.4, 0.4)  # positive: outside the line
+    back = COURT_LENGTH_M + off if near else -off
+    line = int(rng.integers(3))
+    if line == 2:
+        return np.array([rng.uniform(0.3, SINGLES_WIDTH_M - 0.3), back, 0.0])
+    depth = rng.uniform(1.0, NET_Y_M - 0.5)
+    return np.array([-off if line == 0 else SINGLES_WIDTH_M + off, NET_Y_M + depth if near else NET_Y_M - depth, 0.0])
+
+
+def random_rally(rng: np.random.Generator, terminal_velocity: float = FEATHER_TERMINAL_VELOCITY, final_near_line: bool = False) -> Rally:
     """A random, physically valid singles rally: a low or high serve from the near half, then
     2-10 shots, each chosen from those playable at its contact height (smashes and clears from
-    overhead, lifts and net shots from low), the last one landing in court."""
+    overhead, lifts and net shots from low), the last one landing in court, or with
+    `final_near_line` within 40 cm of a boundary line, in or out."""
     count = int(rng.integers(2, 11))
     right = bool(rng.random() < 0.5)
     serve_position = np.array([rng.uniform(3.0, 4.6) if right else rng.uniform(0.6, 2.2), rng.uniform(2.8, 4.4), rng.uniform(0.9, 1.15)])
@@ -195,6 +207,8 @@ def random_rally(rng: np.random.Generator, terminal_velocity: float = FEATHER_TE
                     x = rng.uniform(0.3, 4.9)
                 d = rng.uniform(*depth)
                 target = np.array([x, NET_Y_M + d if near else NET_Y_M - d, 0.0])
+                if last and final_near_line:
+                    target = _near_line(rng, near)
                 flight_time = float(rng.uniform(*flight))
                 height = None if last else float(rng.uniform(*receive))
                 landed = _try_shot(position, kind, target, flight_time, height, terminal_velocity)

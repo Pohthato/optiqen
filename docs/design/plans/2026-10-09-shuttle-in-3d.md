@@ -14,7 +14,7 @@ Each step is pushed on its own.
 | --- | --- | --- | --- |
 | 3a | **One flight in 3D.** Fit launch point and velocity to a flight's detections through the per-frame cameras. Robust to outliers, started from several depths along the first ray (one camera cannot see depth directly; gravity and drag fix it). It gives a covariance, so every derived number has an uncertainty. | `worker/geometry/flight_fit.py` | Synthetic flights from all three views, 30 and 60 fps, 2 px jitter: median landing error < 30 cm; launch speed and apex height errors reported; the stated uncertainty covers the true value about as often as it claims to. |
 | 3b | **A rally as a chain of flights.** Candidate hit times come from sounds, image turns and track starts. The chosen hits are the ones that let physically possible flights explain the detections: a split must pay for itself against the clip's measured noise. Neighbouring flights share their contact point, the last flight ends on the floor, and a hit is timed by its sound less the travel time from the fitted 3D contact point to the phone, less the clip's measured audio/video offset. | `worker/hits.py` (replaced) | The Phase 2 hard benchmark: F1 at ±33 ms ≥ 0.95 with sound (baseline 0.82), ≥ 0.85 without (baseline 0.46), at most 1 % of neighbouring-court sounds taken as hits (baseline 12 %), on every view and both frame rates. |
-| 3c | **Shot facts.** Neighbouring flights refitted together so they share their contact point, and the last flight ending on the floor (carried from 3b). Per shot: contact point and height, hitter's half, launch speed and angle, apex, net crossing height and clearance, flight time, landing point, and in, out or too close to call. In/out uses the rule boundaries (lines are in) for singles or doubles, and for serves the service court. | `worker/shots.py` | Synthetic: median landing error < 30 cm; in/out correct on ≥ 98 % of the shots it calls, with the "too close to call" rate reported; net clearance and speed errors reported. |
+| 3c | **Shot facts.** Neighbouring flights refitted together so they share their contact point, the shuttle's drag measured (carried from 3b's stress results), and the last flight ending on the floor (carried from 3b). Per shot: contact point and height, hitter's half, launch speed and angle, apex, net crossing height and clearance, flight time, landing point, and in, out or too close to call. In/out uses the rule boundaries (lines are in) for singles or doubles, and for serves the service court. | `worker/shots.py` | Synthetic: median landing error < 30 cm; in/out correct on ≥ 98 % of the shots it calls, with the "too close to call" rate reported; net clearance and speed errors reported. |
 | 3d | **One command, one result.** Video → camera track → shuttle → hits → flights → shot facts, plus an overlay of the fitted 3D flights and a top-down court diagram. | `worker/analyse_rally.py` | Runs end to end on the Hendry clip; the result validates; real-footage accuracy comes from your labels. |
 
 ## Decisions
@@ -141,3 +141,60 @@ F1 at ±33 ms over all true hits, including those the camera never saw:
 - **The simulator.** The flight simulator steps coordinates as (3, B) rows, 1.4–2× faster than before with results identical to the previous version (within 1e-14). Against an exact 1 ms RK4 it is within 0.5 mm up to 60 m/s and within 1 cm up to smash speeds (`test_flight_fit.py`).
 - **A rally.** An 8 s rally at 30 fps takes about 13–15 s on one core of this laptop, and slower when it is busy.
 - **A whole match.** Stretches with nothing seen for 3 s are read on their own, so a match costs the sum of its rallies. Running them in parallel processes is for the pipeline step (3d).
+
+## 3c results (shot facts)
+
+**How it works.**
+
+1. **One flight per shot (`worker/shots.py`).** A shot's flight is every piece seen from its hit until the next hit: the shuttle may leave the view and come back unhit. Pieces join in order, each only if one flight still explains at least 80 % of every piece's detections; the first that does not (a false track after the landing, an unseen hit) ends the flight. Before this rule, six false detections two seconds after a landing moved one landing by 13.8 m.
+2. **Shared contact points (`worker/geometry/rally_fit.py`).** A rally's flights are refitted together: each to its own detections, and each hit adds that the flights either side of it meet (to 5 cm).
+   - **The meeting time is fitted too,** near the hit's measured time (±15 ms). A contact pinned 16 ms late put one outgoing flight 40 cm past it and a landing 3.2 m off, called confidently wrong.
+   - **Bad hand-overs are dropped.** A hand-over that makes either flight fit its own detections clearly worse (a missed or wrong hit between them) is dropped.
+   - **Effect.** A far player's clear seen for 10 frames from behind was 4.6 m off in depth alone and 6 cm off together.
+3. **The shuttle's drag.** Real shuttles differ: feather or nylon, speed grade, temperature.
+   - **Measured per rally.** Each long, well-seen flight (at least 20 detections over at least 0.5 s) is refitted across terminal velocities 5.5–8.5 m/s for its own estimate. One flight's estimate scatters by about 7 %. The rally's median is weighed, by its agreement and number, against the usual feather shuttle (6.7 ± 0.4 m/s).
+   - **Into every fact.** The flights are refitted at that drag, and one standard deviation of it is carried into every fact.
+   - **Known drag.** `rally_shots(..., drag=(v, sigma))` takes a drag measured over a whole session instead.
+4. **Facts and their uncertainty.** Per shot:
+   - contact point and height, and the hitter's half;
+   - launch speed and angle, and apex;
+   - net crossing height and clearance (the net sags from 1.55 m at the posts to 1.524 m at the centre);
+   - flight time, the sampled 3D path, and for the rally's last shot the landing.
+   
+   Each comes with a standard deviation from the fit's covariance, the drag's uncertainty, and the court calibration's own error. The calibration error is taken as the camera-tracking gate's 5 cm until labelled real clips measure it.
+5. **Calls.** Lines are in. A rally shot must land in the opponent's half of the singles or doubles court. A serve must land in the diagonal service court, beyond the short service line and, in doubles, short of the long service line. A landing is called in or out only when it is at least 95 % sure; otherwise it is "too close to call".
+
+**Benchmark (`python -m evaluation.shots_benchmark`).**
+
+- **The clips.** The hit benchmark's clips: every view at 30 and 60 fps, with sound and without, jitter, dropout, false detections and neighbouring courts.
+- **Close calls on purpose.** Each rally's last shot is aimed within 40 cm of a sideline or the baseline, in or out, so the calls are deliberately close.
+- **How it is run.** Hits are found and shot facts taken exactly as in use.
+- **What is scored.** Shots matched to a true hit (±33 ms) are scored on contact, speed, apex and net clearance; the last shot on its landing, its call, and whether the stated 95 % region holds the truth ("coverage").
+
+| Held-out (seeds 5000–5059) | Drag measured per rally | Drag measured per rally, stressed | Drag from a session (to 1 %, emulated: `--session-drag 0.01`) | Drag from a session, stressed |
+| --- | --- | --- | --- | --- |
+| Landing error, median / p90 | 9.7 / 31 cm | 16 / 43 cm | 7.8 / 22 cm | 11.6 / 26 cm |
+| Calls correct (of those made) | 27 of 27 | 18 of 18 | 33 of 33 | 27 of 27 |
+| Too close to call | 24 of 51 | 26 of 44 | 18 of 51 | 17 of 44 |
+| Coverage of the 95 % region | 100 % | 98 % | 100 % | 98 % |
+| Contact point, median | 11 cm | 20 cm | 9.4 cm | 16 cm |
+| Launch speed, median | 0.51 m/s | 0.97 m/s | 0.50 m/s | 0.66 m/s |
+| Apex, median | 0.6 cm | 3.2 cm | 0.5 cm | 3.0 cm |
+| Net clearance, median | 2.1 cm | 5.7 cm | 1.5 cm | 5.3 cm |
+| Hitter's half right | 100 % | 99.7 % | | |
+
+**On the tuned seeds** (1000–1059) with drag per rally: landing 10 cm median, calls 11 of 11 correct, 34 of 45 too close to call, coverage 100 %.
+
+**Gate: met.** Median landing error is under 30 cm everywhere, and no call made was wrong in any set. The cost is caution: with only one rally to measure the drag from, a landing within a few tens of centimetres of a line is usually "too close to call".
+
+**What the drag costs and buys.**
+
+- **Fixed at 6.7 m/s.** Calls on the plain held-out set were 39 of 39 correct with 12 too close to call. But when the shuttle differed by up to 10 %, they were 31 of 39 correct and the 95 % region held the truth only 32 % of the time: confidently wrong.
+- **Measured per rally.** Never wrong in any set, but cautious.
+- **Measured once per session.** It is shared by every rally, and sharpens the calls again (the right-hand columns). That is how the app should use it (Phase 5).
+
+**Known gaps.**
+
+- **The last flight ending on the floor.** A shuttle at rest marks where it came down, give or take how it bounced and slid. The simulator does not model that, so it is left for real clips with labelled landings.
+- **The calibration error** is assumed (5 cm), not measured.
+- **Real footage.** These numbers are synthetic. The Hendry clip runs end to end (3d), but has no labelled hits or landings yet to measure against.
