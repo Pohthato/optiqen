@@ -45,3 +45,28 @@ Each step is pushed on its own.
   - A side-on camera that cannot see a lunge's depth says so instead of guessing.
   - Facts that need 60 fps are withheld at 30 fps.
 - **Synthetic first, real second.** As with the shuttle: synthetic skeletons measure the geometry exactly. Your labelled poses measure the 2D detector on real footage. True 3D accuracy needs the two-phone session in the spec.
+
+## 4a results (who is who)
+
+**How it works (`worker/players.py`, `worker/track_players.py`).**
+
+1. **Where they stand.** Each detected person's ankles are put on the floor (at ankle height) through the frame's camera.
+2. **Really standing there.** The person must really be standing there: the ray through their nose (or shoulders) must pass a human height (0.8–2.6 m, a lunge to a jump) over that floor point. From the side, the umpire's raised feet land in the court, but their head would be about 2.7 m above that point.
+3. **In play.** A player stands in one half, within 1 m beside the doubles sidelines and 2.5 m behind the baseline.
+4. **Identity carries.** Identity carries by position: the person within reach of a 9 m/s run from where the player was last seen. The gate widens with how far a few pixels of detector error move that person's floor point (most of a metre at the far baseline seen from behind). A lost player is found again because the reach grows while they are unseen.
+
+**Synthetic check (`worker/test_players.py`).**
+
+- **The scenes.** Random rallies' two players among:
+  - an umpire on a high chair;
+  - seated line judges;
+  - spectators behind the court;
+  - a player on the next court.
+- **The detector.** Everyone is seen from the three views at 30 and 60 fps through a steadily held phone, with 3 px of joint noise, 5 % of player detections missed and the detections in random order.
+- **Result.** Over 16,161 player frames (4 rallies, 3 views, 2 frame rates), each player was the person picked in every frame they were detected: 100 % in all three views. No bystander was ever taken for a player.
+
+**What this does not show yet.**
+
+- **The people are simple.** They are standing figures. A detector on real footage merges, splits and half-sees people, and players overlap in the image.
+- **Real accuracy needs your labels.** The labeller's poses at hits measure this on real footage.
+- **No detector in this step.** `track_players.py` reads any detector's people from a JSON file. Which detector ships waits for the licence decision above.
