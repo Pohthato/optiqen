@@ -28,12 +28,15 @@ class RallyFitTests(unittest.TestCase):
         cls.flights = observed_flights(seed=4, view="behind", fps=30.0)
         cls.solo = solo_fits(cls.flights)
         cls.links = [(i, cls.flights[i + 1][0].start_time * 1000.0) for i in range(len(cls.flights) - 1)]
-        cls.joint = fit_rally(cls.solo, cls.links)
+        cls.result = fit_rally(cls.solo, cls.links)
+        cls.joint = cls.result.flights
 
-    def test_neighbouring_flights_meet_at_their_hit(self):
-        for i, at in self.links:
-            gap = self.joint[i].position_at(at) - self.joint[i + 1].position_at(at)
+    def test_neighbouring_flights_meet_where_and_when_the_fit_says(self):
+        for i, at in self.result.links:
+            met, sigma = self.result.meetings[i]
+            gap = self.joint[i].position_at(met) - self.joint[i + 1].position_at(met)
             self.assertLess(float(np.linalg.norm(gap)), 3 * CONTACT_SIGMA_M)
+            self.assertLess(abs(met - at), 4 * sigma + 1.0)  # near the measured hit, as sure as it says
 
     def test_together_the_contact_points_are_found_better_than_alone_and_honestly(self):
         alone = [start_error(f[0], f[1], s.fit) for f, s in zip(self.flights[1:], self.solo[1:])]
@@ -53,7 +56,7 @@ class RallyFitTests(unittest.TestCase):
         self.assertLess(spread(self.joint[worst], at), 0.5 * spread(self.solo[worst].fit, at))
 
     def test_flights_without_hand_overs_are_left_as_they_were(self):
-        alone = fit_rally(self.solo[:2], [])
+        alone = fit_rally(self.solo[:2], []).flights
         for seen, fit in zip(self.solo[:2], alone):
             np.testing.assert_allclose(fit.position_at(seen.times_ms[-1]), seen.fit.position_at(seen.times_ms[-1]), atol=0.02)
 
@@ -71,12 +74,13 @@ class DragTests(unittest.TestCase):
             Seen(times_ms, pixels, cameras, fit_flight(times_ms, pixels, cameras, start_ms=flight.start_time * 1000.0, terminal_velocity=6.7))
             for flight, _, times_ms, pixels, cameras in flights
         ]
-        value, sigma = terminal_velocity([s for s in seen if s.fit is not None])
+        value, sigma, used = terminal_velocity([s for s in seen if s.fit is not None])
+        self.assertGreaterEqual(used, 2)
         self.assertAlmostEqual(value, 7.2, delta=0.3)
         self.assertLess(sigma, TERMINAL_PRIOR_SIGMA)
 
     def test_with_nothing_long_to_go_on_the_usual_shuttle_is_assumed(self):
-        self.assertEqual(terminal_velocity([]), (6.7, TERMINAL_PRIOR_SIGMA))
+        self.assertEqual(terminal_velocity([]), (6.7, TERMINAL_PRIOR_SIGMA, 0))
 
 
 if __name__ == "__main__":

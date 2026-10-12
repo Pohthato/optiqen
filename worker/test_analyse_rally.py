@@ -56,7 +56,7 @@ class AnalyseRallyTests(unittest.TestCase):
         self.assertLess(float(np.hypot(*(np.asarray(last["point"]) - np.asarray(SIM.clip.rally.landing)))), 0.5)
         self.assertEqual(self.result["court"], "singles")
         drag = self.result["summary"]["terminalVelocity"]
-        self.assertEqual(drag["from"], "this rally")
+        self.assertIn("long flights", drag["from"])
         self.assertAlmostEqual(drag["value"], 6.7, delta=0.5)
         self.assertEqual(self.result["summary"]["shots"], len(shots))
 
@@ -70,6 +70,15 @@ class AnalyseRallyTests(unittest.TestCase):
         diagram = cv2.imread(str(self.root / "court.png"))
         self.assertIsNotNone(diagram)
         self.assertGreater(diagram.shape[0], diagram.shape[1])  # the court is long
+
+    def test_it_never_writes_over_its_inputs(self):
+        shuttle = self.root / "clip.shuttle.json"
+        before = shuttle.read_bytes()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+            code = main([str(self.video), "--track", str(self.root / "clip.track.json"), "--shuttle", str(shuttle), "--out", str(shuttle)])
+        self.assertEqual(code, 1)
+        self.assertIn("overwrite", err.getvalue())
+        self.assertEqual(shuttle.read_bytes(), before)
 
     def test_without_court_points_or_a_track_it_says_what_it_needs(self):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:

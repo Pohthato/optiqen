@@ -12,7 +12,7 @@ detections are computed and written next to --out. The overlay draws each fitted
 video with its hit and, for the rally's last shot, where it landed and the call; the diagram is
 the court from above with every shot's path and the landing's uncertainty. The shuttle's drag
 (terminal velocity) is measured from the rally's own long flights unless given: measured once
-over a whole session's rallies, it is far surer, and close line calls sharpen with it.
+over a whole session's rallies it is surer, and close line calls sharpen with it.
 """
 from __future__ import annotations
 
@@ -44,6 +44,24 @@ def _estimate(estimate) -> dict:
     return {"value": round(estimate.value, 3), "sigma": round(estimate.sigma, 3)}
 
 
+def _clean(value):
+    """The result with any number that is not finite as null, so it always writes as JSON."""
+    if isinstance(value, float):
+        return value if np.isfinite(value) else None
+    if isinstance(value, dict):
+        return {key: _clean(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_clean(item) for item in value]
+    return value
+
+
+def _pixels(camera, points) -> np.ndarray:
+    """Points drawn through the camera: those in front of it, as int32 pixels kept near the image."""
+    pixels = camera.project(np.asarray(points, dtype=float).reshape(-1, 3))
+    pixels = pixels[np.isfinite(pixels).all(axis=1)]
+    return np.clip(pixels, -10_000, 10_000).astype(np.int32)
+
+
 def shot_entry(number: int, shot: ShotFacts) -> dict:
     """One shot's facts as the result reports them (metres, m/s, degrees, ms)."""
     return {
@@ -73,26 +91,29 @@ def write_overlay(video: VideoFile, cameras, shots: list[ShotFacts], path: Path)
     """The video with each shot's fitted flight drawn behind the shuttle, its hit marked, and the
     landing and call once the rally's last shot comes down."""
     writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), video.fps or 30.0, video.size)
+    if not writer.isOpened():
+        raise OSError(f"cannot write {path}")
     for index, (time_ms, frame) in enumerate(video.frames()):
         camera = cameras[index] if index < len(cameras) else None
         if camera is not None:
             for number, shot in enumerate(shots, start=1):
                 if not shot.path or time_ms < shot.hit_ms:
                     continue
-                points = np.array([p[1:] for p in shot.path if time_ms - TRAIL_MS <= p[0] <= time_ms])
-                if len(points) >= 2:
-                    pixels = camera.project(points).astype(np.int32)
+                pixels = _pixels(camera, [p[1:] for p in shot.path if time_ms - TRAIL_MS <= p[0] <= time_ms])
+                if len(pixels) >= 2:
                     cv2.polylines(frame, [pixels.reshape(-1, 1, 2)], False, HITTER_COLOURS[shot.hitter], 3, cv2.LINE_AA)
-                if time_ms - shot.hit_ms <= 400.0:
-                    at = camera.project(np.array([shot.contact]))[0].astype(int)
-                    cv2.circle(frame, tuple(at), 10, HITTER_COLOURS[shot.hitter], 2, cv2.LINE_AA)
+                at = _pixels(camera, [shot.contact])
+                if time_ms - shot.hit_ms <= 400.0 and len(at):
+                    x, y = (int(v) for v in at[0])
+                    cv2.circle(frame, (x, y), 10, HITTER_COLOURS[shot.hitter], 2, cv2.LINE_AA)
                     label = f"{number} {'serve' if shot.serve else ''} {shot.speed_m_s.value * 3.6:.0f} km/h".replace("  ", " ")
-                    cv2.putText(frame, label, (int(at[0]) + 12, int(at[1]) - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
-                if shot.landing is not None and time_ms >= shot.landing.time_ms:
-                    at = camera.project(np.array([[*shot.landing.point, 0.0]]))[0].astype(int)
+                    cv2.putText(frame, label, (x + 12, y - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+                landed = _pixels(camera, [[*shot.landing.point, 0.0]]) if shot.landing is not None else []
+                if len(landed) and time_ms >= shot.landing.time_ms:
+                    x, y = (int(v) for v in landed[0])
                     colour = CALL_COLOURS[shot.landing.call]
-                    cv2.drawMarker(frame, tuple(at), colour, cv2.MARKER_CROSS, 24, 3, cv2.LINE_AA)
-                    cv2.putText(frame, shot.landing.call.upper(), (int(at[0]) + 14, int(at[1]) + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.9, colour, 2, cv2.LINE_AA)
+                    cv2.drawMarker(frame, (x, y), colour, cv2.MARKER_CROSS, 24, 3, cv2.LINE_AA)
+                    cv2.putText(frame, shot.landing.call.upper(), (x + 14, y + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.9, colour, 2, cv2.LINE_AA)
         writer.write(frame)
     writer.release()
 
@@ -148,8 +169,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--overlay", type=Path, help="also write the video with the flights, hits and calls drawn on it")
     parser.add_argument("--diagram", type=Path, help="also write the court from above with every shot (PNG)")
     parser.add_argument("--terminal-velocity", type=float, help="the shuttle's terminal velocity in m/s, when known")
-    parser.add_argument("--terminal-sigma", type=float, default=0.05, help="its standard deviation (with --terminal-velocity)")
+    parser.add_argument("--terminal-sigma", type=float, help="its standard deviation (with --terminal-velocity; 0.05 if not given)")
     args = parser.parse_args(argv)
+    if args.terminal_sigma is not None and args.terminal_velocity is None:
+        return _fail("--terminal-sigma goes with --terminal-velocity")
+    inputs = {Path(p).resolve() for p in (args.video, args.golden, args.track, args.shuttle) if p is not None}
+    if args.out.resolve() in inputs or any(p is not None and Path(p).resolve() in inputs for p in (args.overlay, args.diagram)):
+        return _fail("an output would overwrite an input: choose other names for --out, --overlay or --diagram")
 
     stem = args.out.name.removesuffix(".json").removesuffix(".analysis")
     track_path = args.track or args.out.with_name(f"{stem}.track.json")
@@ -171,26 +197,32 @@ def main(argv: list[str] | None = None) -> int:
     if sound_error:
         print(f"no sound used: {sound_error}", file=sys.stderr)
     analysis = find_hits(track, times_ms, cameras, onsets) if any(camera is not None for camera in cameras) else None
-    drag = (args.terminal_velocity, args.terminal_sigma) if args.terminal_velocity else None
-    shots = rally_shots(analysis, track, times_ms, cameras, court=args.court, drag=drag) if analysis is not None else []
+    drag = (args.terminal_velocity, args.terminal_sigma if args.terminal_sigma is not None else 0.05) if args.terminal_velocity is not None else None
+    shots = rally_shots(analysis, track, times_ms, cameras, court=args.court, terminal_velocity=drag) if analysis is not None else []
 
     result = hits_document(args.video, shuttle_doc, analysis, onsets, sound_error, times_ms)
     calls = [shot.landing.call for shot in shots if shot.landing is not None]
     result["court"] = args.court
     result["summary"]["shots"] = len(shots)
     result["summary"]["calls"] = {call: calls.count(call) for call in sorted(set(calls))}
+    result["summary"]["terminalVelocity"] = None
     if shots:
-        result["summary"]["terminalVelocity"] = {**_estimate(shots[0].terminal_velocity), "from": "given" if drag else "this rally"}
+        flights = shots[0].terminal_flights
+        source = "given" if drag else (f"this rally's {flights} long flights" if flights else "the usual feather shuttle (no long flight to measure it)")
+        result["summary"]["terminalVelocity"] = {**_estimate(shots[0].terminal_velocity), "from": source}
     result["shots"] = [shot_entry(number, shot) for number, shot in enumerate(shots, start=1)]
     result["sources"] = {"track": Path(track_path).name, "shuttle": Path(shuttle_path).name}
-    args.out.write_text(json.dumps(result, allow_nan=False), encoding="utf-8")
+    args.out.write_text(json.dumps(_clean(result), allow_nan=False), encoding="utf-8")
     if args.diagram:
         cv2.imwrite(str(args.diagram), draw_diagram(shots, args.court))
     if args.overlay:
         video = VideoFile(args.video)
         if not video.opened:
             return _fail(f"cannot read {args.video} to draw the overlay")
-        write_overlay(video, cameras, shots, args.overlay)
+        try:
+            write_overlay(video, cameras, shots, args.overlay)
+        except OSError as error:
+            return _fail(str(error))
     print(json.dumps(result["summary"]))
     return 0
 

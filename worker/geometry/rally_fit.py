@@ -38,6 +38,13 @@ FLIGHT_DRAG_SCATTER = 0.07
 
 
 @dataclass
+class RallyFit:
+    flights: list[FlightFit]  # every flight, refitted together where it hands over
+    links: list[tuple[int, float]]  # the hand-overs kept
+    meetings: dict[int, tuple[float, float]]  # per kept hand-over (by its flight i): when the flights meet, ms, and its standard deviation
+
+
+@dataclass
 class Seen:
     """One flight's detections and its own fit, the starting point."""
 
@@ -47,11 +54,12 @@ class Seen:
     fit: FlightFit
 
 
-def terminal_velocity(flights: Sequence[Seen], jitter_px: float = 2.0) -> tuple[float, float]:
+def terminal_velocity(flights: Sequence[Seen], jitter_px: float = 2.0) -> tuple[float, float, int]:
     """This shuttle's terminal velocity and its standard deviation. Each long, well-seen flight
     gives its own estimate (refitted across TERMINAL_GRID, the best by a parabola); the flights'
     median, as sure as their agreement and number allow, is weighed against the usual feather
-    shuttle (6.7 +- 0.4 m/s), so a clip with little or discordant evidence stays near it."""
+    shuttle (6.7 +- 0.4 m/s), so a clip with little or discordant evidence stays near it. The
+    third value is how many flights it rests on (0: the usual shuttle, assumed)."""
     grid = np.asarray(TERMINAL_GRID, dtype=float)
     estimates = []
     for seen in flights:
@@ -77,13 +85,13 @@ def terminal_velocity(flights: Sequence[Seen], jitter_px: float = 2.0) -> tuple[
         a, b, c = curve[k - 1], curve[k], curve[k + 1]
         estimates.append(float(grid[k] + 0.5 * (a - c) / (a - 2 * b + c) * (grid[1] - grid[0])) if a - 2 * b + c > 0 else float(grid[k]))
     if not estimates:
-        return FEATHER_TERMINAL_VELOCITY, TERMINAL_PRIOR_SIGMA
+        return FEATHER_TERMINAL_VELOCITY, TERMINAL_PRIOR_SIGMA, 0
     middle = float(np.median(estimates))
     scatter = max(1.4826 * float(np.median(np.abs(np.asarray(estimates) - middle))), FLIGHT_DRAG_SCATTER * middle)
     data_sigma = 1.25 * scatter / np.sqrt(len(estimates))  # a median is a little less sure than a mean
     weight = TERMINAL_PRIOR_SIGMA**2 / (TERMINAL_PRIOR_SIGMA**2 + data_sigma**2)
     value = FEATHER_TERMINAL_VELOCITY + weight * (middle - FEATHER_TERMINAL_VELOCITY)
-    return float(value), float(np.sqrt(weight) * data_sigma)
+    return float(value), float(np.sqrt(weight) * data_sigma), len(estimates)
 
 
 def at_terminal_velocity(flights: Sequence[Seen], value: float, jitter_px: float = 2.0) -> list[Seen]:
@@ -98,14 +106,18 @@ def at_terminal_velocity(flights: Sequence[Seen], value: float, jitter_px: float
     return out
 
 
-def fit_rally(flights: Sequence[Seen], links: Sequence[tuple[int, float]], jitter_px: float = 2.0) -> list[FlightFit]:
+def fit_rally(
+    flights: Sequence[Seen], links: Sequence[tuple[int, float]], jitter_px: float = 2.0, terminal: float | None = None
+) -> RallyFit:
     """The flights refitted together. `links` holds (i, time_ms): flight i hands over to flight
     i + 1 at about that time. A hand-over that makes either flight fit its own detections clearly
     worse than alone (a missed hit between them, or a wrong one) is dropped and the rest refitted;
-    a flight with no hand-over left keeps its own fit."""
+    a flight with no hand-over left keeps its own fit. `terminal` is the shuttle's terminal
+    velocity (by default the first flight's)."""
+    terminal = flights[0].fit.terminal_velocity if terminal is None and flights else terminal
     links = list(links)
     while True:
-        fits = _fit_together(flights, links, jitter_px)
+        fits, meetings = _fit_together(flights, links, jitter_px, terminal)
         worse = {
             i for i, (seen, fit) in enumerate(zip(flights, fits))
             if fit is None or fit.inliers < WORSE_INLIERS * seen.fit.inliers or fit.rms_px > WORSE_RMS * seen.fit.rms_px + 0.5
@@ -115,18 +127,20 @@ def fit_rally(flights: Sequence[Seen], links: Sequence[tuple[int, float]], jitte
             break
         links = kept
     linked = {k for i, _ in links for k in (i, i + 1)}
-    return [fit if i in linked and fit is not None else seen.fit for i, (seen, fit) in enumerate(zip(flights, fits))]
+    chosen = [fit if i in linked and fit is not None else seen.fit for i, (seen, fit) in enumerate(zip(flights, fits))]
+    return RallyFit(chosen, links, {i: meetings[i] for i, _ in links if i in meetings})
 
 
-def _fit_together(flights: Sequence[Seen], links: Sequence[tuple[int, float]], jitter_px: float) -> list[FlightFit | None]:
+def _fit_together(flights: Sequence[Seen], links: Sequence[tuple[int, float]], jitter_px: float, terminal: float):
+    """The joint fit: each flight's fit (None for one that lost its detections) and, per link (by
+    its flight i), the meeting time and its standard deviation."""
     n, m = len(flights), len(links)
     if n == 0:
-        return []
+        return [], {}
     x = np.array([np.concatenate([f.fit.p0, f.fit.v0]) for f in flights], dtype=float)
     measured = np.array([max(t, flights[i + 1].fit.start_ms) for i, t in links], dtype=float)
     tau = measured.copy()
     starts = [f.fit.start_ms for f in flights]
-    terminal = flights[0].fit.terminal_velocity
     views = [_Views(f.cameras) for f in flights]
     observed = [np.asarray(f.pixels, dtype=float).ravel() for f in flights]
     ends = {i: k for k, (i, _) in enumerate(links)}  # flight i ends at link k
@@ -181,13 +195,13 @@ def _fit_together(flights: Sequence[Seen], links: Sequence[tuple[int, float]], j
 
     size = 6 * n + m
 
-    def normal_equations(blocks, tau, pixels: bool = True, robust: bool = True):
+    def normal_equations(blocks, tau, pixels: bool = True):
         hessian = np.zeros((size, size))
         gradient = np.zeros(size)
         if pixels:
             for i, (residual, jac, _) in enumerate(blocks):
                 miss2 = np.repeat(np.sum(residual.reshape(-1, 2) ** 2, axis=1), 2)
-                weight = (1.0 / np.sqrt(1.0 + miss2 / f_scale**2) if robust else np.ones_like(miss2)) / jitter_px**2
+                weight = 1.0 / np.sqrt(1.0 + miss2 / f_scale**2) / jitter_px**2
                 s = slice(6 * i, 6 * i + 6)
                 hessian[s, s] += jac.T @ (weight[:, None] * jac)
                 gradient[s] += jac.T @ (weight * residual)
@@ -229,8 +243,7 @@ def _fit_together(flights: Sequence[Seen], links: Sequence[tuple[int, float]], j
     # Uncertainty: the joint information, the pixel part scaled by the measured residual variance.
     misses = [np.hypot(*residual.reshape(-1, 2).T) for residual, _, _ in blocks]
     inliers = [miss <= INLIER_SIGMAS * 2 * jitter_px for miss in misses]
-    if not all(k.sum() >= 3 for k in inliers):
-        return [None] * n  # a flight lost its detections: these hand-overs cannot all be right
+    lost = {i for i, k in enumerate(inliers) if k.sum() < 3}  # flights the hand-overs pulled off their detections
     rows = sum(2 * int(k.sum()) for k in inliers)
     variance = max(sum(float(np.sum(miss[k] ** 2)) for miss, k in zip(misses, inliers)) / max(1, rows - 6 * n), 1e-6)
     information, _ = normal_equations(blocks, tau, pixels=False)
@@ -238,10 +251,12 @@ def _fit_together(flights: Sequence[Seen], links: Sequence[tuple[int, float]], j
         keep = np.repeat(inliers[i], 2)
         information[6 * i : 6 * i + 6, 6 * i : 6 * i + 6] += jac[keep].T @ jac[keep] / variance
     covariance = COVARIANCE_INFLATION * np.linalg.pinv(information)
-    return [
-        FlightFit(
+    fits = [
+        None if i in lost else FlightFit(
             starts[i], x[i, :3].copy(), x[i, 3:].copy(), terminal, covariance[6 * i : 6 * i + 6, 6 * i : 6 * i + 6],
-            float(np.sqrt(np.mean(misses[i][inliers[i]] ** 2))) if inliers[i].any() else float("nan"), int(inliers[i].sum()), len(misses[i]),
+            float(np.sqrt(np.mean(misses[i][inliers[i]] ** 2))), int(inliers[i].sum()), len(misses[i]),
         )
         for i in range(n)
     ]
+    meetings = {i: (float(tau[k]), float(np.sqrt(max(covariance[6 * n + k, 6 * n + k], 0.0)))) for k, (i, _) in enumerate(links)}
+    return fits, meetings

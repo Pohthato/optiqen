@@ -53,17 +53,19 @@ def _truth(rally) -> list[dict[str, Any]]:
     return out
 
 
-def score_scenario(scenario, session_error: float | None = None) -> dict[str, Any]:
+def score_scenario(scenario, session_error: float | None = None, court: str = "singles") -> dict[str, Any]:
     """One scenario scored. With `session_error`, the shuttle's drag is given as a session of many
-    rallies would measure it: the true terminal velocity off by that relative error (drawn per
-    scenario), with that standard deviation. Without it each rally measures its own."""
+    rallies would measure it (emulated: the true terminal velocity off by that relative error,
+    drawn per scenario, with that standard deviation). Without it each rally measures its own.
+    The rally's landing is judged on the call the method itself made on its last shot, whatever
+    that shot was; a rally where it made none counts as such."""
     sim = simulate(scenario)
     analysis = find_hits(sim.track, sim.times_ms, sim.cameras, sim.onsets)
     drag = None
     if session_error is not None:
         true_drag = sim.clip.rally.terminal_velocity
         drag = (true_drag * (1 + np.random.default_rng(scenario.seed + 31).normal(0.0, session_error)), true_drag * session_error)
-    shots = rally_shots(analysis, sim.track, sim.times_ms, sim.cameras, court="singles", drag=drag)
+    shots = rally_shots(analysis, sim.track, sim.times_ms, sim.cameras, court=court, terminal_velocity=drag)
     truth = _truth(sim.clip.rally)
     pairs = sorted((abs(s.hit_ms - t["timeMs"]), a, b) for a, s in enumerate(shots) for b, t in enumerate(truth) if abs(s.hit_ms - t["timeMs"]) <= TOLERANCE_MS)
     matched, used_s, used_t = [], set(), set()
@@ -83,11 +85,11 @@ def score_scenario(scenario, session_error: float | None = None) -> dict[str, An
         })
     landing = None
     last = len(truth) - 1
-    final = next((shot for shot, _, b in matched if b == last), None)
+    final = shots[-1] if shots else None
     if final is not None and final.landing is not None:
         rally = sim.clip.rally
         point = np.asarray(rally.landing)
-        x_low, x_high, y_low, y_high = landing_area("singles", rally.contacts[-1].hitter)
+        x_low, x_high, y_low, y_high = landing_area(court, rally.contacts[-1].hitter)
         truly_in = bool(x_low <= point[0] <= x_high and y_low <= point[1] <= y_high)
         miss = np.asarray(final.landing.point) - point
         covariance = np.asarray(final.landing.covariance)
@@ -95,8 +97,19 @@ def score_scenario(scenario, session_error: float | None = None) -> dict[str, An
         landing = {
             "errorM": float(np.linalg.norm(miss)), "call": final.landing.call, "trulyIn": truly_in,
             "covered": bool(inside), "distanceToLineM": float(min(point[0] - x_low, x_high - point[0], point[1] - y_low, y_high - point[1])),
+            "isTrueLastShot": any(shot is final and b == last for shot, _, b in matched),
         }
     return {**asdict(scenario), "truthShots": len(truth), "shots": len(shots), "matched": rows, "landing": landing}
+
+
+def _lower_bound(right: int, total: int, z: float = 1.96) -> float | None:
+    """The 95 % Wilson lower bound of a proportion: what `right of total` supports."""
+    if total == 0:
+        return None
+    p = right / total
+    centre = p + z * z / (2 * total)
+    spread = z * np.sqrt(p * (1 - p) / total + z * z / (4 * total * total))
+    return round(float((centre - spread) / (1 + z * z / total)), 3)
 
 
 def summarise(results: list[dict[str, Any]]) -> dict[str, Any]:
@@ -104,6 +117,7 @@ def summarise(results: list[dict[str, Any]]) -> dict[str, Any]:
     landings = [r["landing"] for r in results if r["landing"] is not None]
     called = [l for l in landings if l["call"] != "too close to call"]
     wrong = [l for l in called if (l["call"] == "in") != l["trulyIn"]]
+    own = [l for l in landings if l["isTrueLastShot"]]
 
     def stats(values: list[float]) -> dict[str, float] | None:
         values = [v for v in values if v is not None]
@@ -116,22 +130,25 @@ def summarise(results: list[dict[str, Any]]) -> dict[str, Any]:
         "speedErrorMS": stats([r["speedErrorMS"] for r in rows]),
         "apexErrorM": stats([r["apexErrorM"] for r in rows]),
         "netClearanceErrorM": stats([r["clearanceErrorM"] for r in rows]),
-        "landingErrorM": stats([l["errorM"] for l in landings]),
-        "landingCoverage": round(float(np.mean([l["covered"] for l in landings])), 3) if landings else None,
+        "landingErrorM": stats([l["errorM"] for l in own]),
+        "landingCoverage": round(float(np.mean([l["covered"] for l in own])), 3) if own else None,
         "landings": len(landings),
+        "rallyEndsWithoutACall": f"{len(results) - len(landings)} of {len(results)}",
+        "lastShotNotTheTrueOne": len(landings) - len(own),
         "callsCorrect": f"{len(called) - len(wrong)} of {len(called)}",
+        "callsCorrectLowerBound95": _lower_bound(len(called) - len(wrong), len(called)),
         "tooCloseToCall": f"{len(landings) - len(called)} of {len(landings)}",
         "wrongCalls": [{k: (round(v, 3) if isinstance(v, float) else v) for k, v in l.items()} for l in wrong],
         "tooCloseDistancesM": sorted(round(l["distanceToLineM"], 3) for l in landings if l["call"] == "too close to call"),
     }
 
 
-def run(scenarios, workers: int = 1, session_error: float | None = None) -> dict[str, Any]:
+def run(scenarios, workers: int = 1, session_error: float | None = None, court: str = "singles") -> dict[str, Any]:
     if workers > 1:
         with ProcessPoolExecutor(workers) as pool:
-            results = list(pool.map(score_scenario, scenarios, [session_error] * len(scenarios)))
+            results = list(pool.map(score_scenario, scenarios, [session_error] * len(scenarios), [court] * len(scenarios)))
     else:
-        results = [score_scenario(s, session_error) for s in scenarios]
+        results = [score_scenario(s, session_error, court) for s in scenarios]
     by = {"all": summarise(results)}
     for view in sorted({r["view"] for r in results}):
         by[f"view={view}"] = summarise([r for r in results if r["view"] == view])
@@ -146,11 +163,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--first-seed", type=int, default=1000)
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--stress", action="store_true", help="a world that differs from the method's models (see hits_benchmark.simulate)")
-    parser.add_argument("--session-drag", type=float, metavar="ERROR", help="give each rally its drag as a session would measure it, to this relative error (0.01)")
+    parser.add_argument("--session-drag", type=float, metavar="ERROR", help="emulate a drag measured over a session: the truth to this relative error (0.01)")
+    parser.add_argument("--court", choices=("singles", "doubles"), default="singles", help="the boundaries calls are made and judged against")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
     scenarios = [replace(s, final_near_line=True, stress=args.stress) for s in standard_scenarios(args.scenarios, args.first_seed)]
-    report = run(scenarios, workers=args.workers, session_error=args.session_drag)
+    report = run(scenarios, workers=args.workers, session_error=args.session_drag, court=args.court)
     text = json.dumps(report, indent=2, allow_nan=False)
     if args.out:
         args.out.write_text(text, encoding="utf-8")

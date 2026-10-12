@@ -8,7 +8,7 @@ from geometry.court_model import COURT_LENGTH_M, DOUBLES_MARGIN_M, LONG_SERVICE_
 from geometry.flight_fit import FlightFit
 from geometry.shuttle_physics import FEATHER_TERMINAL_VELOCITY, simulate, time_at_height
 from hits import ONSET_GAP_MS, find_hits
-from shots import call_landing, flight_facts, landing_area, net_height_m, rally_shots
+from shots import CALIBRATION_SCALE, call_landing, flight_facts, landing_area, net_height_m, rally_shots
 from simulation.audio import SAMPLE_RATE
 from test_hits import RALLY, clip_of, seen, times
 
@@ -67,7 +67,7 @@ class FlightFactTests(unittest.TestCase):
         landed = simulate(p0, v0, [time_at_height(p0, v0, 0.0)])[0]
         np.testing.assert_allclose(facts.landing.point, landed[:2], atol=0.01)
         self.assertEqual(facts.landing.call, "in")
-        self.assertLess(facts.speed_m_s.sigma, 0.01)
+        self.assertLess(facts.speed_m_s.sigma, CALIBRATION_SCALE * facts.speed_m_s.value + 0.01)  # little beyond the calibration's 1 %
 
     def test_a_received_flight_has_no_landing_and_its_uncertainty_follows_the_fit(self):
         p0, v0 = np.array([2.0, 2.5, 2.6]), np.array([0.5, 18.0, 6.0])
@@ -83,6 +83,44 @@ class FlightFactTests(unittest.TestCase):
         facts = flight_facts(exact_fit(p0, v0), hit_ms=0.0, hitter="near", court="singles", ends_ms=None)
         self.assertIsNone(facts.net)
         self.assertEqual(facts.landing.call, "out")
+
+
+class CallTests(unittest.TestCase):
+    def serve(self, x: float, sigma: float):
+        """A short serve from the near half, its contact x with this uncertainty, landing well inside
+        the far left service court."""
+        p0 = np.array([x, 3.6, 1.0])
+        target = np.array([1.2, 9.2, 0.0])
+        from geometry.shuttle_physics import solve_launch
+        v0 = solve_launch(p0, target, 1.1)
+        return flight_facts(exact_fit(p0, v0, sigma=sigma), 0.0, "near", "singles", None, serve=True)
+
+    def test_a_serve_is_judged_against_the_diagonal_service_court(self):
+        self.assertEqual(self.serve(3.5, 1e-4).landing.call, "in")  # from the right, into the left court
+        self.assertEqual(self.serve(1.5, 1e-4).landing.call, "out")  # from the left, so the right court was the target
+
+    def test_a_server_on_the_centre_line_leaves_the_court_unsure(self):
+        unsure = self.serve(2.6, 0.08)  # 1 cm from the centre line, known to 8 cm (plus the calibration)
+        self.assertEqual(unsure.landing.call, "too close to call")
+
+    def test_a_shot_into_the_net_is_out(self):
+        p0, v0 = np.array([2.5, 5.0, 1.0]), np.array([0.0, 9.0, 1.2])  # low and flat: it meets the net
+        facts = flight_facts(exact_fit(p0, v0), 0.0, "near", "singles", None)
+        self.assertLess(facts.net.clearance_m.value, -0.2)
+        self.assertEqual(facts.landing.call, "out")
+        self.assertLess(facts.landing.p_over_net, 0.01)
+
+    def test_a_flight_on_the_floor_long_before_the_next_hit_had_landed(self):
+        p0, v0 = np.array([2.0, 2.5, 2.6]), np.array([0.5, 18.0, 6.0])
+        facts = flight_facts(exact_fit(p0, v0), 0.0, "near", "singles", ends_ms=5000.0)  # the next rally's serve
+        self.assertIsNotNone(facts.landing)
+        self.assertLess(facts.flight_ms, 2000.0)
+
+    def test_a_hit_long_before_the_fits_start_does_not_blow_up(self):
+        p0, v0 = np.array([2.0, 4.0, 1.5]), np.array([-1.0, 20.0, 10.0])
+        facts = flight_facts(exact_fit(p0, v0, start_ms=0.0), -250.0, "near", "singles", None)
+        self.assertTrue(np.isfinite(facts.contact).all() and np.isfinite(facts.speed_m_s.value))
+        self.assertLess(facts.speed_m_s.value, 40.0)
 
 
 class RallyTests(unittest.TestCase):
@@ -102,7 +140,7 @@ class RallyTests(unittest.TestCase):
         for shot, contact in zip(shots, RALLY.contacts):
             self.assertLess(float(np.linalg.norm(np.asarray(shot.contact) - contact.position)), 0.5)
         # A drag known from a whole session is used as given, and makes the facts surer.
-        known = rally_shots(analysis, seen(clip), times(len(clip.cameras)), clip.cameras, court="singles", drag=(6.7, 0.02))
+        known = rally_shots(analysis, seen(clip), times(len(clip.cameras)), clip.cameras, court="singles", terminal_velocity=(6.7, 0.02))
         self.assertEqual((known[0].terminal_velocity.value, known[0].terminal_velocity.sigma), (6.7, 0.02))
         self.assertLessEqual(np.trace(np.asarray(known[-1].landing.covariance)), np.trace(np.asarray(shots[-1].landing.covariance)) + 1e-9)
 
