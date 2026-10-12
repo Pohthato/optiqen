@@ -198,3 +198,34 @@ F1 at ±33 ms over all true hits, including those the camera never saw:
 - **The last flight ending on the floor.** A shuttle at rest marks where it came down, give or take how it bounced and slid. The simulator does not model that, so it is left for real clips with labelled landings.
 - **The calibration error** is assumed (5 cm), not measured.
 - **Real footage.** These numbers are synthetic. The Hendry clip runs end to end (3d), but has no labelled hits or landings yet to measure against.
+
+## 3d results (one command)
+
+```
+python analyse_rally.py clip.mp4 --golden clip.json --out clip.analysis.json --overlay clip.analysis.mp4 --diagram clip.court.png
+```
+
+**What it does.** It runs:
+
+1. **The camera track** (`track_camera.py`, from the court points placed in the labeller).
+2. **The shuttle detections** (`detect_shuttle.py`, TrackNetV3).
+3. **The hits** (`hits.py`).
+4. **The shot facts** (`shots.py`).
+
+An existing `--track` or `--shuttle` file is used as it is, so a clip is not tracked twice. `--court doubles` applies the doubles boundaries. `--terminal-velocity` gives a drag measured elsewhere, a whole session's say.
+
+**What it writes.**
+
+- **One JSON result:** the hits as contact events (the worker's result format), the fitted flights, and every shot's facts with their standard deviations, its sampled 3D path and, for the last shot, the landing with its 95 % region and call. The summary gives the calls, the audio offset, the detector's noise and the drag used, with where it came from.
+- **The overlay:** each fitted flight drawn into the video behind the shuttle, the hit marked with its speed, and the landing with its call.
+- **The diagram:** the court from above, every shot's path in its hitter's colour and numbered at its contact, and the landing's 95 % ellipse in the call's colour.
+
+**On the Hendry clip** (1920×1080, 30 fps, 766 frames, the camera track and shuttle detections from Phases 1b and 2):
+
+- It runs end to end: 21 hits found without sound (20 between two seen flights, 1 serve), 18 shots with their facts, and the last shot called out, long. The shuttle's drag, measured from the rally's own flights, came out at 6.76 ± 0.17 m/s, beside the 6.7 m/s a feather shuttle is expected to have. It took 177 s on one core with the camera track and shuttle detections already made.
+- The sound was not used on this machine: reading it needs ffmpeg, which the worker image has.
+- The diagram looks like badminton: contacts where players stand, paths over the net, and the last shot long.
+
+How right any of it is cannot be said yet: the clip has court points but no labelled hits or landings. Labelling them in the labeller (steps 4 and 5) is what turns this into a measurement of real footage.
+
+**Tests** (`worker/test_analyse_rally.py`) run a simulated rally through the whole command, check the shots, the call and the drag reported, the overlay's frames and the diagram, and that the command says what it needs when it has no way to track the camera.
