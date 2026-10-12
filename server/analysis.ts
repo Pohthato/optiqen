@@ -643,7 +643,21 @@ function nextCaptureSummary(context: CoachingContext): string {
   return "Next capture: capture a slightly wider angle with the same player and camera distance, then repeat the same rally sequence to confirm whether the movement pattern holds under a consistent viewing setup.";
 }
 
-export function buildCoachingPrompt(context: CoachingContext) {
+// The same for every athlete and session, so it leads every request and DeepSeek's
+// automatic prefix cache bills it at the cache-hit rate.
+const COACH_RULES = [
+  "You are Optiqen Coach, a high-performance badminton analyst working from computer-vision evidence. Your job is to convert evidence into precise, practical and intellectually honest coaching guidance.",
+  "Do not diagnose injuries, make medical claims, claim 3D certainty from a monocular recording, invent shots or events, or compare the player to a professional norm unless that norm is included in the supplied evidence. If evidence is insufficient, say exactly what could not be verified and what capture setup would improve it.",
+  "Distinguish observation from interpretation. A recommendation must be tied to a named metric, a verified shot, or a timestamped event. Weight high-confidence evidence more heavily. Never use a player bounding box as evidence; the usable visual tracks are skeleton, shuttle, racket, and court-plane mapping.",
+  "Shot labels (smash/clear/drop/net/lift/drive/push/serve) are heuristic classifications gated on observed contact and a post-impact shuttle/racket track, not ground truth. Describe them as classified strokes and stay tentative: prefer 'a classified clear' over stating what the opponent did, and never extrapolate an unobserved rally outcome.",
+  "Racket swings, split steps, and recoveries are timestamped events. Racket swing speed and split-step amplitude are image-relative measures (normalised by frame diagonal), not calibrated physical speeds.",
+  "If verified shots is empty, say that stroke tactics could not be verified and do not guess smash/clear/drop counts.",
+  "Return plain text only, with exactly these titled sections: Evidence quality; Highest-leverage finding; Technique; Movement and recovery; Tactical pattern; Two drills; Next capture. Use short complete paragraphs, no Markdown syntax, no motivational filler, no more than two drills.",
+].join("\n\n");
+
+// Rules, then the session's evidence, then the question last: a follow-up question about
+// the same session repeats everything before it, which DeepSeek serves from its cache.
+export function buildCoachingMessages(context: CoachingContext) {
   const result = context.result;
   const trustedMetrics = result.metrics.filter((metric) => metric.confidence >= 0.7 && metric.evidenceFrames.length > 0 && !(context.calibration.confidence === "image_space_only" && metric.metric === "court coverage"));
   const metricEvidence = trustedMetrics.map((metric) => ({
@@ -659,13 +673,7 @@ export function buildCoachingPrompt(context: CoachingContext) {
   const rallySummary = summarizeRallyPatterns(result);
   const evaluation = evaluateAnalysisQuality(result);
 
-  return [
-    "You are Netoval Coach, a high-performance badminton analyst working from computer-vision evidence. Your job is to convert evidence into precise, practical and intellectually honest coaching guidance.",
-    "Do not diagnose injuries, make medical claims, claim 3D certainty from a monocular recording, invent shots or events, or compare the player to a professional norm unless that norm is included in the supplied evidence. If evidence is insufficient, say exactly what could not be verified and what capture setup would improve it.",
-    "Distinguish observation from interpretation. A recommendation must be tied to a named metric, a verified shot, or a timestamped event. Weight high-confidence evidence more heavily. Never use a player bounding box as evidence; the usable visual tracks are skeleton, shuttle, racket, and court-plane mapping.",
-    "Shot labels (smash/clear/drop/net/lift/drive/push/serve) are heuristic classifications gated on observed contact and a post-impact shuttle/racket track, not ground truth. Describe them as classified strokes and stay tentative: prefer 'a classified clear' over stating what the opponent did, and never extrapolate an unobserved rally outcome.",
-    "Racket swings, split steps, and recoveries are timestamped events. Racket swing speed and split-step amplitude are image-relative measures (normalised by frame diagonal), not calibrated physical speeds.",
-    "Return plain text only, with exactly these titled sections: Evidence quality; Highest-leverage finding; Technique; Movement and recovery; Tactical pattern; Two drills; Next capture. Use short complete paragraphs, no Markdown syntax, no motivational filler, no more than two drills.",
+  const evidence = [
     `Selected player: ${context.player}. Session goal: ${context.sessionGoal ?? "general singles performance"}. Court type: ${result.courtType ?? context.calibration.courtType ?? "unspecified"}.`,
     `Calibration confidence: ${context.calibration.confidence}. Court mapping accepted: ${context.calibration.supportsCourtMapping}. Calibration note: ${context.calibration.guidance}`,
     context.calibration.confidence === "image_space_only" ? "Image-space-only mode: do not make exact metre, court-position, or camera-pose claims. Restrict movement feedback to visible pose timing, relative direction, and frame timestamps." : "Court-space claims may be used only when supported by accepted worker calibration and confidence-gated evidence. A mid-air shuttle is not on the floor plane, so its ground-plane position is approximate; use it for side-of-the-net reasoning, never for precise metre claims.",
@@ -677,8 +685,6 @@ export function buildCoachingPrompt(context: CoachingContext) {
     `Rallies: ${JSON.stringify(result.rallies ?? [])}.`,
     `Rally pattern summary: ${JSON.stringify(rallySummary)}.`,
     `Benchmark evaluation: ${JSON.stringify(evaluation)}.`,
-    "If verified shots is empty, say that stroke tactics could not be verified and do not guess smash/clear/drop counts.",
-    context.question ? `Athlete question: ${context.question}` : "Athlete question: Provide a first coaching assessment from this session.",
     `Evidence quality: ${evidenceQualitySummary(context)}`,
     `Highest-leverage finding: ${highestLeverageFinding(context)}`,
     `Technique: ${techniqueSummary(context)}`,
@@ -686,5 +692,15 @@ export function buildCoachingPrompt(context: CoachingContext) {
     `Tactical pattern: ${tacticalPatternSummary(context)}`,
     `Two drills: ${twoDrillSummary(context)}`,
     `Next capture: ${nextCaptureSummary(context)}`,
-  ].join("\n\n");
+    context.question ? `Athlete question: ${context.question}` : "Athlete question: Provide a first coaching assessment from this session.",
+  ];
+
+  return [
+    { role: "system" as const, content: COACH_RULES },
+    { role: "user" as const, content: evidence.join("\n\n") },
+  ];
+}
+
+export function buildCoachingPrompt(context: CoachingContext) {
+  return buildCoachingMessages(context).map((message) => message.content).join("\n\n");
 }
