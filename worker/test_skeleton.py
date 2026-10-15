@@ -1,7 +1,9 @@
 # worker/test_skeleton.py
+import dataclasses
 import unittest
 
 import numpy as np
+from scipy import sparse
 
 import geometry.skeleton as sk
 from evaluation.hits_benchmark import FOCAL_PX, SIZE, VIEWS
@@ -29,6 +31,96 @@ def clip(view, side, seed, first, count, noise_px=3.0, prior=True):
     return frames, cameras, times, priors, np.array([t[IDX] for t in truth])
 
 
+class Frame:
+    """One frame's problem as first written, joint by joint, with a dense Jacobian: what
+    skeleton._Frames, all frames at once, must reproduce."""
+
+    def __init__(self, camera, pixels, weights, lengths, previous, step_sigma, noise_px, prior=None):
+        self.R = camera.rotation
+        self.t = np.asarray(camera.tvec, dtype=float).reshape(3)
+        self.f, self.cx, self.cy, self.k1 = camera.focal_px, camera.cx, camera.cy, camera.k1
+        self.pixels, self.weights, self.lengths = pixels, weights, lengths
+        self.previous, self.step_sigma, self.noise = previous, step_sigma, noise_px
+        n = len(sk.JOINTS)
+        self.prior = None if prior is None else np.asarray(prior, dtype=float) @ self.R
+        self.size = 2 * n + len(sk.PAIRS) + 2 + 2 + 2 + 2 + 2 + (3 * n if previous is not None else 0) + (3 * n if prior is not None else 0)
+
+    def __call__(self, x):
+        SLOT, n = sk.SLOT, len(sk.JOINTS)
+        X = x.reshape(n, 3)
+        r = np.zeros(self.size)
+        J = np.zeros((self.size, 3 * n))
+        p = X @ self.R.T + self.t
+        depth = np.where(p[:, 2] > 1e-3, p[:, 2], 1e-3)
+        u, v = p[:, 0] / depth, p[:, 1] / depth
+        s = 1.0 + self.k1 * (u * u + v * v)
+        scale = self.weights / self.noise
+        r[0 : 2 * n : 2] = (self.f * u * s + self.cx - self.pixels[:, 0]) * scale
+        r[1 : 2 * n : 2] = (self.f * v * s + self.cy - self.pixels[:, 1]) * scale
+        for k in range(n):
+            du = np.array([1 / depth[k], 0.0, -u[k] / depth[k]])
+            dv = np.array([0.0, 1 / depth[k], -v[k] / depth[k]])
+            ds = self.k1 * (2 * u[k] * du + 2 * v[k] * dv)
+            J[2 * k, 3 * k : 3 * k + 3] = self.f * (s[k] * du + u[k] * ds) @ self.R * scale[k]
+            J[2 * k + 1, 3 * k : 3 * k + 3] = self.f * (s[k] * dv + v[k] * ds) @ self.R * scale[k]
+        row = 2 * n
+        for name, a, b in sk.PAIRS:
+            span = X[a] - X[b]
+            length = max(float(np.linalg.norm(span)), 1e-9)
+            r[row] = (length - self.lengths[name]) / sk.BONE_SIGMA_M
+            J[row, 3 * a : 3 * a + 3] = span / length / sk.BONE_SIGMA_M
+            J[row, 3 * b : 3 * b + 3] = -span / length / sk.BONE_SIGMA_M
+            row += 1
+        ankles = (SLOT[15], SLOT[16])
+        for a in ankles:
+            gap = X[a, 2] - sk.ANKLE_HEIGHT_M
+            if gap < 0:
+                r[row], J[row, 3 * a + 2] = gap / sk.FLOOR_SIGMA_M, 1.0 / sk.FLOOR_SIGMA_M
+            row += 1
+        for a in ankles:
+            r[row], slope = sk._capped((X[a, 2] - sk.ANKLE_HEIGHT_M) / sk.DOWN_SIGMA_M)
+            J[row, 3 * a + 2] = slope / sk.DOWN_SIGMA_M
+            row += 1
+        across = X[SLOT[12]] - X[SLOT[11]]
+        forward = np.array([-across[1], across[0], 0.0])
+        forward /= max(np.linalg.norm(forward), 1e-9)
+        for hip, knee, ankle in ((11, 13, 15), (12, 14, 16)):
+            h, k, a = SLOT[hip], SLOT[knee], SLOT[ankle]
+            ahead = float((X[k] - (X[h] + X[a]) / 2) @ forward)
+            if ahead < 0:
+                r[row] = ahead / sk.KNEE_SIGMA_M
+                J[row, 3 * k : 3 * k + 3] = forward / sk.KNEE_SIGMA_M
+                J[row, 3 * h : 3 * h + 3] = J[row, 3 * a : 3 * a + 3] = -forward / (2 * sk.KNEE_SIGMA_M)
+            row += 1
+        shoulders, hips = (SLOT[5], SLOT[6]), (SLOT[11], SLOT[12])
+        off = (X[shoulders[0]] + X[shoulders[1]] - X[hips[0]] - X[hips[1]]) / 2
+        for axis in (0, 1):
+            r[row] = off[axis] / sk.LEAN_SIGMA_M
+            for j, sign in ((shoulders[0], 1), (shoulders[1], 1), (hips[0], -1), (hips[1], -1)):
+                J[row, 3 * j + axis] = sign * 0.5 / sk.LEAN_SIGMA_M
+            row += 1
+        for a, b in (shoulders, hips):
+            r[row] = (X[a, 2] - X[b, 2]) / sk.LEVEL_SIGMA_M
+            J[row, 3 * a + 2], J[row, 3 * b + 2] = 1.0 / sk.LEVEL_SIGMA_M, -1.0 / sk.LEVEL_SIGMA_M
+            row += 1
+        if self.previous is not None:
+            r[row : row + 3 * n] = ((X - self.previous) / self.step_sigma).ravel()
+            J[row : row + 3 * n, :] = np.eye(3 * n) / self.step_sigma
+            row += 3 * n
+        if self.prior is not None:
+            middle = (X[hips[0]] + X[hips[1]]) / 2
+            r[row : row + 3 * n] = ((X - middle - self.prior) / sk.PRIOR_SIGMA_M).ravel()
+            block = np.eye(3 * n) / sk.PRIOR_SIGMA_M
+            for h in hips:
+                for k in range(n):
+                    block[3 * k : 3 * k + 3, 3 * h : 3 * h + 3] -= 0.5 * np.eye(3) / sk.PRIOR_SIGMA_M
+            J[row : row + 3 * n, :] = block
+        robust = np.array(list(range(2 * n)) + (list(range(row, row + 3 * n)) if self.prior is not None else []))
+        r[robust], slope = sk._soft(r[robust], sk.ROBUST_SCALE)
+        J[robust] *= slope[:, None]
+        return r, J
+
+
 class PartsTests(unittest.TestCase):
     def test_a_frame_s_jacobian_matches_its_differences(self):
         frames, cameras, _, priors, truth = clip("corner", "near", 2, 30, 2)
@@ -36,11 +128,34 @@ class PartsTests(unittest.TestCase):
         lengths = {name: fraction * 1.75 for name, fraction in sk.STARTING.items()}
         pixels, scores = frames[1][0][IDX], frames[1][1][IDX]
         for prior, previous in ((None, None), (priors[1], truth[0])):
-            problem = sk._Frame(cameras[1], pixels, np.sqrt(scores), lengths, previous, 0.3, 3.0, prior)
+            problem = sk._Frames([cameras[1]], [pixels], [np.sqrt(scores)], [prior], lengths, 3.0, None if previous is None else [previous], [0.3])
             x = (truth[1] + rng.normal(0, 0.05, truth[1].shape)).ravel()
-            r, J = problem(x)
+            J = problem(x)[1].toarray()
             numeric = np.array([(problem(x + e)[0] - problem(x - e)[0]) / 2e-7 for e in np.eye(x.size) * 1e-7]).T
             np.testing.assert_allclose(J, numeric, atol=1e-4 * max(1.0, np.abs(J).max()))
+
+    def test_every_frame_at_once_is_each_frame_on_its_own(self):
+        # A lens with radial distortion, missed joints, frames without the model's pose, ankles
+        # below the floor and a knee bent back: every rule's every branch.
+        frames, cameras, _, priors, truth = clip("corner", "near", 2, 30, 9)
+        cameras = [dataclasses.replace(c, k1=-0.04) for c in cameras]
+        priors = [None if k % 3 == 1 else p for k, p in enumerate(priors)]
+        lengths = {name: fraction * 1.75 for name, fraction in sk.STARTING.items()}
+        pixels = [f[0][IDX] for f in frames]
+        weights = [np.where(f[1][IDX] >= sk.MIN_SCORE, np.sqrt(f[1][IDX]), 0.0) for f in frames]
+        x = truth + np.random.default_rng(1).normal(0, 0.05, truth.shape)
+        x[0, [sk.SLOT[15], sk.SLOT[16]], 2] = sk.ANKLE_HEIGHT_M - 0.03
+        across = x[0, sk.SLOT[12]] - x[0, sk.SLOT[11]]
+        x[0, sk.SLOT[13], :2] -= 0.3 * np.array([-across[1], across[0]]) / np.hypot(*across[:2])
+        self.assertTrue(any(min(w) == 0 for w in weights))
+        floor = 2 * len(IDX) + len(sk.PAIRS)
+        for previous, steps in ((None, None), (truth + 0.02, np.full(len(truth), 0.3))):
+            problem = sk._Frames(cameras, pixels, weights, priors, lengths, 3.0, previous, steps)
+            r, J = problem(x.ravel())
+            parts = [Frame(cameras[k], pixels[k], weights[k], lengths, None if previous is None else previous[k], 0.3, 3.0, priors[k])(x[k].ravel()) for k in range(len(x))]
+            np.testing.assert_allclose(r, np.concatenate([part[0] for part in parts]), rtol=1e-9, atol=1e-9)
+            np.testing.assert_allclose(J.toarray(), sparse.block_diag([part[1] for part in parts]).toarray(), rtol=1e-9, atol=1e-9)
+            self.assertTrue((r[floor : floor + 2] < 0).all() and r[floor + 4] < 0)  # both ankles below the floor, a knee bent back
 
     def test_the_floor_pull_levels_off_for_a_lifted_foot(self):
         near, half_near = sk._capped(0.5)[0], sk._capped(0.25)[0]

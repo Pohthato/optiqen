@@ -30,9 +30,8 @@ from typing import Sequence
 
 import numpy as np
 from scipy import sparse
-from scipy.linalg import cholesky_banded
+from scipy.linalg import cho_solve_banded, cholesky_banded
 from scipy.optimize import least_squares
-from scipy.sparse.linalg import splu
 
 from geometry.camera import Camera
 
@@ -45,6 +44,8 @@ BONES = {
     "shoulders": ((5, 6),), "hips": ((11, 12),), "flank": ((5, 11), (6, 12)), "diagonal": ((5, 12), (6, 11)), "neck": ((0, 5), (0, 6)),
 }
 PAIRS = [(name, SLOT[a], SLOT[b]) for name, pairs in BONES.items() for a, b in pairs]
+ANKLES, SHOULDERS, HIPS = [SLOT[15], SLOT[16]], [SLOT[5], SLOT[6]], [SLOT[11], SLOT[12]]
+LEGS = [[SLOT[13], SLOT[11], SLOT[15]], [SLOT[14], SLOT[12], SLOT[16]]]  # knee, hip and ankle
 # Starting lengths as fractions of stature (Drillis and Contini): limbs and widths as measured,
 # the torso's sides and diagonals and the nose's distance to the shoulders from the same
 # proportions (trunk 0.29 high, shoulders 0.13 and hips 0.09 either side, nose 0.05 ahead and
@@ -89,114 +90,138 @@ class Body:
     covariance: np.ndarray | None = None
 
 
-class _Frame:
-    """One frame's problem: its residuals and their analytic Jacobian over the joints' positions."""
+class _Frames:
+    """Each frame's problem, for any number of frames at once: the residuals (frame after frame)
+    and their analytic Jacobian over every frame's joints, sparse (a row touches a few joints of
+    its own frame) and built from arrays, with no loop over frames or joints."""
 
-    def __init__(self, camera: Camera, pixels, weights, lengths, previous, step_sigma, noise_px, prior=None):
-        self.R = camera.rotation
-        self.t = np.asarray(camera.tvec, dtype=float).reshape(3)
-        self.f, self.cx, self.cy, self.k1 = camera.focal_px, camera.cx, camera.cy, camera.k1
-        self.pixels, self.weights, self.lengths = pixels, weights, lengths
-        self.previous, self.step_sigma, self.noise = previous, step_sigma, noise_px
-        n = len(JOINTS)
+    ENDS = np.array([(a, b) for _, a, b in PAIRS])
+
+    def __init__(self, cameras: Sequence[Camera], pixels, weights, priors, lengths: dict, noise_px: float, previous=None, step_sigma=None):
+        count, n = len(cameras), len(JOINTS)
+        self.R = np.array([camera.rotation for camera in cameras])
+        self.t = np.array([np.asarray(camera.tvec, dtype=float).reshape(3) for camera in cameras])
+        self.f, self.cx, self.cy, self.k1 = (np.array([getattr(camera, name) for camera in cameras], dtype=float)[:, None] for name in ("focal_px", "cx", "cy", "k1"))
+        self.pixels = np.asarray(pixels, dtype=float).reshape(count, n, 2)
+        self.scale = np.asarray(weights, dtype=float).reshape(count, n) / noise_px
+        self.lengths = np.array([lengths[name] for name, _, _ in PAIRS])
+        # Each frame's frame before, if given, and how far a joint may have moved since.
+        self.previous = None if previous is None else np.asarray(previous, dtype=float).reshape(count, n, 3)
+        self.step_sigma = None if previous is None else np.asarray(step_sigma, dtype=float).reshape(count, 1, 1)
         # A learned model's joints relative to the hips' middle, turned from the camera's axes into the court's.
-        self.prior = None if prior is None else np.asarray(prior, dtype=float) @ self.R
-        self.size = 2 * n + len(PAIRS) + 2 + 2 + 2 + 2 + 2 + (3 * n if previous is not None else 0) + (3 * n if prior is not None else 0)
+        posed = np.array([prior is not None for prior in priors])
+        self.prior = np.zeros((count, n, 3))
+        if posed.any():
+            self.prior[posed] = np.array([prior for prior in priors if prior is not None], dtype=float) @ self.R[posed]
+        # Which of a frame's residuals and Jacobian entries it has (the learned pose's only with a
+        # pose), and the sparse Jacobian's structure: entries in the same place are summed.
+        rows, cols, unposed = self._layout(previous is not None)
+        self.has_row = posed[:, None] | (np.arange(unposed + 3 * n) < unposed)
+        self.has_entry = posed[:, None] | (rows < unposed)
+        starts = np.concatenate([[0], np.cumsum(self.has_row.sum(axis=1))[:-1]]).astype(np.int64)
+        self.shape = (int(self.has_row.sum()), count * 3 * n)
+        place = ((starts[:, None] + rows) * self.shape[1] + np.arange(count, dtype=np.int64)[:, None] * 3 * n + cols)[self.has_entry]
+        unique, self.slot = np.unique(place, return_inverse=True)
+        self.indices = unique % self.shape[1]
+        self.indptr = np.searchsorted(unique // self.shape[1], np.arange(self.shape[0] + 1))
 
-    def __call__(self, x: np.ndarray):
-        n = len(JOINTS)
-        X = x.reshape(n, 3)
-        r = np.zeros(self.size)
-        J = np.zeros((self.size, 3 * n))
-        row = 0
-        # Reprojection, through the camera's one radial term.
-        p = X @ self.R.T + self.t
-        depth = np.where(p[:, 2] > 1e-3, p[:, 2], 1e-3)
-        u, v = p[:, 0] / depth, p[:, 1] / depth
-        s = 1.0 + self.k1 * (u * u + v * v)
-        scale = self.weights / self.noise
-        r[0 : 2 * n : 2] = (self.f * u * s + self.cx - self.pixels[:, 0]) * scale
-        r[1 : 2 * n : 2] = (self.f * v * s + self.cy - self.pixels[:, 1]) * scale
-        for k in range(n):
-            du = np.array([1 / depth[k], 0.0, -u[k] / depth[k]])
-            dv = np.array([0.0, 1 / depth[k], -v[k] / depth[k]])
-            ds = self.k1 * (2 * u[k] * du + 2 * v[k] * dv)
-            J[2 * k, 3 * k : 3 * k + 3] = self.f * (s[k] * du + u[k] * ds) @ self.R * scale[k]
-            J[2 * k + 1, 3 * k : 3 * k + 3] = self.f * (s[k] * dv + v[k] * ds) @ self.R * scale[k]
+    @staticmethod
+    def _layout(steps: bool) -> tuple[np.ndarray, np.ndarray, int]:
+        """A frame's Jacobian entries' rows and columns, in the order __call__ lists them, and the
+        row the learned pose's residuals start at."""
+        n, xyz, two, joint = len(JOINTS), np.arange(3), np.arange(2), np.arange(len(JOINTS))
+        parts = [np.broadcast_arrays(2 * joint[:, None, None] + two[:, None], 3 * joint[:, None, None] + xyz)]  # reprojection
         row = 2 * n
+        parts.append(np.broadcast_arrays(row + np.arange(len(PAIRS))[:, None, None], 3 * _Frames.ENDS[:, :, None] + xyz))  # bones
+        row += len(PAIRS)
+        for _ in range(2):  # no ankle below the floor, and each on it
+            parts.append((row + two, 3 * np.array(ANKLES) + 2))
+            row += 2
+        parts.append(np.broadcast_arrays(row + two[:, None, None], 3 * np.array(LEGS)[:, :, None] + xyz))  # knees
+        row += 2
+        parts.append(np.broadcast_arrays(row + two[:, None], 3 * np.array(SHOULDERS + HIPS) + two[:, None]))  # lean
+        row += 2
+        parts.append(np.broadcast_arrays(row + two[:, None], 3 * np.array([SHOULDERS, HIPS]) + 2))  # level
+        row += 2
+        if steps:
+            parts.append((row + np.arange(3 * n), np.arange(3 * n)))
+            row += 3 * n
+        ends = np.stack([joint, np.full(n, HIPS[0]), np.full(n, HIPS[1])], axis=1)  # each joint and both hips
+        parts.append(np.broadcast_arrays(row + 3 * joint[:, None, None] + xyz[:, None], 3 * ends[:, None, :] + xyz[:, None]))  # the learned pose
+        return np.concatenate([r.ravel() for r, _ in parts]), np.concatenate([c.ravel() for _, c in parts]), row
+
+    def __call__(self, x: np.ndarray) -> tuple[np.ndarray, sparse.csr_matrix]:
+        count, n = len(self.R), len(JOINTS)
+        X = x.reshape(count, n, 3)
+        # Reprojection, through the camera's one radial term.
+        p = X @ self.R.transpose(0, 2, 1) + self.t[:, None]
+        depth = np.where(p[..., 2] > 1e-3, p[..., 2], 1e-3)
+        u, v = p[..., 0] / depth, p[..., 1] / depth
+        s = 1.0 + self.k1 * (u * u + v * v)
+        seen = np.stack([(self.f * u * s + self.cx - self.pixels[..., 0]) * self.scale, (self.f * v * s + self.cy - self.pixels[..., 1]) * self.scale], axis=2)
+        zero = np.zeros_like(depth)
+        du = np.stack([1 / depth, zero, -u / depth], axis=2)
+        dv = np.stack([zero, 1 / depth, -v / depth], axis=2)
+        ds = self.k1[..., None] * (2 * u[..., None] * du + 2 * v[..., None] * dv)
+        turned = np.stack([s[..., None] * du + u[..., None] * ds, s[..., None] * dv + v[..., None] * ds], axis=2)
+        seen_J = (self.f[..., None, None] * turned) @ self.R[:, None] * self.scale[..., None, None]
         # Bones.
-        for name, a, b in PAIRS:
-            span = X[a] - X[b]
-            length = max(float(np.linalg.norm(span)), 1e-9)
-            r[row] = (length - self.lengths[name]) / BONE_SIGMA_M
-            J[row, 3 * a : 3 * a + 3] = span / length / BONE_SIGMA_M
-            J[row, 3 * b : 3 * b + 3] = -span / length / BONE_SIGMA_M
-            row += 1
+        ends = X[:, self.ENDS]
+        span = ends[:, :, 0] - ends[:, :, 1]
+        length = np.maximum(np.linalg.norm(span, axis=2), 1e-9)
+        bones = (length - self.lengths) / BONE_SIGMA_M
+        along = span / length[..., None] / BONE_SIGMA_M
+        bones_J = np.stack([along, -along], axis=2)
         # The floor: no ankle below it, and each on it or clearly off it.
-        ankles = (SLOT[15], SLOT[16])
-        for a in ankles:
-            gap = X[a, 2] - ANKLE_HEIGHT_M
-            if gap < 0:
-                r[row], J[row, 3 * a + 2] = gap / FLOOR_SIGMA_M, 1.0 / FLOOR_SIGMA_M
-            row += 1
-        for a in ankles:
-            r[row], slope = _capped((X[a, 2] - ANKLE_HEIGHT_M) / DOWN_SIGMA_M)
-            J[row, 3 * a + 2] = slope / DOWN_SIGMA_M
-            row += 1
+        gap = X[:, ANKLES, 2] - ANKLE_HEIGHT_M
+        below = gap < 0
+        floor, floor_J = np.where(below, gap / FLOOR_SIGMA_M, 0.0), np.where(below, 1.0 / FLOOR_SIGMA_M, 0.0)
+        down, slope = _capped(gap / DOWN_SIGMA_M)
+        down_J = slope / DOWN_SIGMA_M
         # Knees bend forward (forward taken across the hips).
-        across = X[SLOT[12]] - X[SLOT[11]]
-        forward = np.array([-across[1], across[0], 0.0])
-        forward /= max(np.linalg.norm(forward), 1e-9)
-        for hip, knee, ankle in ((11, 13, 15), (12, 14, 16)):
-            h, k, a = SLOT[hip], SLOT[knee], SLOT[ankle]
-            ahead = float((X[k] - (X[h] + X[a]) / 2) @ forward)
-            if ahead < 0:
-                r[row] = ahead / KNEE_SIGMA_M
-                J[row, 3 * k : 3 * k + 3] = forward / KNEE_SIGMA_M
-                J[row, 3 * h : 3 * h + 3] = J[row, 3 * a : 3 * a + 3] = -forward / (2 * KNEE_SIGMA_M)
-            row += 1
+        across = X[:, HIPS[1]] - X[:, HIPS[0]]
+        forward = np.stack([-across[:, 1], across[:, 0], np.zeros(count)], axis=1)
+        forward /= np.maximum(np.linalg.norm(forward, axis=1), 1e-9)[:, None]
+        legs = X[:, LEGS]
+        ahead = np.sum((legs[:, :, 0] - (legs[:, :, 1] + legs[:, :, 2]) / 2) * forward[:, None], axis=2)
+        back = ahead < 0
+        knees = np.where(back, ahead / KNEE_SIGMA_M, 0.0)
+        bend = np.where(back[..., None], forward[:, None], 0.0)
+        knees_J = np.stack([bend / KNEE_SIGMA_M, -bend / (2 * KNEE_SIGMA_M), -bend / (2 * KNEE_SIGMA_M)], axis=2)
         # The trunk roughly upright: the shoulders' middle above the hips' middle.
-        shoulders, hips = (SLOT[5], SLOT[6]), (SLOT[11], SLOT[12])
-        off = (X[shoulders[0]] + X[shoulders[1]] - X[hips[0]] - X[hips[1]]) / 2
-        for axis in (0, 1):
-            r[row] = off[axis] / LEAN_SIGMA_M
-            for j, sign in ((shoulders[0], 1), (shoulders[1], 1), (hips[0], -1), (hips[1], -1)):
-                J[row, 3 * j + axis] = sign * 0.5 / LEAN_SIGMA_M
-            row += 1
+        off = (X[:, SHOULDERS[0]] + X[:, SHOULDERS[1]] - X[:, HIPS[0]] - X[:, HIPS[1]]) / 2
+        lean, lean_J = off[:, :2] / LEAN_SIGMA_M, np.broadcast_to(np.array([0.5, 0.5, -0.5, -0.5]) / LEAN_SIGMA_M, (count, 2, 4))
         # Shoulders and hips roughly level.
-        for a, b in (shoulders, hips):
-            r[row] = (X[a, 2] - X[b, 2]) / LEVEL_SIGMA_M
-            J[row, 3 * a + 2], J[row, 3 * b + 2] = 1.0 / LEVEL_SIGMA_M, -1.0 / LEVEL_SIGMA_M
-            row += 1
+        level = (X[:, [SHOULDERS[0], HIPS[0]], 2] - X[:, [SHOULDERS[1], HIPS[1]], 2]) / LEVEL_SIGMA_M
+        level_J = np.broadcast_to(np.array([1.0, -1.0]) / LEVEL_SIGMA_M, (count, 2, 2))
+        terms = [(seen, seen_J), (bones, bones_J), (floor, floor_J), (down, down_J), (knees, knees_J), (lean, lean_J), (level, level_J)]
         # Smoothly from the frame before.
         if self.previous is not None:
-            r[row : row + 3 * n] = ((X - self.previous) / self.step_sigma).ravel()
-            J[row : row + 3 * n, :] = np.eye(3 * n) / self.step_sigma
-            row += 3 * n
+            terms.append(((X - self.previous) / self.step_sigma, np.broadcast_to(1.0 / self.step_sigma, (count, n, 3))))
         # Posed as the learned model sees it, about the hips' middle.
-        if self.prior is not None:
-            hips = (SLOT[11], SLOT[12])
-            middle = (X[hips[0]] + X[hips[1]]) / 2
-            r[row : row + 3 * n] = ((X - middle - self.prior) / PRIOR_SIGMA_M).ravel()
-            block = np.eye(3 * n) / PRIOR_SIGMA_M
-            for h in hips:
-                for k in range(n):
-                    block[3 * k : 3 * k + 3, 3 * h : 3 * h + 3] -= 0.5 * np.eye(3) / PRIOR_SIGMA_M
-            J[row : row + 3 * n, :] = block
-        robust = list(range(2 * n)) + (list(range(row, row + 3 * n)) if self.prior is not None else [])
-        _soften(r, J, np.array(robust), ROBUST_SCALE)
-        return r, J
+        middle = (X[:, HIPS[0]] + X[:, HIPS[1]]) / 2
+        pose = (X - middle[:, None] - self.prior) / PRIOR_SIGMA_M
+        terms.append((pose, np.array([1.0, -0.5, -0.5]) / PRIOR_SIGMA_M))  # the joint itself and each hip
+        # Robust: a detected joint, and the model's pose.
+        for k in (0, -1):
+            value, J = terms[k]
+            value, slope = _soft(value, ROBUST_SCALE)
+            terms[k] = value, J * slope[..., None]
+        r = np.concatenate([value.reshape(count, -1) for value, _ in terms], axis=1)[self.has_row]
+        values = np.concatenate([np.reshape(J, (count, -1)) for _, J in terms], axis=1)[self.has_entry]
+        data = np.bincount(self.slot, weights=values, minlength=len(self.indices))
+        return r, sparse.csr_matrix((data, self.indices, self.indptr), shape=self.shape)
 
 
-def _capped(u: float) -> tuple[float, float]:
+def _capped(u):
     """A residual whose square grows as u squared near 0 and levels off at FLOOR_CAP (on the
-    floor, or off it: no pull once clearly up), and its slope."""
+    floor, or off it: no pull once clearly up), and its slope; u a number or an array."""
     k = np.exp(-FLOOR_CAP / 2) / (1 - np.exp(-FLOOR_CAP / 2))
-    e = float(np.exp(-0.5 * u * u))
+    e = np.exp(-0.5 * u * u)
     cost = -2.0 * np.log((e + k) / (1 + k))
-    if cost < 1e-12:
-        return float(u / np.sqrt(1 + k)), float(1 / np.sqrt(1 + k))
-    return float(np.sign(u) * np.sqrt(cost)), float(abs(u) * e / ((e + k) * np.sqrt(cost)))
+    small = cost < 1e-12
+    root = np.sqrt(np.where(small, 1.0, cost))
+    return np.where(small, u / np.sqrt(1 + k), np.sign(u) * root), np.where(small, 1 / np.sqrt(1 + k), np.abs(u) * e / ((e + k) * root))
 
 
 def _soft(r: np.ndarray, scale: float) -> tuple[np.ndarray, np.ndarray]:
@@ -209,12 +234,6 @@ def _soft(r: np.ndarray, scale: float) -> tuple[np.ndarray, np.ndarray]:
     big = np.abs(x) > 1e-6
     slope[big] = np.abs(x[big]) / (np.sqrt(1.0 + x[big] ** 2) * np.sqrt(cost[big]))
     return scale * np.sign(x) * np.sqrt(cost), slope
-
-
-def _soften(r: np.ndarray, J: np.ndarray, rows: np.ndarray, scale: float) -> None:
-    """_soft on these rows of a residual vector and its dense Jacobian, in place."""
-    r[rows], slope = _soft(r[rows], scale)
-    J[rows] *= slope[:, None]
 
 
 def _start(camera: Camera, pixels: np.ndarray, weights: np.ndarray, stature: float, facing: float) -> np.ndarray:
@@ -231,7 +250,7 @@ def _start(camera: Camera, pixels: np.ndarray, weights: np.ndarray, stature: flo
     return (np.array([floor[0], floor[1], 0.0]) + stature * (template[:, :1] * right + template[:, 1:2] * forward + template[:, 2:3] * np.array([0, 0, 1.0]))).ravel()
 
 
-def _alone(problem: _Frame, x0: np.ndarray) -> np.ndarray:
+def _alone(problem: _Frames, x0: np.ndarray) -> np.ndarray:
     """One frame's body on its own (with the frame before, if any, in its problem)."""
     cache: dict = {}
 
@@ -242,7 +261,7 @@ def _alone(problem: _Frame, x0: np.ndarray) -> np.ndarray:
     def jacobian(x):
         if "x" not in cache or not np.array_equal(cache["x"], x):
             residuals(x)
-        return cache["J"]
+        return cache["J"].toarray()
 
     return least_squares(residuals, x0, jac=jacobian, max_nfev=100).x
 
@@ -282,11 +301,11 @@ def _links(times_s: np.ndarray) -> sparse.csr_matrix:
     return sparse.csr_matrix((values, (rows, cols)), shape=(row, count * size))
 
 
-def _contact(z: float) -> tuple[float, float]:
+def _contact(z: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """How surely an ankle at height z is on the floor (1 at its floor height or below, falling
     away above it), and its slope."""
-    over = max(z - ANKLE_HEIGHT_M, 0.0)
-    weight = float(np.exp(-0.5 * (over / CONTACT_M) ** 2))
+    over = np.maximum(z - ANKLE_HEIGHT_M, 0.0)
+    weight = np.exp(-0.5 * (over / CONTACT_M) ** 2)
     return weight, -over / CONTACT_M**2 * weight
 
 
@@ -296,55 +315,49 @@ def _slides(x: np.ndarray, times_s: np.ndarray) -> tuple[np.ndarray, sparse.csr_
     foot can scrape) and with the Jacobian over all the frames' joints."""
     count, size = x.shape
     X = x.reshape(count, -1, 3)
-    r, rows, cols, values = [], [], [], []
-    for a in (SLOT[15], SLOT[16]):
-        for j in range(1, count):
-            i, dt = j - 1, times_s[j] - times_s[j - 1]
-            if dt > LINK_GAP_S:
-                continue
-            (wi, si), (wj, sj) = _contact(X[i, a, 2]), _contact(X[j, a, 2])
-            scale = 1.0 / (SLIDE_SIGMA_M_PER_S * max(dt, 1e-3))
-            for axis in range(2):
-                v = (X[j, a, axis] - X[i, a, axis]) * scale
-                row = len(r)
-                r.append(wi * wj * v)
-                rows += [row] * 4
-                cols += [j * size + 3 * a + axis, i * size + 3 * a + axis, j * size + 3 * a + 2, i * size + 3 * a + 2]
-                values += [wi * wj * scale, -wi * wj * scale, v * wi * sj, v * wj * si]
-    soft, slope = _soft(np.array(r, dtype=float), ROBUST_SCALE)
-    J = sparse.csr_matrix((values, (rows, cols)), shape=(len(r), count * size))
+    j = np.flatnonzero(np.diff(times_s) <= LINK_GAP_S) + 1
+    i = j - 1
+    scale = (1.0 / (SLIDE_SIGMA_M_PER_S * np.maximum(times_s[j] - times_s[i], 1e-3)))[:, None]
+    # Per ankle, pair of tied frames and axis across the floor.
+    w, s = _contact(X[:, ANKLES, 2].T)
+    wi, si, wj, sj = (a[:, :, None] for a in (w[:, i], s[:, i], w[:, j], s[:, j]))
+    v = (X[j][:, ANKLES, :2] - X[i][:, ANKLES, :2]).transpose(1, 0, 2) * scale
+    a, axis = 3 * np.array(ANKLES)[:, None, None], np.arange(2)
+    cols = np.stack(np.broadcast_arrays(j[:, None] * size + a + axis, i[:, None] * size + a + axis, j[:, None] * size + a + 2, i[:, None] * size + a + 2), axis=3)
+    values = np.stack(np.broadcast_arrays(wi * wj * scale, -wi * wj * scale, v * wi * sj, v * wj * si), axis=3)
+    soft, slope = _soft((wi * wj * v).ravel(), ROBUST_SCALE)
+    J = sparse.csr_matrix((values.ravel(), (np.repeat(np.arange(soft.size), 4), cols.ravel())), shape=(soft.size, count * size))
     return soft, sparse.diags(slope) @ J
 
 
-def _together(problems: Sequence[_Frame], x0: np.ndarray, links: sparse.csr_matrix, times_s: np.ndarray) -> tuple[np.ndarray, sparse.csc_matrix]:
+def _together(problem: _Frames, x0: np.ndarray, links: sparse.csr_matrix, times_s: np.ndarray) -> tuple[np.ndarray, sparse.csc_matrix]:
     """Every frame's body at once (Levenberg-Marquardt on the sparse problem); the bodies and the
     problem's information matrix at them."""
     count, size = x0.shape
 
     def evaluate(x):
-        parts = [problem(x[i]) for i, problem in enumerate(problems)]
+        r_frames, J_frames = problem(x.ravel())
         r_slides, J_slides = _slides(x, times_s)
-        r = np.concatenate([part[0] for part in parts] + [links @ x.ravel(), r_slides])
-        J = sparse.vstack([sparse.block_diag([part[1] for part in parts], format="csr"), links, J_slides], format="csr")
-        return r, J
+        return np.concatenate([r_frames, links @ x.ravel(), r_slides]), sparse.vstack([J_frames, links, J_slides], format="csr")
 
     x = x0.copy()
     r, J = evaluate(x)
+    information, gradient = J.T @ J, J.T @ r
     cost, damping = float(r @ r), 1e-3
     for _ in range(MAX_STEPS):
-        information = (J.T @ J).tocsc()
-        diagonal = information.diagonal() + 1e-9
+        # The damped normal equations are banded (a frame is tied only to its neighbours).
         try:
-            step = splu((information + sparse.diags(damping * diagonal)).tocsc()).solve(-(J.T @ r))
-        except RuntimeError:
+            factor = cholesky_banded(_band(information + sparse.diags(damping * (information.diagonal() + 1e-9))), lower=True)
+        except np.linalg.LinAlgError:
             damping *= 4
             continue
-        candidate = x + step.reshape(count, size)
+        candidate = x + cho_solve_banded((factor, True), -gradient).reshape(count, size)
         r_new, J_new = evaluate(candidate)
         cost_new = float(r_new @ r_new)
         if cost_new < cost:
             settled = cost - cost_new < 1e-7 * cost
-            x, r, J, cost = candidate, r_new, J_new, cost_new
+            x, r, cost = candidate, r_new, cost_new
+            information, gradient = J_new.T @ J_new, J_new.T @ r_new
             damping = max(damping / 3, 1e-9)
             if settled:
                 break
@@ -352,7 +365,16 @@ def _together(problems: Sequence[_Frame], x0: np.ndarray, links: sparse.csr_matr
             damping *= 4
             if damping > 1e8:
                 break
-    return x, (J.T @ J).tocsc()
+    return x, information
+
+
+def _band(matrix: sparse.spmatrix, width: int = 0) -> np.ndarray:
+    """A symmetric matrix's lower band, as a banded Cholesky takes it: band[d, j] = matrix[j + d, j],
+    at least `width` below the diagonal."""
+    coo = sparse.tril(matrix, format="coo")
+    gap, n = coo.row - coo.col, matrix.shape[0]
+    rows = max(int(gap.max(initial=0)), width) + 1
+    return np.bincount(gap * n + coo.col, weights=coo.data, minlength=rows * n).reshape(rows, n)
 
 
 def _covariances(information: sparse.csc_matrix, count: int, size: int) -> np.ndarray:
@@ -361,30 +383,22 @@ def _covariances(information: sparse.csc_matrix, count: int, size: int) -> np.nd
     so its inverse's band comes from a banded Cholesky factor by Takahashi's recursion, in time
     that grows with the clip's length rather than its square:
     Z[i, j] = (delta_ij / L[i, i] - sum over k > i of L[k, i] Z[k, j]) / L[i, i]."""
-    coo = (sparse.csr_matrix(information) + sparse.identity(information.shape[0]) * 1e-9).tocoo()
-    n = coo.shape[0]
-    b = max(int(np.max(np.abs(coo.row - coo.col))), size - 1)
-    band = np.zeros((b + 1, n))  # band[d, j] = information[j + d, j]
-    lower = coo.row >= coo.col
-    np.add.at(band, (coo.row[lower] - coo.col[lower], coo.col[lower]), coo.data[lower])
-    factor = cholesky_banded(band, lower=True)  # factor[d, j] = L[j + d, j]
-    inverse = np.zeros((n, b + 1))  # inverse[i, d] = Z[i, i + d]
-    offsets = np.arange(b + 1)
+    n = information.shape[0]
+    factor = cholesky_banded(_band(information + sparse.identity(n) * 1e-9, size - 1), lower=True)  # factor[d, j] = L[j + d, j]
+    b = len(factor) - 1
+    blocks = np.zeros((count, size, size))
+    window = np.zeros((b + 1, b + 1))  # Z[j : j + b + 1, j : j + b + 1] for the last row j done (nought past the end)
     for i in range(n - 1, -1, -1):
         span = min(b, n - 1 - i)
         below = factor[1 : span + 1, i]
-        rows, cols = i + 1 + np.arange(span)[:, None], i + offsets[None, :]
-        low, gap = np.minimum(rows, cols), np.abs(rows - cols)
-        known = np.where((gap <= b) & (cols < n), inverse[np.minimum(low, n - 1), np.minimum(gap, b)], 0.0)
-        row = -(below @ known) / factor[0, i]  # right off the diagonal: only rows below i are used
+        row = np.empty(b + 1)  # Z[i, i + d]
+        row[1:] = -(below @ window[:span, :b]) / factor[0, i]  # right off the diagonal: only rows below i are used
         row[0] = (1.0 / factor[0, i] - below @ row[1 : span + 1]) / factor[0, i]  # the diagonal uses this row's own
-        inverse[i] = row
-    blocks = np.zeros((count, size, size))
-    within = np.arange(size)
-    for f in range(count):
-        for d in range(size):
-            blocks[f, within[: size - d], within[d:]] = inverse[f * size : (f + 1) * size - d, d]
-        blocks[f] = np.triu(blocks[f]) + np.triu(blocks[f], 1).T
+        shifted = np.empty_like(window)
+        shifted[1:, 1:], shifted[0], shifted[1:, 0] = window[:b, :b], row, row[1:]
+        window = shifted
+        if i % size == 0:
+            blocks[i // size] = window[:size, :size]
     return blocks
 
 
@@ -421,15 +435,14 @@ def fit_bodies(
     for k, (camera, pixels, weights, prior) in enumerate(inputs):
         linked = previous is not None and times_s[k] - previous_s <= LINK_GAP_S
         step_sigma = MOVE_SIGMA_M_PER_S * max(times_s[k] - previous_s, 1e-3) if linked else 1.0
-        problem = _Frame(camera, pixels, weights, lengths, previous if linked else None, step_sigma, noise_px, prior)
+        problem = _Frames([camera], [pixels], [weights], [prior], lengths, noise_px, [previous] if linked else None, [step_sigma])
         start = previous.ravel() if linked else _start(camera, pixels, weights, stature, facing)
         x[k] = _alone(problem, start)
         previous, previous_s = x[k].reshape(-1, 3), times_s[k]
 
     links = _links(times_s)
     for round_ in range(rounds + 1):
-        problems = [_Frame(camera, pixels, weights, lengths, None, 1.0, noise_px, prior) for camera, pixels, weights, prior in inputs]
-        x, information = _together(problems, x, links, times_s)
+        x, information = _together(_Frames(*zip(*inputs), lengths, noise_px), x, links, times_s)
         fitted = x.reshape(len(used), -1, 3)
         if round_ < rounds and len(used) >= 5:
             for name in BONES:
