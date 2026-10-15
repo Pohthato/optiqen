@@ -70,7 +70,7 @@ def score(job: tuple[str, str, float, int, bool]) -> dict:
     return {
         "view": view, "side": side, "fps": fps, "seed": seed, "model": model,
         "error": error.ravel().tolist(), "along": along.tolist(), "airborne": np.repeat(airborne, len(idx)).tolist(),
-        "covered": (error <= 2 * sigma).ravel().tolist(), "jitter": float(np.median(shake)),
+        "covered": (error <= 2 * sigma).ravel().tolist(), "ratio": (error / sigma).ravel().tolist(), "jitter": float(np.median(shake)),
     }
 
 
@@ -88,12 +88,14 @@ def summarise(results: list[dict]) -> dict:
             "airborneJointErrorCm": round(float(np.median(error[airborne])) * 100, 1) if airborne.any() else None,
             "airborneShare": round(float(airborne.mean()), 3),
             "within2Sigma": round(float(covered.mean()), 3),
+            "errorInSigmasP95": round(float(np.percentile(np.concatenate([r["ratio"] for r in group]), 95)), 2),
             "jitterMS2": round(float(np.median([r["jitter"] for r in group])), 1),
             "frames": int(len(error) // len(JOINTS)),
         }
     error = np.concatenate([r["error"] for r in results])
     out["all"] = {"jointErrorCm": {"median": round(float(np.median(error)) * 100, 1), "p90": round(float(np.percentile(error, 90)) * 100, 1)},
                   "within2Sigma": round(float(np.mean(np.concatenate([r["covered"] for r in results]))), 3),
+                  "errorInSigmasP95": round(float(np.percentile(np.concatenate([r["ratio"] for r in results]), 95)), 2),
                   "within2SigmaIfCalibrated": [round(c, 3) for c in COVERED]}
     return out
 

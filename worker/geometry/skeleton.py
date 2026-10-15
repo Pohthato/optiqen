@@ -30,6 +30,7 @@ from typing import Sequence
 
 import numpy as np
 from scipy import sparse
+from scipy.linalg import cholesky_banded
 from scipy.optimize import least_squares
 from scipy.sparse.linalg import splu
 
@@ -57,7 +58,7 @@ ANKLE_HEIGHT_M = 0.07
 BONE_SIGMA_M = 0.02
 FLOOR_SIGMA_M = 0.01  # no foot below the floor
 DOWN_SIGMA_M = 0.02  # and each on it, unless the rest says otherwise (a step, a jump)
-FLOOR_CAP = 4.5  # the most an ankle off the floor costs (squared standard deviations): further up, it is off it
+FLOOR_CAP = 7.0  # the most an ankle off the floor costs (squared standard deviations): further up, it is off it
 MOVE_SIGMA_M_PER_S = 9.0  # how far a joint may move between frames, a priori (a wrist in a swing)
 ACCEL_SIGMA_M_PER_S2 = 20.0  # how hard the hips' middle may speed up, slow down or turn (a lunge's stop)
 LINK_GAP_S = 0.25  # frames further apart than this are not tied together
@@ -70,6 +71,12 @@ MIN_SCORE = 0.3
 PRIOR_SIGMA_M = 0.08  # how closely a learned pose model's relative joints are trusted
 ROBUST_SCALE = 2.0  # standard deviations beyond which a joint, the model's pose or a foot's slide counts less
 MAX_STEPS = 40
+# What the fit's own uncertainty leaves out: its floor rule can be this wrong about a foot's
+# height (one just off the floor is held a little down), which moves the whole body along the
+# line of sight by that over the sine of the sight's angle to the floor (a few centimetres close
+# up, over 10 cm for a far player seen from behind). Set on the tuning rallies so that 95 % of
+# joints fall within twice their stated spread in every view, near and far.
+FLOOR_MISS_M = 0.012
 
 
 @dataclass(frozen=True)
@@ -77,6 +84,9 @@ class Body:
     joints: np.ndarray  # (17, 3) court metres; NaN for the joints not fitted (eyes, ears)
     sigma: np.ndarray  # (17,) one standard deviation of each joint's position, metres
     rms_px: float  # how far the fitted joints miss the detected ones
+    # (39, 39) the fitted joints' covariance (JOINTS order, x y z each), metres squared: how their
+    # errors go together (the whole body along the line of sight, say)
+    covariance: np.ndarray | None = None
 
 
 class _Frame:
@@ -345,18 +355,37 @@ def _together(problems: Sequence[_Frame], x0: np.ndarray, links: sparse.csr_matr
     return x, (J.T @ J).tocsc()
 
 
-def _spreads(information: sparse.csc_matrix, count: int, size: int) -> np.ndarray:
-    """Each frame's joints' standard deviations (metres, combined over x, y, z) from the
-    information matrix: the diagonal of its inverse, a block of frames at a time."""
-    lu = splu((information + sparse.identity(information.shape[0]) * 1e-9).tocsc())
-    variances = np.zeros(count * size)
-    block = max(1, 2000 // size)
-    for first in range(0, count, block):
-        last = min(first + block, count)
-        unit = np.zeros((count * size, (last - first) * size))
-        unit[first * size : last * size] = np.eye((last - first) * size)
-        variances[first * size : last * size] = np.diag(lu.solve(unit)[first * size : last * size])
-    return np.sqrt(np.maximum(variances.reshape(count, len(JOINTS), 3).sum(axis=2), 0.0))
+def _covariances(information: sparse.csc_matrix, count: int, size: int) -> np.ndarray:
+    """Each frame's joints' covariance (size by size, metres squared): that frame's block of the
+    information matrix's inverse. The matrix is banded (a frame is tied only to its neighbours),
+    so its inverse's band comes from a banded Cholesky factor by Takahashi's recursion, in time
+    that grows with the clip's length rather than its square:
+    Z[i, j] = (delta_ij / L[i, i] - sum over k > i of L[k, i] Z[k, j]) / L[i, i]."""
+    coo = (sparse.csr_matrix(information) + sparse.identity(information.shape[0]) * 1e-9).tocoo()
+    n = coo.shape[0]
+    b = max(int(np.max(np.abs(coo.row - coo.col))), size - 1)
+    band = np.zeros((b + 1, n))  # band[d, j] = information[j + d, j]
+    lower = coo.row >= coo.col
+    np.add.at(band, (coo.row[lower] - coo.col[lower], coo.col[lower]), coo.data[lower])
+    factor = cholesky_banded(band, lower=True)  # factor[d, j] = L[j + d, j]
+    inverse = np.zeros((n, b + 1))  # inverse[i, d] = Z[i, i + d]
+    offsets = np.arange(b + 1)
+    for i in range(n - 1, -1, -1):
+        span = min(b, n - 1 - i)
+        below = factor[1 : span + 1, i]
+        rows, cols = i + 1 + np.arange(span)[:, None], i + offsets[None, :]
+        low, gap = np.minimum(rows, cols), np.abs(rows - cols)
+        known = np.where((gap <= b) & (cols < n), inverse[np.minimum(low, n - 1), np.minimum(gap, b)], 0.0)
+        row = -(below @ known) / factor[0, i]  # right off the diagonal: only rows below i are used
+        row[0] = (1.0 / factor[0, i] - below @ row[1 : span + 1]) / factor[0, i]  # the diagonal uses this row's own
+        inverse[i] = row
+    blocks = np.zeros((count, size, size))
+    within = np.arange(size)
+    for f in range(count):
+        for d in range(size):
+            blocks[f, within[: size - d], within[d:]] = inverse[f * size : (f + 1) * size - d, d]
+        blocks[f] = np.triu(blocks[f]) + np.triu(blocks[f], 1).T
+    return blocks
 
 
 def fit_bodies(
@@ -406,13 +435,19 @@ def fit_bodies(
             for name in BONES:
                 lengths[name] = float(np.median([np.linalg.norm(j[a] - j[b]) for j in fitted for bone, a, b in PAIRS if bone == name]))
 
-    spreads = _spreads(information, len(used), 3 * len(JOINTS))
+    covariances = _covariances(information, len(used), 3 * len(JOINTS))
     for k, index in enumerate(used):
         joints = fitted[k]
         camera, pixels, weights, _ = inputs[k]
+        centre = -camera.rotation.T @ np.asarray(camera.tvec, dtype=float).reshape(3)
+        sight = (joints[SLOT[11]] + joints[SLOT[12]]) / 2 - centre
+        sight /= max(float(np.linalg.norm(sight)), 1e-9)
+        along = FLOOR_MISS_M / max(abs(float(sight[2])), 0.05)
+        covariances[k] += along**2 * np.kron(np.ones((len(JOINTS), len(JOINTS))), np.outer(sight, sight))
         projected = camera.project(joints)
         misses = np.hypot(*(projected - pixels).T)[weights > 0]
+        variances = np.maximum(np.diag(covariances[k]), 0.0).reshape(len(JOINTS), 3).sum(axis=1)
         full, full_sigma = np.full((17, 3), np.nan), np.full(17, np.nan)
-        full[list(JOINTS)], full_sigma[list(JOINTS)] = joints, spreads[k]
-        bodies[index] = Body(full, full_sigma, float(np.sqrt(np.mean(misses**2))))
+        full[list(JOINTS)], full_sigma[list(JOINTS)] = joints, np.sqrt(variances)
+        bodies[index] = Body(full, full_sigma, float(np.sqrt(np.mean(misses**2))), covariances[k])
     return bodies
