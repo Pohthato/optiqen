@@ -8,7 +8,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 MODEL_DIR=/opt/netoval/models
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg libglib2.0-0 libgl1 && rm -rf /var/lib/apt/lists/*
 COPY worker/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+# Ultralytics and MediaPipe each pull in their own OpenCV, and every OpenCV package writes the same
+# cv2 module: keep only the one requirements.txt names (pip check will miss the others' names).
+RUN pip install --no-cache-dir -r /tmp/requirements.txt \
+    && pip uninstall -y opencv-python opencv-python-headless opencv-contrib-python opencv-contrib-python-headless \
+    && pip install --no-cache-dir --no-deps "$(grep '^opencv-contrib-python-headless==' /tmp/requirements.txt | tr -d '\r')"
 COPY worker/handler.py worker/badminton.py /opt/netoval/
 COPY worker/weights/ /opt/netoval/models/
 
