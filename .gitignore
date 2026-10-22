@@ -49,6 +49,7 @@ weights/
 *.flv
 *.webm
 sample_videos/
+worker/Clips/
 media/
 uploads/
 
