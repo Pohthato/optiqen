@@ -228,4 +228,61 @@ All: 5.4 cm median, 15.2 cm at the 90th percentile, 96 % within 2σ.
 - **The motion is still synthetic.** Real strokes are faster: a smash's wrist moves over half a metre between frames at 30 fps. The elbow at contact will be less sure than here.
 - **The split step's drop comes out about 2 cm low.** The floor rule holds a foot only a few centimetres up a little down, which flattens the hop. Its stated uncertainty includes those 2 cm.
 - **Base is a fixed point.** It is the centre line, 2.8 m from the net. Real bases shift with the opponent's position, so "distance from base" is a reference, not a verdict.
-- **Not yet in the pipeline.** That is 4d.
+- **Not yet in the pipeline.** That is 4d (below).
+
+## 4d results (into the one command)
+
+```
+python analyse_rally.py clip.mp4 --golden clip.json --out clip.analysis.json --overlay clip.analysis.mp4 --diagram clip.court.png
+```
+
+**What it adds.** After the camera track, the shuttle and the hits:
+
+1. **Everyone's poses** (`detect_poses.py`, with `worker/weights/pose_landmarker_heavy.task`). An existing `--poses` file is used as it is; otherwise they are written next to `--out`, like the track and the shuttle.
+2. **The two players** (`track_players.py`) and **their bodies in 3D** (`lift_players.py`), fitted over the whole clip.
+3. **The body facts** (`body.py`) at each shot, for its hitter.
+
+Without the pose model, or without MediaPipe, the rally is analysed as before and the summary's `playersError` says why.
+
+**What it writes.**
+
+- **Each shot** gets `body`: the hitter's facts at contact, each with its standard deviation, and `ready` (distance from base and the split step at the opponent's hit). It also gets `players`: where both players stood at the hit (the middle of the hips over the floor), with its covariance.
+- **The summary** gives each player's frames found and standing reach with the racket.
+- **The overlay** draws both players' fitted bodies back through the camera, so a bad fit shows.
+- **The diagram** adds where both players stood at each hit: a ring with its 95 % region, the hitter's joined to the contact.
+
+**The worker image** keeps one OpenCV. MediaPipe pulls in `opencv-contrib-python` and Ultralytics `opencv-python`, and both wrote the same `cv2` module as the pinned headless build. Checked inside the existing worker image: one OpenCV left (4.10, headless, with the contrib modules), MediaPipe and Ultralytics import, and the landmarker finds the same players as on this laptop.
+
+**Synthetic check (`worker/test_analyse_rally.py`).** A simulated rally whose two players are seen through an emulated detector (3 px of noise, a learned 3D pose) beside a spectator: both players are found in every frame, all shots but at most one get the hitter's body, and where each player stood is inside its 99.9 % region (median miss under 15 cm).
+
+## First real clips
+
+**The clips.** Ten singles rallies, 1920×1080 at 30 fps. Clips 1–9 come from one tripod at the near-left corner, 1.23 m high and 2.2 m outside the court. Clip 10 is the Hendry clip, filmed from the side. Hit times for clips 6–10 were labelled by hand (who hit, and the shot), to about a frame.
+
+**The court.** Court points were placed by eye on one frame of Clip 6. The same tripod filmed clips 1–9, so each of them started from that camera and was refined on its own painted lines. Every clip's court was checked by eye on the drawing: every painted line lies on the model. Clips 6–9 were tracked through every frame: none lost, 0.46–0.47 px rms.
+
+**Hits against the labels** (no sound on this laptop; shuttle in the default overlapping mode; a hit counts when within 250 ms):
+
+| Clip | Labelled | Found | Matched | Extra | Timing error, median / max | Hitter right |
+| --- | --- | --- | --- | --- | --- | --- |
+| 9 | 8 | 9 | 8 | 1 | 20 / 37 ms | 8 of 8 |
+| 8 | 14 | 14 | 14 | 0 | 23 / 93 ms | 13 of 13 (one hit had no shot) |
+| 10 (earlier run, 2026-10-11 code) | 20 | 21 | 19 | 2 | 37 / 190 ms | 15 of 16 |
+
+- **Against simulation:** silent clips at 30 fps found 95 % of the hits the camera saw, with precision 1.0 (held-out, Phase 3). Real recall is as good. The timing error is mostly the labels' own: a frame is 33 ms, and a hit was timed by eye.
+- **Clip 9's extra hit** is the detector holding the shuttle still for two frames mid-lift, which split one flight in two.
+
+**The players (Clip 9).**
+
+- **The near player** is found in every frame. The fitted body sits on him in the overlay: both lunges, the arm reaching to the net, and both feet 12 ± 4 cm off the floor on the final jump smash. His standing reach comes out at 2.55 ± 0.02 m. Two elbow angles at contact look wrong (27° at a net shot, 65° on the smash): the arm is blurred at contact.
+- **The far player is lost to a seated person behind the far baseline** for most of the rally. In two frames the detector missed the far player, the tracker took the nearest person within reach, and that still person then stays the nearest to where the player was last seen. The synthetic scenes never put a seated official a metre behind the baseline. Until this is fixed, the far player's body facts on these clips are not to be trusted.
+
+**The far court from this camera.** From 1.23 m at the corner the far half is seen almost edge-on, so depth along it is barely measured. A far-court drop came out at 145 ± 28 km/h rising 4°, and Clip 9's last shot, called in by hand, came out too close to call (P(in) 0.47). Capture guidance (Phase 5) should ask for a higher camera.
+
+**Cost.** On this laptop's CPU the pose landmarker takes about 3 CPU-seconds a frame (the whole frame plus the crops), and the shuttle in overlapping mode far longer. A GPU worker is needed.
+
+**Not done yet.**
+
+- **Identity on real footage.** People seen at the same moment as the player cannot become the player when the detector misses them, and seated or still people behind the lines should not be taken for players.
+- **Clips 6, 7 and 10** with the current code, and the players on clips 6–8 and 10.
+- **Real 3D accuracy** of the bodies still needs the two-phone session in the spec.
