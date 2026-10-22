@@ -15,24 +15,25 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 
 from find_hits import _cameras
-from geometry.skeleton import fit_bodies
+from geometry.camera import Camera
+from geometry.skeleton import Body, fit_bodies
 from players import HALVES
 
 FACING = {"near": np.pi / 2, "far": -np.pi / 2}  # towards the net
 
 
-def lift(players_doc: dict, track_doc: dict) -> dict:
-    cameras = _cameras(track_doc)
-    times_ms = [float(frame["timeMs"]) for frame in track_doc["frames"]]
+def fit_players(players_doc: dict, cameras: Sequence[Camera | None], times_ms: Sequence[float]) -> tuple[dict[str, list[Body | None]], int]:
+    """Each half's body per frame (None where the player was not found), and how many of the
+    players' frames had the detector's 3D pose."""
     bodies, with_pose = {}, 0
     for half in HALVES:
-        entries = players_doc["players"][half]
         frames, priors = [], []
-        for entry in entries:
+        for entry in players_doc["players"][half]:
             if entry is None:
                 frames.append(None)
                 priors.append(None)
@@ -43,6 +44,12 @@ def lift(players_doc: dict, track_doc: dict) -> dict:
             priors.append(np.asarray(world, dtype=float) if world is not None else None)
             with_pose += world is not None
         bodies[half] = fit_bodies(frames, cameras, times_ms, facing=FACING[half], priors=priors)
+    return bodies, with_pose
+
+
+def lift(players_doc: dict, track_doc: dict) -> dict:
+    times_ms = [float(frame["timeMs"]) for frame in track_doc["frames"]]
+    bodies, with_pose = fit_players(players_doc, _cameras(track_doc), times_ms)
     return {
         "summary": {
             "frames": len(times_ms),

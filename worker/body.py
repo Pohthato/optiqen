@@ -136,6 +136,21 @@ def body_at(bodies: Sequence[Body | None], times_ms: Sequence[float], time_ms: f
     return Body(joints, sigma, (1 - f) * a.rms_px + f * b.rms_px, covariance)
 
 
+def standing_at(bodies: Sequence[Body | None], times_ms: Sequence[float], time_ms: float) -> tuple[np.ndarray, np.ndarray] | None:
+    """Where the player was at a moment: the middle of the hips over the floor (x, y) and its
+    covariance (2, 2). None when the body is not known then."""
+    found = body_at(bodies, times_ms, time_ms)
+    if found is None or not np.isfinite(found.joints[[11, 12]]).all():
+        return None
+    point = (found.joints[11, :2] + found.joints[12, :2]) / 2
+    if found.covariance is None:
+        spread = float((found.sigma[11] + found.sigma[12]) / 2) ** 2 / 3
+        return point, np.eye(2) * spread
+    a, b = 3 * JOINTS.index(11), 3 * JOINTS.index(12)
+    c = found.covariance
+    return point, 0.25 * (c[a : a + 2, a : a + 2] + c[b : b + 2, b : b + 2] + c[a : a + 2, b : b + 2] + c[b : b + 2, a : a + 2])
+
+
 def _facing(joints: np.ndarray) -> np.ndarray:
     """The way the hips face, across the floor: square to the line from the left hip to the right."""
     across = joints[..., 12, :2] - joints[..., 11, :2]

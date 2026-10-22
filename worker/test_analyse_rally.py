@@ -10,11 +10,34 @@ from unittest import mock
 import cv2
 import numpy as np
 
-from analyse_rally import main
+from analyse_rally import find_players, main
 from evaluation.hits_benchmark import SIZE, Scenario, simulate
+from geometry.skeleton import JOINTS
+from simulation.people import model_pose, playing, skeleton
 from test_find_hits import shuttle_doc, track_doc
 
 SIM = simulate(Scenario(seed=22, jitter_px=1.0, false_per_s=0.0, neighbour_per_s=0.3, final_near_line=True))
+
+
+def poses_doc(sim, seed=3) -> dict:
+    """What a pose detector reports: both players' joints with 3 px of noise and a learned 3D
+    pose, and a spectator beside the court."""
+    rng = np.random.default_rng(seed)
+    frames = []
+    for camera, time_ms in zip(sim.clip.cameras, sim.times_ms):
+        people = []
+        for side in ("near", "far"):
+            joints = playing(sim.clip.rally, side, time_ms / 1000.0)
+            pixels = camera.project(joints) + rng.normal(0, 3.0, (17, 2))
+            people.append({
+                "keypoints": np.column_stack([pixels, np.full(17, 0.9)]).tolist(),
+                "box": [*pixels.min(axis=0).tolist(), *pixels.max(axis=0).tolist()],
+                "world": model_pose(camera, joints[list(JOINTS)], rng).tolist(),
+            })
+        spectator = camera.project(skeleton((-3.0, 9.0), 0.0))
+        people.append({"keypoints": np.column_stack([spectator, np.full(17, 0.9)]).tolist(), "box": None, "world": None})
+        frames.append({"timeMs": round(time_ms, 3), "people": people})
+    return {"frames": frames}
 
 
 class AnalyseRallyTests(unittest.TestCase):
@@ -29,8 +52,9 @@ class AnalyseRallyTests(unittest.TestCase):
         writer.release()
         (root / "clip.track.json").write_text(json.dumps(track_doc(SIM)), encoding="utf-8")
         (root / "clip.shuttle.json").write_text(json.dumps(shuttle_doc(SIM)), encoding="utf-8")
+        (root / "clip.poses.json").write_text(json.dumps(poses_doc(SIM)), encoding="utf-8")
         args = [
-            str(cls.video), "--track", str(root / "clip.track.json"), "--shuttle", str(root / "clip.shuttle.json"),
+            str(cls.video), "--track", str(root / "clip.track.json"), "--shuttle", str(root / "clip.shuttle.json"), "--poses", str(root / "clip.poses.json"),
             "--out", str(root / "clip.analysis.json"), "--overlay", str(root / "overlay.mp4"), "--diagram", str(root / "court.png"),
         ]
         with mock.patch("find_hits.read_audio", return_value=SIM.clip.audio), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -59,6 +83,44 @@ class AnalyseRallyTests(unittest.TestCase):
         self.assertIn("long flights", drag["from"])
         self.assertAlmostEqual(drag["value"], 6.7, delta=0.5)
         self.assertEqual(self.result["summary"]["shots"], len(shots))
+
+    def test_every_shot_with_the_hitter_s_body_and_where_both_players_stood(self):
+        shots = self.result["shots"]
+        players = self.result["summary"]["players"]
+        self.assertIsNone(self.result["summary"]["playersError"])
+        for half in ("near", "far"):
+            self.assertEqual(players[half]["frames"], len(SIM.track))
+            self.assertGreater(players[half]["standingReachM"]["value"], 2.0)
+        with_body = [shot for shot in shots if shot["body"] is not None]
+        self.assertGreaterEqual(len(with_body), len(shots) - 1)
+        for shot in with_body:
+            body = shot["body"]
+            self.assertIn(body["arm"], ("left", "right"))
+            for name in ("aboveReachM", "aheadM", "asideM", "elbowDeg", "sideOnDeg", "hipsHeightM", "frontKneeDeg", "offFloorM", "weightAheadM"):
+                self.assertGreater(body[name]["sigma"], 0.0, name)
+            self.assertTrue(0.0 <= body["elbowDeg"]["value"] <= 180.0)
+            self.assertTrue(0.4 <= body["hipsHeightM"]["value"] <= 1.3)
+        self.assertTrue(any(shot["body"]["ready"] is not None for shot in with_body[1:]))
+        misses = []
+        for shot in shots:
+            for half in ("near", "far"):
+                hips = playing(SIM.clip.rally, half, shot["hitMs"] / 1000.0)[[11, 12], :2].mean(axis=0)
+                stood = shot["players"][half]
+                miss = np.asarray(stood["point"]) - hips
+                misses.append(float(np.hypot(*miss)))
+                self.assertLess(float(miss @ np.linalg.solve(np.asarray(stood["covariance"]), miss)), 13.8, (shot["shot"], half))  # 99.9 %
+        self.assertLess(np.median(misses), 0.15)
+
+    def test_without_the_pose_model_or_with_poses_of_other_frames_there_are_no_players(self):
+        cameras, times_ms = [None] * 3, [0.0, 33.3, 66.7]
+        bodies, why = find_players(self.video, self.root / "clip.track.json", self.root / "none.poses.json", True, self.root / "missing.task", cameras, times_ms)
+        self.assertIsNone(bodies)
+        self.assertIn("no pose model", why)
+        self.assertFalse((self.root / "none.poses.json").exists())
+        (self.root / "short.poses.json").write_text(json.dumps({"frames": [{"timeMs": 0.0, "people": []}]}), encoding="utf-8")
+        bodies, why = find_players(self.video, self.root / "clip.track.json", self.root / "short.poses.json", False, self.root / "missing.task", cameras, times_ms)
+        self.assertIsNone(bodies)
+        self.assertIn("not of the same frames", why)
 
     def test_the_overlay_has_every_frame_and_the_diagram_the_whole_court(self):
         overlay = cv2.VideoCapture(str(self.root / "overlay.mp4"))

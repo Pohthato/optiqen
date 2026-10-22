@@ -37,22 +37,15 @@ def load_people(poses_doc: dict) -> tuple[list[list[Person]], list[float]]:
     return frames, times
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Find the two players in every frame from a pose detector's people and the camera track.")
-    parser.add_argument("--poses", type=Path, required=True, help="every person a pose detector found, per frame")
-    parser.add_argument("--track", type=Path, required=True, help="track_camera.py output for the same video")
-    parser.add_argument("--out", type=Path, required=True)
-    args = parser.parse_args(argv)
-
-    poses_doc = json.loads(args.poses.read_text(encoding="utf-8"))
+def players_document(poses_doc: dict, track_doc: dict) -> dict:
+    """Each half's player per frame, as this script writes them. ValueError when the poses and the
+    camera track are not of the same frames."""
     frames, times_ms = load_people(poses_doc)
-    track_doc = json.loads(args.track.read_text(encoding="utf-8"))
     cameras = _cameras(track_doc)
     if len(cameras) != len(frames) or any(abs(f["timeMs"] - t) > 1.0 for f, t in zip(track_doc["frames"], times_ms)):
-        print("the poses and the camera track are not of the same frames", file=sys.stderr)
-        return 1
+        raise ValueError("the poses and the camera track are not of the same frames")
     tracks = track_players(frames, cameras, times_ms)
-    result = {
+    return {
         "summary": {"frames": len(frames), **{half: sum(entry is not None for entry in tracks[half]) for half in HALVES}},
         "conventions": {
             "floor": "court metres where the player stands (x across, y along)", "keypoints": "pixels and score per COCO joint",
@@ -71,6 +64,20 @@ def main(argv: list[str] | None = None) -> int:
             for half in HALVES
         },
     }
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Find the two players in every frame from a pose detector's people and the camera track.")
+    parser.add_argument("--poses", type=Path, required=True, help="every person a pose detector found, per frame")
+    parser.add_argument("--track", type=Path, required=True, help="track_camera.py output for the same video")
+    parser.add_argument("--out", type=Path, required=True)
+    args = parser.parse_args(argv)
+
+    try:
+        result = players_document(json.loads(args.poses.read_text(encoding="utf-8")), json.loads(args.track.read_text(encoding="utf-8")))
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
     args.out.write_text(json.dumps(result, allow_nan=False), encoding="utf-8")
     print(json.dumps(result["summary"]))
     return 0
