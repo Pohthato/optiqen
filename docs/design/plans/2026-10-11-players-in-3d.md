@@ -275,7 +275,7 @@ Without the pose model, or without MediaPipe, the rally is analysed as before an
 **The players (Clip 9).**
 
 - **The near player** is found in every frame. The fitted body sits on him in the overlay: both lunges, the arm reaching to the net, and both feet 12 ± 4 cm off the floor on the final jump smash. His standing reach comes out at 2.55 ± 0.02 m. Two elbow angles at contact look wrong (27° at a net shot, 65° on the smash): the arm is blurred at contact.
-- **The far player is lost to a seated person behind the far baseline** for most of the rally. In two frames the detector missed the far player, the tracker took the nearest person within reach, and that still person then stays the nearest to where the player was last seen. The synthetic scenes never put a seated official a metre behind the baseline. Until this is fixed, the far player's body facts on these clips are not to be trusted.
+- **The far player is lost to a seated person behind the far baseline** for most of the rally. In two frames the detector missed the far player, the tracker took the nearest person within reach, and that still person then stays the nearest to where the player was last seen. The synthetic scenes never put a seated official a metre behind the baseline. Fixed below: seated people are not players.
 
 **The far court from this camera.** From 1.23 m at the corner the far half is seen almost edge-on, so depth along it is barely measured. A far-court drop came out at 145 ± 28 km/h rising 4°, and Clip 9's last shot, called in by hand, came out too close to call (P(in) 0.47). Capture guidance (Phase 5) should ask for a higher camera.
 
@@ -283,6 +283,42 @@ Without the pose model, or without MediaPipe, the rally is analysed as before an
 
 **Not done yet.**
 
-- **Identity on real footage.** People seen at the same moment as the player cannot become the player when the detector misses them, and seated or still people behind the lines should not be taken for players.
+- **Identity next to seated people:** what is left is below.
 - **Clips 6, 7 and 10** with the current code, and the players on clips 6–8 and 10.
 - **Real 3D accuracy** of the bodies still needs the two-phone session in the spec.
+
+## Seated people are not players
+
+**What went wrong on Clip 9.** Four seated people put floor points inside the far half: two on chairs behind the far baseline, one further along, and a spectator on the left. From 1.23 m their legs are hidden by chairs and banners, so their floor points jump by up to 4 m between frames. In frames 5–9 the detector missed the far player. The tracker took the seated person nearest to where he was last seen, and that still person then stayed the nearest.
+
+**Why "seen together" alone would not do.** The rule first suggested was that someone detected beside the player cannot become the player when the detector misses him. One of the seated people was first detected in frame 9, during the miss, so that rule would still have taken him.
+
+**The rule (`worker/players.py`).** A player stands. A person is sitting when their nose is under 1.3 m and a low head stays at that place in the picture (within 8 px, with each frame put through its own camera) for a second in all over the clip. Sitting people are never taken for players.
+
+- **The head is measured well even when the feet are not.** From a low camera, its height barely depends on the depth. On Clip 9 the seated people's noses are at 1.06–1.25 m and move 1–2 px (standard deviation). The players' noses are at 1.2–1.7 m, and they move.
+- **A player's head is low only for a moment.** He crouches or lunges briefly and waits standing. The far player crouched to a 1.21 m nose twice on Clip 9 and was kept both times.
+- **"A second in all", not "a second at a time".** A test over a time window marked the crouching near player as sitting, because he came back to the same spot with his head low.
+
+**Clip 9.**
+
+- **The far player is followed** in frames 52, 100 and 119 (drawn). 185 of 224 frames have a far player. Before, 223 did, most of them a seated person.
+- **Three frames still take the wrong person.** In frames 152 and 158 (during the rally) and 220 (after it), the far player was undetected. Each time the tracker took a glitched detection of a seated person, its nose 15–27 px from that person's usual place.
+- **Frames that join a seated person's head to the player's legs are now left empty.** MediaPipe produced several such detections after the rally, and the old tracker took them.
+- **The near track is unchanged** in every frame.
+
+**Synthetic (`worker/test_players.py`).** Both players lunge, jump and crouch through a random rally (`simulation.people.playing`). The camera is a low corner like Clip 9's, an official sits 1 m behind the far baseline (`simulation.people.seated`, nose at 1.15 m), and the detector misses the far player in two frames running. On the three test rallies:
+
+| | Far player right | Official taken |
+| --- | --- | --- |
+| Before | 48/123, 122/257, 271/398 | 77, 137, 129 frames |
+| After | every frame | never |
+
+After the fix, the two missed frames have no far player, and the near player is right in every frame. The earlier identity test (12 scenes, three views, 30 and 60 fps, everyone around the court) still passes.
+
+**Cost.** The tracker is about 30 % slower: 2.6 s against 2.0 s for 960 frames on one core. This is small next to the pose detector.
+
+**Not done yet.**
+
+- **Glitched detections of seated people** can still be taken in frames where the far player goes undetected (3 frames of Clip 9's 224). A limit on how fast a head can rise or drop would catch two of the three.
+- **A player crouched and still** with the nose under 1.3 m for a second in all would be dropped, for example in a deep ready stance before a serve.
+- **Someone standing still behind the lines** is not caught by this rule.

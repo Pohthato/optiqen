@@ -10,11 +10,14 @@ import numpy as np
 
 from evaluation.hits_benchmark import FOCAL_PX, SIZE, VIEWS
 from geometry.camera import Camera
+from geometry.court_model import COURT_LENGTH_M
 from players import Person, floor_position, half_of, stands_there, track_players
 from simulation.camera_path import stable_handheld
-from simulation.people import bystanders, detect, skeleton
+from simulation.people import bystanders, detect, playing, seated, skeleton
 from simulation.rally import player_positions, random_rally
 from track_players import main
+
+LOW_CORNER = ((-2.2, -0.7, 1.23), (2.59, 8.0, 0.0))  # a tripod at the near-left corner, the far half seen almost edge-on
 
 
 def scene(seed: int, view: str, fps: float, miss: float = 0.05):
@@ -47,6 +50,34 @@ def scene(seed: int, view: str, fps: float, miss: float = 0.05):
         frames.append(people)
         truth.append(whose)
     return frames, truth, cameras, [i * 1000.0 / fps for i in range(count)]
+
+
+def official_scene(seed: int, fps: float = 30.0):
+    """Both players lunging, jumping and crouching through a random rally, seen from a low corner,
+    with an official seated a metre behind the far baseline. The detector misses the far player
+    in two frames running. As scene(), plus those two frames."""
+    rng = np.random.default_rng(seed)
+    rally = random_rally(rng)
+    count = int(rally.end_time * fps)
+    cameras = stable_handheld(Camera.look_at(*LOW_CORNER, FOCAL_PX, SIZE), count, fps, seed=seed)
+    official = seated((rng.uniform(1.5, 3.7), COURT_LENGTH_M + 1.0), -np.pi / 2)
+    first = int(rng.integers(count // 4, count // 2))
+    missed = {first, first + 1}
+    frames, truth = [], []
+    for index, camera in enumerate(cameras):
+        time = index / fps
+        bodies = [("near", playing(rally, "near", time)), ("far", playing(rally, "far", time, stature=1.8)), ("official", official)]
+        seen = []
+        for who, joints in bodies:
+            if who == "far" and index in missed:
+                continue
+            found = detect(joints, camera, SIZE, rng)
+            if found is not None:
+                seen.append((who, Person(found.joints, found.scores, found.box)))
+        order = rng.permutation(len(seen))
+        frames.append([seen[k][1] for k in order])
+        truth.append({seen[k][0]: n for n, k in enumerate(order)})
+    return frames, truth, cameras, [i * 1000.0 / fps for i in range(count)], missed
 
 
 class FloorTests(unittest.TestCase):
@@ -92,6 +123,20 @@ class IdentityTests(unittest.TestCase):
                     right += chosen is not None and chosen.detection == whose[half]
         self.assertGreaterEqual(right / total, 0.99)
         self.assertEqual(strangers, 0)
+
+    def test_a_seated_official_is_not_taken_for_a_player_the_detector_missed(self):
+        # From a low corner the far half is seen almost edge-on: an official seated a metre behind
+        # the far baseline is within reach of where the far player was last seen.
+        for seed in (11, 12, 13):
+            frames, truth, cameras, times, missed = official_scene(seed)
+            tracks = track_players(frames, cameras, times)
+            for index in sorted(missed):
+                self.assertIsNone(tracks["far"][index])
+            for half in ("near", "far"):
+                chosen = [(entry, whose) for entry, whose in zip(tracks[half], truth) if half in whose]
+                right = sum(entry is not None and entry.detection == whose[half] for entry, whose in chosen)
+                self.assertGreaterEqual(right / len(chosen), 0.99)
+                self.assertFalse(any(entry is not None and entry.detection == whose.get("official") for entry, whose in zip(tracks[half], truth)))
 
     def test_without_a_camera_nobody_is_placed(self):
         frames, _, cameras, times = scene(5, "behind", 30.0)

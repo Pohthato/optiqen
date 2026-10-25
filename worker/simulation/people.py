@@ -84,6 +84,7 @@ REACT_S = 0.15  # after the opponent's hit, before they set off for the next sho
 SPLIT_HOP_M = 0.05  # a split step: a hop this high, landing near the opponent's hit,
 SPLIT_DIP_M = 0.07  # then the hips this much lower as the legs take the landing
 SPLIT_HOP_S, SPLIT_DIP_S = 0.2, 0.3
+SEAT_M = 0.45  # a chair's seat above the floor
 
 
 def _bend(root: np.ndarray, target: np.ndarray, upper: float, lower: float, hint: np.ndarray) -> np.ndarray:
@@ -133,6 +134,17 @@ def body(
     eyes = [nose - 0.03 * stature * right + 0.01 * stature * up - 0.01 * stature * forward, nose + 0.03 * stature * right + 0.01 * stature * up - 0.01 * stature * forward]
     ears = [nose - 0.06 * stature * right - 0.05 * stature * forward, nose + 0.06 * stature * right - 0.05 * stature * forward]
     return np.array([nose, *eyes, *ears, *shoulders, *elbows, *wrists, *hips, *knees, *ankles])
+
+
+def seated(position: tuple[float, float], facing: float, stature: float = 1.7) -> np.ndarray:
+    """A body sitting on a chair, its 17 joints in court metres: the hips on the seat, the thighs
+    level, the feet on the floor in front at `position`, the hands in the lap."""
+    forward = np.array([np.cos(facing), np.sin(facing), 0.0])
+    right = np.array([forward[1], -forward[0], 0.0])
+    feet = np.array([*position, 0.0])
+    pelvis = feet - SEGMENTS["thigh"] * stature * forward + np.array([0.0, 0.0, SEAT_M])
+    hands = [pelvis + 0.25 * forward + side * 0.12 * right + np.array([0.0, 0.0, 0.08]) for side in (-1, 1)]
+    return body(stature, pelvis, facing, (feet - 0.1 * right, feet + 0.1 * right), (hands[0], hands[1]))
 
 
 def _sign(side: str) -> float:
