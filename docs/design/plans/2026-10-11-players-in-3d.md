@@ -261,16 +261,23 @@ Without the pose model, or without MediaPipe, the rally is analysed as before an
 
 **The court.** Court points were placed by eye on one frame of Clip 6. The same tripod filmed clips 1–9, so each of them started from that camera and was refined on its own painted lines. Every clip's court was checked by eye on the drawing: every painted line lies on the model. Clips 6–9 were tracked through every frame: none lost, 0.46–0.47 px rms.
 
-**Hits against the labels** (no sound on this laptop; shuttle in the default overlapping mode; a hit counts when within 250 ms):
+**Hits against the labels** (code at a9140aa; no sound, as ffmpeg is not installed on this laptop; shuttle in the default overlapping mode; a hit counts when within 250 ms):
 
 | Clip | Labelled | Found | Matched | Extra | Timing error, median / max | Hitter right |
 | --- | --- | --- | --- | --- | --- | --- |
 | 9 | 8 | 9 | 8 | 1 | 20 / 37 ms | 8 of 8 |
 | 8 | 14 | 14 | 14 | 0 | 23 / 93 ms | 13 of 13 (one hit had no shot) |
-| 10 (earlier run, 2026-10-11 code) | 20 | 21 | 19 | 2 | 37 / 190 ms | 15 of 16 |
+| 10 | 20 | 19 | 18 | 1 | 26 / 207 ms | 14 of 15 (three hits had no shot) |
+| 7 | 16 | 18 | 16 | 2 | 19 / 38 ms | 16 of 16 |
+| 6 | 16 | 20 | 16 | 4 | 31 / 73 ms | 15 of 15 (one hit had no shot) |
+| All | 74 | 80 | 72 | 8 | 19–31 ms (medians) | 66 of 67 |
 
-- **Against simulation:** silent clips at 30 fps found 95 % of the hits the camera saw, with precision 1.0 (held-out, Phase 3). Real recall is as good. The timing error is mostly the labels' own: a frame is 33 ms, and a hit was timed by eye.
-- **Clip 9's extra hit** is the detector holding the shuttle still for two frames mid-lift, which split one flight in two.
+- **Against simulation:** silent clips at 30 fps found 95 % of the hits the camera saw, with precision 1.0 (held-out, Phase 3). Real recall is as good (97 %), and real precision is lower (90 %). The timing error is mostly the labels' own: a frame is 33 ms, and a hit was timed by eye.
+- **The two missed hits** are both cross-court clears by the near player in Clip 10 (5.95 s and 10.65 s).
+- **Clip 10's wrong hitter is a pairing at the edge of the window.** The near player's smash at 20.81 s was not found. A hit found at 21.02 s, given to the far player and not in the labels, was paired with it 207 ms away. With a 200 ms window this is one more miss and one more extra, and Clip 10's worst timing error is 77 ms.
+- **Half the extra hits come after the rally is over.** On clips 6 and 7, two each follow the last hit (into the net), while the shuttle falls.
+- **The other half split one flight in two.** Each comes 0.17–0.35 s after a real hit (Clip 9 at 2.93 s, Clip 10 at 8.05 s, Clip 6 at 3.52 s and 12.80 s). On Clip 9 the detector held the shuttle still for two frames mid-lift.
+- **Sound was not used.** Each extra hit rests on the shuttle's flight alone; the worker image has ffmpeg, so a run there would also check each hit against its sound.
 
 **The players (Clip 9).**
 
@@ -284,7 +291,6 @@ Without the pose model, or without MediaPipe, the rally is analysed as before an
 **Not done yet.**
 
 - **Identity next to seated people:** what is left is below.
-- **Clips 6, 7 and 10** with the current code, and the players on clips 6–8 and 10.
 - **Real 3D accuracy** of the bodies still needs the two-phone session in the spec.
 
 ## Seated people are not players
@@ -305,6 +311,20 @@ Without the pose model, or without MediaPipe, the rally is analysed as before an
 - **Three frames still take the wrong person.** In frames 152 and 158 (during the rally) and 220 (after it), the far player was undetected. Each time the tracker took a glitched detection of a seated person, its nose 15–27 px from that person's usual place.
 - **Frames that join a seated person's head to the player's legs are now left empty.** MediaPipe produced several such detections after the rally, and the old tracker took them.
 - **The near track is unchanged** in every frame.
+
+**All five labelled clips** (`--poses`, code at a9140aa):
+
+| Clip | Frames | Near player | Far player | Shots | Hitter's body | Far player at the hit |
+| --- | --- | --- | --- | --- | --- | --- |
+| 9 | 224 | 224 | 185 | 8 | 7 | 6 |
+| 8 | 508 | 482 | 444 | 13 | 11 | 11 |
+| 10 | 766 | 733 | 637 | 16 | 12 | 13 |
+| 7 | 531 | 493 | 466 | 16 | 15 | 14 |
+| 6 | 491 | 485 | 416 | 15 | 11 | 10 |
+
+- **The far skeleton is on the far player** in every drawn frame checked (four per clip, at 10, 40, 70 and 95 % of it). On clips 7–10 one of the four has no far skeleton: the far player was undetected, and no one else was taken.
+- **At every shot where the far player was found** (54 of 68), they stand on the far half, 7.5–13.7 m from the near baseline. The far baseline is at 13.4 m, and the officials sit about a metre behind it.
+- **Standing reach is not yet measured.** It comes out at 2.54–2.56 m for the near player on every clip and 2.58–2.60 m for the far player, each ± 0.019 m. The bones start from a 1.75 m stature (2.62 m reach) and are refitted twice from the clip, and they end only 2–8 cm under that start. The ± 0.019 m is the 1 % allowed for the bone lengths, not a spread between players.
 
 **Synthetic (`worker/test_players.py`).** Both players lunge, jump and crouch through a random rally (`simulation.people.playing`). The camera is a low corner like Clip 9's, an official sits 1 m behind the far baseline (`simulation.people.seated`, nose at 1.15 m), and the detector misses the far player in two frames running. On the three test rallies:
 
