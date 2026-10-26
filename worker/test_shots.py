@@ -78,6 +78,16 @@ class FlightFactTests(unittest.TestCase):
         self.assertGreater(unsure.landing.covariance[1][1], 1e-4)
         self.assertGreater(unsure.speed_m_s.sigma, 0.01)
 
+    def test_the_launch_carries_the_contact_and_the_velocity_with_their_uncertainty(self):
+        p0, v0 = np.array([2.0, 2.5, 2.6]), np.array([0.5, 18.0, 6.0])
+        facts = flight_facts(exact_fit(p0, v0, sigma=0.05), hit_ms=0.0, hitter="near", court="singles", ends_ms=900.0)
+        np.testing.assert_allclose(facts.velocity, v0, atol=1e-6)
+        covariance = np.asarray(facts.launch_covariance)
+        np.testing.assert_allclose(covariance, covariance.T, atol=1e-12)
+        np.testing.assert_allclose(np.sqrt(np.diag(covariance)[:3]), facts.contact_sigma, rtol=1e-6)
+        along = v0 / np.linalg.norm(v0)
+        self.assertAlmostEqual(float(np.sqrt(along @ covariance[3:, 3:] @ along)), facts.speed_m_s.sigma, delta=1e-3)
+
     def test_a_shot_that_falls_on_its_own_side_did_not_cross_the_net(self):
         p0, v0 = np.array([2.0, 5.0, 1.0]), np.array([0.0, 2.0, 1.0])  # dies before the net
         facts = flight_facts(exact_fit(p0, v0), hit_ms=0.0, hitter="near", court="singles", ends_ms=None)
@@ -139,6 +149,12 @@ class RallyTests(unittest.TestCase):
         self.assertEqual(shots[-1].landing.call, "in")
         for shot, contact in zip(shots, RALLY.contacts):
             self.assertLess(float(np.linalg.norm(np.asarray(shot.contact) - contact.position)), 0.5)
+            # The launch's uncertainty takes in the drag and the hit time as the separate facts do.
+            covariance = np.asarray(shot.launch_covariance)
+            self.assertGreater(np.linalg.eigvalsh(covariance).min(), -1e-9)
+            np.testing.assert_allclose(np.sqrt(np.diag(covariance)[:3]), shot.contact_sigma, rtol=0.1)
+            along = np.asarray(shot.velocity) / np.linalg.norm(shot.velocity)
+            self.assertAlmostEqual(float(np.sqrt(along @ covariance[3:, 3:] @ along)) / shot.speed_m_s.sigma, 1.0, delta=0.25)
         # A drag known from a whole session is used as given, and makes the facts surer.
         known = rally_shots(analysis, seen(clip), times(len(clip.cameras)), clip.cameras, court="singles", terminal_velocity=(6.7, 0.02))
         self.assertEqual((known[0].terminal_velocity.value, known[0].terminal_velocity.sigma), (6.7, 0.02))

@@ -100,6 +100,10 @@ class ShotFacts:
     path: tuple[tuple[float, float, float, float], ...] = ()  # (time ms, x, y, z) from the hit to its end
     terminal_velocity: Estimate | None = None  # the shuttle's drag these facts were worked out with
     terminal_flights: int | None = None  # how many of the rally's flights measured it (None: given)
+    velocity: tuple[float, float, float] = (0.0, 0.0, 0.0)  # leaving the racket, m/s
+    # Of the contact and the velocity together (6 x 6): the fit's, the calibration's, the drag's
+    # and the hit time's errors, so draws from it are whole flights that agree with each other.
+    launch_covariance: tuple[tuple[float, ...], ...] = ()
 
 
 def net_height_m(x: float) -> float:
@@ -221,6 +225,7 @@ def _facts(params: np.ndarray, fit: FlightFit, hit_ms: float, ends_ms: float | N
         xyz = path[:, b]
         row = {
             "contact": p[b],
+            "velocity": v[b],
             "speed": float(np.linalg.norm(v[b])),
             "elevation": float(np.degrees(np.arctan2(v[b, 2], np.hypot(v[b, 0], v[b, 1])))),
             "landing": None,
@@ -265,7 +270,7 @@ def flight_facts(
     nominal = rows[0]
 
     def vector(row) -> np.ndarray:
-        values = [*row["contact"], row["speed"], row["elevation"], row["apex"]]
+        values = [*row["contact"], row["speed"], row["elevation"], row["apex"], *row["velocity"]]
         if nominal["net"] is not None:
             values += [row["net"][1], row["net"][2]] if row["net"] is not None else [np.nan, np.nan]
         if nominal["landing"] is not None:
@@ -291,7 +296,12 @@ def flight_facts(
 
     net = None
     if nominal["net"] is not None:
-        net = NetCrossing(nominal["net"][0], estimate(6, CALIBRATION_SIGMA_M), estimate(7, CALIBRATION_SIGMA_M))
+        net = NetCrossing(nominal["net"][0], estimate(9, CALIBRATION_SIGMA_M), estimate(10, CALIBRATION_SIGMA_M))
+    launch = [0, 1, 2, 6, 7, 8]
+    velocity = centre[6:9]
+    launch_covariance = covariance[np.ix_(launch, launch)]
+    launch_covariance[:3, :3] += np.eye(3) * CALIBRATION_SIGMA_M**2
+    launch_covariance[3:, 3:] += CALIBRATION_SCALE**2 * np.outer(velocity, velocity)
     landing = None
     flight_ms = (ends_ms - hit_ms) if ends_ms is not None else MAX_FLIGHT_S * 1000.0
     if nominal["landing"] is not None:
@@ -303,8 +313,13 @@ def flight_facts(
         hit_ms, hitter, serve, tuple(float(c) for c in centre[:3]), tuple(float(s) for s in np.hypot(sigma[:3], CALIBRATION_SIGMA_M)),
         estimate(3, CALIBRATION_SCALE * centre[3]), estimate(4), estimate(5, CALIBRATION_SIGMA_M), net, flight_ms, landing,
         tuple(tuple(round(float(v), 4) for v in point) for point in nominal["path"]),
+        velocity=tuple(float(c) for c in velocity), launch_covariance=_rows(launch_covariance),
     )
     return _judged(facts, court)
+
+
+def _rows(matrix: np.ndarray) -> tuple[tuple[float, ...], ...]:
+    return tuple(tuple(float(c) for c in row) for row in matrix)
 
 
 def _one_flight(pieces, times: np.ndarray, track, cameras) -> tuple[FlightFit, list[int], int]:
@@ -455,8 +470,10 @@ def _with_drag(facts: ShotFacts, shifted: ShotFacts, court: str) -> ShotFacts:
         covariance = np.asarray(landing.covariance) + np.outer(change, change)
         landing = replace(landing, covariance=tuple(tuple(float(c) for c in row) for row in covariance))
     contact_change = np.asarray(shifted.contact) - np.asarray(facts.contact)
+    launch_change = np.concatenate([contact_change, np.subtract(shifted.velocity, facts.velocity)])
     widened_facts = replace(
         facts,
+        launch_covariance=_rows(np.asarray(facts.launch_covariance) + np.outer(launch_change, launch_change)),
         contact_sigma=tuple(float(s) for s in np.hypot(facts.contact_sigma, contact_change)),
         speed_m_s=widened(facts.speed_m_s, shifted.speed_m_s),
         elevation_deg=widened(facts.elevation_deg, shifted.elevation_deg),
@@ -480,8 +497,12 @@ def _with_timing(facts: ShotFacts, fit: FlightFit, timing_sigma: float, court: s
         velocity = np.abs(np.subtract(b, a)) / max((t1 - t0) / 1000.0, 1e-6)
     else:
         velocity = np.full(3, speed)
+    # The whole launch moves together: the contact along the flight, the velocity by gravity and drag.
+    v = np.asarray(facts.velocity)
+    move = np.concatenate([v, -GRAVITY / fit.terminal_velocity**2 * np.linalg.norm(v) * v - [0.0, 0.0, GRAVITY]]) * seconds
     return _judged(replace(
         facts,
+        launch_covariance=_rows(np.asarray(facts.launch_covariance) + np.outer(move, move)),
         contact_sigma=tuple(float(s) for s in np.hypot(facts.contact_sigma, velocity * seconds)),
         speed_m_s=Estimate(speed, float(np.hypot(facts.speed_m_s.sigma, deceleration * seconds))),
     ), court)
