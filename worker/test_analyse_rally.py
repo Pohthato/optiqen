@@ -73,8 +73,11 @@ class AnalyseRallyTests(unittest.TestCase):
         self.assertGreaterEqual(len(shots), len(truth) - 1)
         self.assertTrue(shots[0]["serve"])
         for shot in shots:
-            self.assertTrue({"hitMs", "hitter", "contact", "speedMS", "elevationDeg", "apexM", "net", "flightMs", "landing", "path"} <= set(shot))
+            self.assertTrue({"hitMs", "hitter", "contact", "speedMS", "elevationDeg", "apexM", "net", "flightMs", "landing", "path", "name"} <= set(shot))
             self.assertGreater(len(shot["path"]), 2)
+            self.assertAlmostEqual(sum(shot["name"]["p"].values()), 1.0, delta=0.01)
+        self.assertEqual(shots[0]["name"], {"call": "serve", "p": {"serve": 1.0}})
+        self.assertEqual(sum(self.result["summary"]["names"].values()), len(shots))
         last = shots[-1]["landing"]
         self.assertIn(last["call"], ("in", "out", "too close to call"))
         self.assertLess(float(np.hypot(*(np.asarray(last["point"]) - np.asarray(SIM.clip.rally.landing)))), 0.5)

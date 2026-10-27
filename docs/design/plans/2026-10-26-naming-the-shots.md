@@ -85,6 +85,38 @@ The model learnt from 14,762 shots of 3,000 rallies. Its hold was chosen on 600 
 - **The sureness means what it says above 0.8.** Shots at 0.8 to 0.9 (mean 0.85) were right 95 % and 93 % of the time. Shots at 0.9 and more (mean 0.99) were right 100 % and 98 %. Under 0.8 the model is less steady: at 0.5 to 0.65 (mean 0.59) it was right 45 % and 65 % of the time. Those shots get two names.
 - **By view** (over the draws, 44 to 97 shots each): corner at 60 fps is best (0.92 in both worlds), side at 60 fps worst (0.69, 0.54–0.82; stressed 0.64, 0.54–0.82). One or two net or drive shots move a view's macro-F1 a long way, so the views differ less than these numbers.
 
+### 5d: your shots
+
+The five labelled clips through the one command, scored against your labels with `evaluation.hand_labels`. The hits are the same as in the players plan. Serves are named by the rally and scored with the rest; the eight families alone are beside them. The intervals (95 %) come from resampling shots. One rally's shots are not independent, so the intervals are too narrow, if anything.
+
+| Clips | Found shots right | Macro-F1 | Eight families only | End to end |
+| --- | --- | --- | --- | --- |
+| All five | 31 of 66 | 0.51 (0.41–0.57) | 0.46 (0.37–0.53) | 0.47 (0.37–0.55) |
+| Corner tripod, clips 6–9 | 23 of 51 | 0.53 (0.40–0.60) | 0.47 (0.33–0.55) | 0.52 (0.40–0.59) |
+| Clip 10 | 8 of 15 | 0.34 (0.22–0.55) | 0.38 (0.25–0.60) | 0.30 (0.16–0.49) |
+
+The gate proposed above (0.70 on found shots) is not met.
+
+| Your label | Found | Named |
+| --- | --- | --- |
+| clear | 5 | clear 5 |
+| lift | 10 | lift 10 |
+| smash | 6 | smash 5, block 1 |
+| serve | 5 | serve 4, push 1 |
+| drive | 4 | drive 3, block 1 |
+| drop | 7 | drop 3, drive 3, smash 1 |
+| push | 8 | drive 4, lift 3, push 1 |
+| net | 14 | push 8, block 5, drop 1 |
+| block | 7 | push 5, drive 1, drop 1 |
+
+A "push or lift" shot is counted under the name given when that name is either, so both of them are in the lift row.
+
+- **The long shots are right; the short game is not.** Clears, lifts and smashes: 20 of 21. Net shots, blocks and pushes: 1 of 29.
+- **The simulator's short game is not the one in your clips.** Most of your net shots (11 of 14) were measured leaving the racket 1.4 to 2.6 m from the net, 0.8 to 1.4 m high, at 7 to 14 m/s and 21 to 35° up. They were played again 1.0 to 2.5 m past the net, 0.3 to 1.3 m high. The simulator's net shots end 0.4 to 1.6 m past the net, 0.2 to 0.8 m high. Its pushes end 2.5 to 4.5 m past, 0.8 to 1.6 m high. Your net shots fall between the two, nearer push. All but one of your pushes went further, 3.8 to 7.7 m past the net, so they read as drives and lifts. Your blocks read as the simulator's pushes.
+- **The model is sure when it should not be.** On your shots, a name given alone was right 22 of 37 times, while its stated probability averaged 0.96. When two names were given, yours was among them 10 of 24 times. The probabilities carry the measurement's uncertainty, but not the distance between the simulator's families and real play.
+- **One serve was not called a serve.** The hit finder found Clip 10's serve from its flight, not as a serve, so the model named it ("push or block").
+- **What would close the gap** is shots named in real play to learn from. The 66 here could be used now, each clip named by a model learnt without it (simulation plus the other four clips). More labelled rallies would do it better. Either way the names on the simulator's families alone should not be shown as sure.
+
 ## Decisions
 
 - **The model learns from simulation and is tested on your shots.** The 74 real shots are too few to learn from and test on at once. Learning from them would also leave nothing honest to test on. The real score therefore measures how far the simulated families are from real play. If it is low, the next step is more labelled real rallies, which the labeller already records.

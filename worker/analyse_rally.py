@@ -1,7 +1,7 @@
 # worker/analyse_rally.py
 """A rally video understood in one command: the camera of every frame, the shuttle in every frame,
 the hits, each flight in 3D, the two players' bodies in 3D, and every shot's facts with the
-hitter's body at the hit.
+hitter's body at the hit and the shot's name (shot_names.py).
 
     python analyse_rally.py clip.mp4 --golden clip.json --out clip.analysis.json
         [--court singles|doubles] [--overlay clip.analysis.mp4] [--diagram clip.court.png]
@@ -12,11 +12,11 @@ hitter's body at the hit.
 existing --track, --shuttle or --poses file is used as it is; otherwise the camera track, the
 shuttle detections and everyone's poses are computed and written next to --out. Without the pose
 model the rally is analysed without the players, and the summary says why. The overlay draws
-each fitted flight into the video with its hit, the players' fitted bodies and, for the rally's
-last shot, where it landed and the call; the diagram is the court from above with every shot's
-path, where both players stood at each hit, and the landing's uncertainty. The shuttle's drag
-(terminal velocity) is measured from the rally's own long flights unless given: measured once
-over a whole session's rallies it is surer, and close line calls sharpen with it.
+each fitted flight into the video with its hit and name, the players' fitted bodies and, for the
+rally's last shot, where it landed and the call; the diagram is the court from above with every
+shot's path and name, where both players stood at each hit, and the landing's uncertainty. The
+shuttle's drag (terminal velocity) is measured from the rally's own long flights unless given:
+measured once over a whole session's rallies it is surer, and close line calls sharpen with it.
 """
 from __future__ import annotations
 
@@ -39,6 +39,7 @@ from geometry.skeleton import BONES, Body
 from hits import find_hits
 from lift_players import fit_players
 from players import HALVES
+from shot_names import Model, ShotName, name_shot
 from shots import ShotFacts, rally_shots
 from track_players import players_document
 from video import VideoFile
@@ -160,9 +161,10 @@ def _draw_body(frame: np.ndarray, camera: Camera, body: Body, colour: tuple[int,
             cv2.line(frame, tuple(int(v) for v in pixels[a]), tuple(int(v) for v in pixels[b]), colour, 2, cv2.LINE_AA)
 
 
-def write_overlay(video: VideoFile, cameras, shots: list[ShotFacts], path: Path, bodies: Bodies | None = None) -> None:
+def write_overlay(video: VideoFile, cameras, shots: list[ShotFacts], path: Path, bodies: Bodies | None = None, names: list[ShotName] | None = None) -> None:
     """The video with the players' fitted bodies, each shot's fitted flight drawn behind the
-    shuttle, its hit marked, and the landing and call once the rally's last shot comes down."""
+    shuttle, its hit marked with its name and speed, and the landing and call once the rally's
+    last shot comes down."""
     writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), video.fps or 30.0, video.size)
     if not writer.isOpened():
         raise OSError(f"cannot write {path}")
@@ -184,7 +186,8 @@ def write_overlay(video: VideoFile, cameras, shots: list[ShotFacts], path: Path,
                 if time_ms - shot.hit_ms <= 400.0 and len(at):
                     x, y = (int(v) for v in at[0])
                     cv2.circle(frame, (x, y), 10, HITTER_COLOURS[shot.hitter], 2, cv2.LINE_AA)
-                    label = f"{number} {'serve' if shot.serve else ''} {shot.speed_m_s.value * 3.6:.0f} km/h".replace("  ", " ")
+                    name = names[number - 1].call if names else ("serve" if shot.serve else "")
+                    label = f"{number} {name} {shot.speed_m_s.value * 3.6:.0f} km/h".replace("  ", " ")
                     cv2.putText(frame, label, (x + 12, y - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
                 landed = _pixels(camera, [[*shot.landing.point, 0.0]]) if shot.landing is not None else []
                 if len(landed) and time_ms >= shot.landing.time_ms:
@@ -196,7 +199,7 @@ def write_overlay(video: VideoFile, cameras, shots: list[ShotFacts], path: Path,
     writer.release()
 
 
-def draw_diagram(shots: list[ShotFacts], court: str, stood: list[Stood] | None = None) -> np.ndarray:
+def draw_diagram(shots: list[ShotFacts], court: str, stood: list[Stood] | None = None, names: list[ShotName] | None = None) -> np.ndarray:
     """The court from above (near baseline at the bottom): each shot's path in its hitter's
     colour, numbered at its contact, where both players stood at the hit (a ring with its 95 %
     region; the hitter's joined to the contact), and the landing with its 95 % region and the
@@ -234,7 +237,10 @@ def draw_diagram(shots: list[ShotFacts], court: str, stood: list[Stood] | None =
             if half == shot.hitter:
                 cv2.line(image, centre, at, colour, 1, cv2.LINE_AA)
         cv2.circle(image, at, 7, colour, -1, cv2.LINE_AA)
-        cv2.putText(image, str(number), (at[0] + 9, at[1] - 9), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+        label = f"{number} {names[number - 1].call}" if names else str(number)
+        (text_width, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+        x = at[0] + 9 if at[0] + 9 + text_width <= width else at[0] - 9 - text_width  # kept inside the image
+        cv2.putText(image, label, (x, at[1] - 9), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
         if shot.landing is not None:
             colour = CALL_COLOURS[shot.landing.call]
             centre = px(*shot.landing.point)
@@ -299,12 +305,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"no players: {players_error}", file=sys.stderr)
     facts = rally_body_facts(shots, bodies, times_ms) if bodies is not None else [None] * len(shots)
     stood = [{half: standing_at(bodies[half], times_ms, shot.hit_ms) for half in HALVES} if bodies is not None else None for shot in shots]
+    model, rng = Model.load(), np.random.default_rng(0)
+    names = [name_shot(shot, model, rng) for shot in shots]
 
     result = hits_document(args.video, shuttle_doc, analysis, onsets, sound_error, times_ms)
     calls = [shot.landing.call for shot in shots if shot.landing is not None]
     result["court"] = args.court
     result["summary"]["shots"] = len(shots)
     result["summary"]["calls"] = {call: calls.count(call) for call in sorted(set(calls))}
+    called = [name.call for name in names]
+    result["summary"]["names"] = {call: called.count(call) for call in sorted(set(called))}
     result["summary"]["terminalVelocity"] = None
     if shots:
         flights = shots[0].terminal_flights
@@ -319,19 +329,19 @@ def main(argv: list[str] | None = None) -> int:
     }
     result["summary"]["playersError"] = players_error
     result["shots"] = [
-        {**shot_entry(number, shot), "body": body_entry(fact), "players": None if at is None else stood_entry(at)}
-        for number, (shot, fact, at) in enumerate(zip(shots, facts, stood), start=1)
+        {**shot_entry(number, shot), "name": {"call": name.call, "p": name.p}, "body": body_entry(fact), "players": None if at is None else stood_entry(at)}
+        for number, (shot, name, fact, at) in enumerate(zip(shots, names, facts, stood), start=1)
     ]
     result["sources"] = {"track": Path(track_path).name, "shuttle": Path(shuttle_path).name, "poses": Path(poses_path).name if bodies is not None else None}
     args.out.write_text(json.dumps(_clean(result), allow_nan=False), encoding="utf-8")
     if args.diagram:
-        cv2.imwrite(str(args.diagram), draw_diagram(shots, args.court, stood if bodies is not None else None))
+        cv2.imwrite(str(args.diagram), draw_diagram(shots, args.court, stood if bodies is not None else None, names))
     if args.overlay:
         video = VideoFile(args.video)
         if not video.opened:
             return _fail(f"cannot read {args.video} to draw the overlay")
         try:
-            write_overlay(video, cameras, shots, args.overlay, bodies)
+            write_overlay(video, cameras, shots, args.overlay, bodies, names)
         except OSError as error:
             return _fail(str(error))
     print(json.dumps(result["summary"]))
