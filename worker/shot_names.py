@@ -11,18 +11,33 @@ was played again, or on the floor.
 The facts come from the shuttle's state leaving the racket, flown under gravity and drag. A
 measured shot's state is uncertain (`shots.ShotFacts.launch_covariance`), so its facts are taken
 over many draws of it, each a whole flight.
+
+The model (`shot_names.json`, written by `evaluation.shot_names_benchmark learn`) is a
+multinomial logistic regression on the facts and their pairwise products, learnt from the true
+facts of simulated shots. A shot's chance of each name is the model's averaged over the draws,
+so it is as unsure as the measurement. The likeliest name is given alone when it is at least
+`SURE`; otherwise the two likeliest are.
 """
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
 import numpy as np
+from scipy.optimize import minimize
+from scipy.special import logsumexp, softmax
 
 from geometry.court_model import NET_Y_M
 from geometry.shuttle_physics import FEATHER_TERMINAL_VELOCITY
 from shots import MAX_FLIGHT_S, PATH_STEP_S, ShotFacts, _integrate
 
 FACTS = ("contactHeightM", "contactFromNetM", "speedMS", "elevationDeg", "apexAboveM", "endPastNetM", "endHeightM", "flightS")
+NAMES = ("clear", "drop", "smash", "drive", "push", "lift", "net", "block")
 DRAWS = 200
 CHUNK = 2000  # launches flown at once (each keeps its whole path in memory)
+SURE = 0.8
+MODEL_PATH = Path(__file__).with_name("shot_names.json")
 
 
 def facts(contact, velocity, near, duration_s, terminal_velocity) -> np.ndarray:
@@ -99,3 +114,75 @@ def measured_facts(shot: ShotFacts, rng: np.random.Generator, draws: int = DRAWS
     drag = shot.terminal_velocity
     drags = FEATHER_TERMINAL_VELOCITY if drag is None else np.maximum(rng.normal(drag.value, drag.sigma, draws), 1.0)
     return facts(launches[:, :3], launches[:, 3:], shot.hitter == "near", _duration_s(shot), drags)
+
+
+@dataclass(frozen=True)
+class ShotName:
+    call: str  # a name, or "drop or smash" when neither is sure enough alone
+    p: dict[str, float]  # each name's chance
+
+
+@dataclass(frozen=True)
+class Model:
+    """Each fact is held to the range the model learnt from: past it the products of facts run
+    wild, so a smash faster than any simulated one reads as the fastest simulated."""
+
+    low: np.ndarray
+    high: np.ndarray
+    mean: np.ndarray
+    scale: np.ndarray
+    weights: np.ndarray  # (terms, names)
+
+    def terms(self, rows: np.ndarray) -> np.ndarray:
+        z = (np.clip(np.atleast_2d(rows), self.low, self.high) - self.mean) / self.scale
+        i, j = np.triu_indices(z.shape[1])
+        return np.column_stack([np.ones(len(z)), z, z[:, i] * z[:, j]])
+
+    def probabilities(self, rows: np.ndarray) -> np.ndarray:
+        return softmax(self.terms(rows) @ self.weights, axis=1)
+
+    def save(self, path: Path) -> None:
+        fields = {key: np.round(getattr(self, key), 6).tolist() for key in ("low", "high", "mean", "scale", "weights")}
+        path.write_text(json.dumps({"facts": FACTS, "names": NAMES, **fields}, indent=1) + "\n", encoding="utf-8")
+
+    @staticmethod
+    def load(path: Path = MODEL_PATH) -> "Model":
+        stored = json.loads(path.read_text(encoding="utf-8"))
+        if tuple(stored["facts"]) != FACTS or tuple(stored["names"]) != NAMES:
+            raise ValueError(f"{path} was learnt on other facts or names")
+        return Model(*(np.array(stored[key]) for key in ("low", "high", "mean", "scale", "weights")))
+
+
+def learn(names: list[str], rows: np.ndarray, l2: float) -> Model:
+    """The model that best predicts these names from these facts, every weight but the
+    intercepts held towards zero by `l2`."""
+    base = Model(rows.min(axis=0), rows.max(axis=0), rows.mean(axis=0), rows.std(axis=0), np.zeros(0))
+    terms = base.terms(rows)
+    truth = np.eye(len(NAMES))[[NAMES.index(name) for name in names]]
+    shape = (terms.shape[1], len(NAMES))
+
+    def loss(flat: np.ndarray) -> tuple[float, np.ndarray]:
+        weights = flat.reshape(shape)
+        logits = terms @ weights
+        log_p = logits - logsumexp(logits, axis=1, keepdims=True)
+        held = weights.copy()
+        held[0] = 0.0
+        value = -(truth * log_p).sum() / len(terms) + 0.5 * l2 * (held**2).sum()
+        gradient = terms.T @ (np.exp(log_p) - truth) / len(terms) + l2 * held
+        return value, gradient.ravel()
+
+    fit = minimize(loss, np.zeros(shape).ravel(), jac=True, method="L-BFGS-B", options={"maxiter": 5000})
+    return Model(base.low, base.high, base.mean, base.scale, fit.x.reshape(shape))
+
+
+def call_of(p: np.ndarray) -> str:
+    first, second = np.argsort(p)[::-1][:2]
+    return NAMES[first] if p[first] >= SURE else f"{NAMES[first]} or {NAMES[second]}"
+
+
+def name_shot(shot: ShotFacts, model: Model, rng: np.random.Generator) -> ShotName:
+    """A measured shot's name. A serve is named by the rally, not the model."""
+    if shot.serve:
+        return ShotName("serve", {"serve": 1.0})
+    p = model.probabilities(measured_facts(shot, rng)).mean(axis=0)
+    return ShotName(call_of(p), {name: round(float(chance), 3) for name, chance in zip(NAMES, p)})

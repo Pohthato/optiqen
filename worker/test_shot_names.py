@@ -1,5 +1,8 @@
 # worker/test_shot_names.py
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
@@ -7,7 +10,7 @@ from evaluation.hits_benchmark import Scenario
 from evaluation.shot_names_benchmark import TEST_FIRST_SEED, learning_set, measure_scenario
 from geometry.court_model import NET_Y_M
 from geometry.shuttle_physics import simulate
-from shot_names import DRAWS, FACTS, facts, measured_facts, nominal_facts, true_facts
+from shot_names import DRAWS, FACTS, NAMES, SURE, Model, call_of, facts, learn, measured_facts, name_shot, nominal_facts, true_facts
 from shots import flight_facts
 from simulation.rally import SHOT_TYPES, canned_rally
 from test_shots import exact_fit
@@ -64,6 +67,54 @@ class FactTests(unittest.TestCase):
         self.assertTrue((spread[flown] > drawn.std(axis=0)[flown]).all())
         self.assertAlmostEqual(spread[COLUMN["flightS"]], 0.0, places=9)
         self.assertAlmostEqual(spread[COLUMN["speedMS"]], unsure.speed_m_s.sigma, delta=0.2 * unsure.speed_m_s.sigma)
+
+
+class ModelTests(unittest.TestCase):
+    def test_learning_tells_apart_names_that_the_facts_tell_apart(self):
+        rng = np.random.default_rng(1)
+        centres = {"clear": 3.0, "net": -3.0, "drive": 0.0}
+        names = [name for name in centres for _ in range(300)]
+        rows = np.array([rng.normal(centres[name], 1.0, len(FACTS)) for name in names])
+        model = learn(names, rows, 1e-3)
+        p = model.probabilities(np.array([np.full(len(FACTS), c) for c in centres.values()]))
+        np.testing.assert_allclose(p.sum(axis=1), 1.0)
+        self.assertEqual([NAMES[k] for k in p.argmax(axis=1)], list(centres))
+        self.assertTrue((p.max(axis=1) > 0.95).all())
+        # A fact far beyond anything learnt from reads as the edge of what was.
+        far = model.probabilities(np.full((1, len(FACTS)), 50.0))
+        np.testing.assert_allclose(far, model.probabilities(rows.max(axis=0)[None]), atol=1e-12)
+
+    def test_a_model_is_kept_and_read_back(self):
+        model = Model(np.zeros(len(FACTS)), np.ones(len(FACTS)), np.full(len(FACTS), 0.5), np.ones(len(FACTS)), np.arange(45 * len(NAMES), dtype=float).reshape(45, -1) / 1000)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "names.json"
+            model.save(path)
+            again = Model.load(path)
+            np.testing.assert_allclose(again.weights, model.weights)
+            stored = json.loads(path.read_text(encoding="utf-8"))
+            stored["facts"] = stored["facts"][:-1]
+            path.write_text(json.dumps(stored), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                Model.load(path)
+
+    def test_a_name_is_given_alone_only_when_sure(self):
+        p = np.zeros(len(NAMES))
+        p[NAMES.index("drop")], p[NAMES.index("smash")] = SURE, 1 - SURE
+        self.assertEqual(call_of(p), "drop")
+        p[NAMES.index("drop")], p[NAMES.index("smash")] = 0.3, 0.7
+        self.assertEqual(call_of(p), "smash or drop")
+
+    def test_the_learnt_model_names_the_simulators_canned_rally(self):
+        model, rally, rng = Model.load(), canned_rally(), np.random.default_rng(0)
+        calls = []
+        for n, (contact, flight) in enumerate(zip(rally.contacts, rally.flights)):
+            ends = flight.end_time * 1000.0 if n + 1 < len(rally.flights) else None
+            shot = flight_facts(exact_fit(flight.p0, flight.v0, start_ms=flight.start_time * 1000.0, sigma=0.01), flight.start_time * 1000.0, contact.hitter, "singles", ends, serve=n == 0)
+            calls.append(name_shot(shot, model, rng))
+        self.assertEqual(calls[0].call, "serve")
+        right = [call.call.split(" or ")[0] == contact.kind for call, contact in zip(calls[1:], rally.contacts[1:])]
+        self.assertGreaterEqual(sum(right), len(right) - 1, [c.call for c in calls])
+        self.assertTrue(all(abs(sum(call.p.values()) - 1.0) < 0.01 for call in calls))
 
 
 class SetTests(unittest.TestCase):
