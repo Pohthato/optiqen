@@ -12,11 +12,13 @@ The facts come from the shuttle's state leaving the racket, flown under gravity 
 measured shot's state is uncertain (`shots.ShotFacts.launch_covariance`), so its facts are taken
 over many draws of it, each a whole flight.
 
-The model (`shot_names.json`, written by `evaluation.shot_names_benchmark learn`) is a
-multinomial logistic regression on the facts and their pairwise products, learnt from the true
-facts of simulated shots. A shot's chance of each name is the model's averaged over the draws,
-so it is as unsure as the measurement. The likeliest name is given alone when it is at least
-`SURE`; otherwise the two likeliest are.
+The model is a multinomial logistic regression on the facts and their pairwise products. It is
+first learnt from the true facts of simulated shots (`shot_names_simulated.json`, written by
+`evaluation.shot_names_benchmark learn`). Shots named by hand in real play then move it as far
+as they can show (`shot_names.json`, written by `... adapt`; see `learn`): the simulator's
+families are not real play's. A shot's chance of each name is the model's averaged over the
+draws, so it is as unsure as the measurement. The likeliest name is given alone when it is at
+least `SURE`; otherwise the two likeliest are.
 """
 from __future__ import annotations
 
@@ -30,7 +32,7 @@ from scipy.special import logsumexp, softmax
 
 from geometry.court_model import NET_Y_M
 from geometry.shuttle_physics import FEATHER_TERMINAL_VELOCITY
-from shots import MAX_FLIGHT_S, PATH_STEP_S, ShotFacts, _integrate
+from shots import MAX_FLIGHT_S, PATH_STEP_S, Estimate, ShotFacts, _integrate
 
 FACTS = ("contactHeightM", "contactFromNetM", "speedMS", "elevationDeg", "apexAboveM", "endPastNetM", "endHeightM", "flightS")
 NAMES = ("clear", "drop", "smash", "drive", "push", "lift", "net", "block")
@@ -38,6 +40,7 @@ DRAWS = 200
 CHUNK = 2000  # launches flown at once (each keeps its whole path in memory)
 SURE = 0.8
 MODEL_PATH = Path(__file__).with_name("shot_names.json")
+SIMULATED_PATH = Path(__file__).with_name("shot_names_simulated.json")
 
 
 def facts(contact, velocity, near, duration_s, terminal_velocity) -> np.ndarray:
@@ -54,7 +57,8 @@ def facts(contact, velocity, near, duration_s, terminal_velocity) -> np.ndarray:
     for start in range(0, count, CHUNK):
         rows = slice(start, start + CHUNK)
         span = float(durations[rows].max())
-        path, _ = _integrate(p[rows], v[rows], span, PATH_STEP_S, drag[rows, None])  # (n + 1, b, 3)
+        with np.errstate(over="ignore", invalid="ignore"):  # a launch too fast to fly gives NaN facts
+            path, _ = _integrate(p[rows], v[rows], span, PATH_STEP_S, drag[rows, None])  # (n + 1, b, 3)
         step = span / (len(path) - 1)
         last = np.minimum(np.round(durations[rows] / step).astype(int), len(path) - 1)
         z = path[:, :, 2]
@@ -97,23 +101,48 @@ def true_facts(rallies) -> tuple[list[str], np.ndarray]:
     return names, facts(p, v, near, durations, drag) if names else np.empty((0, len(FACTS)))
 
 
-def _duration_s(shot: ShotFacts) -> float:
+def _duration_s(landed: bool, flight_ms: float) -> float:
     """How long a measured shot flew before it was played again; inf when it went to the floor."""
-    return np.inf if shot.landing is not None or shot.flight_ms >= MAX_FLIGHT_S * 1000.0 else shot.flight_ms / 1000.0
+    return np.inf if landed or flight_ms >= MAX_FLIGHT_S * 1000.0 else flight_ms / 1000.0
 
 
-def nominal_facts(shot: ShotFacts) -> np.ndarray:
-    drag = shot.terminal_velocity.value if shot.terminal_velocity is not None else FEATHER_TERMINAL_VELOCITY
-    return facts(shot.contact, shot.velocity, shot.hitter == "near", _duration_s(shot), drag)[0]
+@dataclass(frozen=True)
+class Launch:
+    """A measured shot as its name sees it: the shuttle leaving the racket (the contact and the
+    velocity, with their 6 x 6 covariance), from which half, how long it flew before it was played
+    again (inf: to the floor), and the shuttle's drag (None: a feather shuttle's)."""
+
+    state: np.ndarray
+    covariance: np.ndarray
+    near: bool
+    duration_s: float
+    drag: Estimate | None
+
+    @staticmethod
+    def of(shot: ShotFacts) -> "Launch":
+        state = np.array([*shot.contact, *shot.velocity])
+        return Launch(state, np.asarray(shot.launch_covariance), shot.hitter == "near", _duration_s(shot.landing is not None, shot.flight_ms), shot.terminal_velocity)
+
+    @staticmethod
+    def entry(shot: dict, drag: dict | None) -> "Launch":
+        """A shot of an analysis file (analyse_rally), with the rally's drag from its summary."""
+        terminal = None if drag is None else Estimate(drag["value"], drag["sigma"])
+        landed = shot["landing"] is not None
+        return Launch(np.array(shot["launch"]["value"]), np.array(shot["launch"]["covariance"]), shot["hitter"] == "near", _duration_s(landed, shot["flightMs"]), terminal)
 
 
-def measured_facts(shot: ShotFacts, rng: np.random.Generator, draws: int = DRAWS) -> np.ndarray:
-    """The facts of `draws` flights drawn from a measured shot's launch and its uncertainty, each
-    flown with its own draw of the shuttle's drag."""
-    launches = rng.multivariate_normal([*shot.contact, *shot.velocity], np.asarray(shot.launch_covariance), size=draws, method="eigh")
-    drag = shot.terminal_velocity
+def nominal_facts(launch: Launch) -> np.ndarray:
+    drag = launch.drag.value if launch.drag is not None else FEATHER_TERMINAL_VELOCITY
+    return facts(launch.state[:3], launch.state[3:], launch.near, launch.duration_s, drag)[0]
+
+
+def measured_facts(launch: Launch, rng: np.random.Generator, draws: int = DRAWS) -> np.ndarray:
+    """The facts of `draws` flights drawn from a measured launch and its uncertainty, each flown
+    with its own draw of the shuttle's drag."""
+    launches = rng.multivariate_normal(launch.state, launch.covariance, size=draws, method="eigh")
+    drag = launch.drag
     drags = FEATHER_TERMINAL_VELOCITY if drag is None else np.maximum(rng.normal(drag.value, drag.sigma, draws), 1.0)
-    return facts(launches[:, :3], launches[:, 3:], shot.hitter == "near", _duration_s(shot), drags)
+    return facts(launches[:, :3], launches[:, 3:], launch.near, launch.duration_s, drags)
 
 
 @dataclass(frozen=True)
@@ -153,26 +182,52 @@ class Model:
         return Model(*(np.array(stored[key]) for key in ("low", "high", "mean", "scale", "weights")))
 
 
-def learn(names: list[str], rows: np.ndarray, l2: float) -> Model:
+def learn(names: list[str | tuple[str, ...]], rows: np.ndarray, l2: float, prior: Model | None = None) -> Model:
     """The model that best predicts these names from these facts, every weight but the
-    intercepts held towards zero by `l2`."""
-    base = Model(rows.min(axis=0), rows.max(axis=0), rows.mean(axis=0), rows.std(axis=0), np.zeros(0))
+    intercepts held by `l2` towards zero.
+
+    Or, from a `prior` (whose fact ranges and scales it keeps): the prior's weights scaled as a
+    whole, so the shots may say it is surer than it should be, and the intercepts and the single
+    facts' weights moved from there, held by `l2`. The products of facts stay the prior's: a few
+    shots cannot place curved boundaries, and products moved to fit them swing the names of shots
+    unlike any of them.
+
+    A shot named by a tuple of names may be any of them, each as likely."""
+    base = prior or Model(rows.min(axis=0), rows.max(axis=0), rows.mean(axis=0), rows.std(axis=0), np.zeros(0))
     terms = base.terms(rows)
-    truth = np.eye(len(NAMES))[[NAMES.index(name) for name in names]]
-    shape = (terms.shape[1], len(NAMES))
+    truth = np.array([np.isin(NAMES, name) for name in names], dtype=float)
+    truth /= truth.sum(axis=1, keepdims=True)
+    centre = np.zeros((terms.shape[1], len(NAMES))) if prior is None else prior.weights
+    free = len(centre) if prior is None else 1 + len(FACTS)  # the rows of weights that move
+    held = np.ones((free, 1))
+    if prior is None:
+        held[0] = 0.0
+
+    def weights_of(flat: np.ndarray) -> np.ndarray:
+        weights = flat[0] * centre
+        weights[:free] += flat[1:].reshape(free, len(NAMES))
+        return weights
 
     def loss(flat: np.ndarray) -> tuple[float, np.ndarray]:
-        weights = flat.reshape(shape)
-        logits = terms @ weights
+        moved = flat[1:].reshape(free, len(NAMES))
+        logits = terms @ weights_of(flat)
         log_p = logits - logsumexp(logits, axis=1, keepdims=True)
-        held = weights.copy()
-        held[0] = 0.0
-        value = -(truth * log_p).sum() / len(terms) + 0.5 * l2 * (held**2).sum()
-        gradient = terms.T @ (np.exp(log_p) - truth) / len(terms) + l2 * held
-        return value, gradient.ravel()
+        gradient = terms.T @ (np.exp(log_p) - truth) / len(terms)
+        value = -(truth * log_p).sum() / len(terms) + 0.5 * l2 * (held * moved**2).sum()
+        return value, np.concatenate([[(gradient * centre).sum()], (gradient[:free] + l2 * held * moved).ravel()])
 
-    fit = minimize(loss, np.zeros(shape).ravel(), jac=True, method="L-BFGS-B", options={"maxiter": 5000})
-    return Model(base.low, base.high, base.mean, base.scale, fit.x.reshape(shape))
+    start = np.concatenate([[1.0], np.zeros(free * len(NAMES))])
+    bounds = [(0.0, None)] + [(None, None)] * (free * len(NAMES))  # the prior's scale is not turned over
+    fit = minimize(loss, start, jac=True, method="L-BFGS-B", bounds=bounds, options={"maxiter": 5000})
+    return Model(base.low, base.high, base.mean, base.scale, weights_of(fit.x))
+
+
+def chances(model: Model, drawn: np.ndarray) -> np.ndarray:
+    """The chance of each name over draws of a shot's facts (..., draws, facts). A draw that could
+    not be flown is left out: from a hopeless measurement it may leave the racket thousands of
+    metres a second, past what the flight's integration can follow."""
+    p = model.probabilities(drawn.reshape(-1, len(FACTS))).reshape(*drawn.shape[:-1], len(NAMES))
+    return np.nanmean(p, axis=-2)
 
 
 def call_of(p: np.ndarray) -> str:
@@ -180,9 +235,9 @@ def call_of(p: np.ndarray) -> str:
     return NAMES[first] if p[first] >= SURE else f"{NAMES[first]} or {NAMES[second]}"
 
 
-def name_shot(shot: ShotFacts, model: Model, rng: np.random.Generator) -> ShotName:
+def name_shot(launch: Launch, serve: bool, model: Model, rng: np.random.Generator) -> ShotName:
     """A measured shot's name. A serve is named by the rally, not the model."""
-    if shot.serve:
+    if serve:
         return ShotName("serve", {"serve": 1.0})
-    p = model.probabilities(measured_facts(shot, rng)).mean(axis=0)
+    p = chances(model, measured_facts(launch, rng))
     return ShotName(call_of(p), {name: round(float(chance), 3) for name, chance in zip(NAMES, p)})

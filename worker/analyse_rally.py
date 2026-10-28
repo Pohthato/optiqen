@@ -39,7 +39,7 @@ from geometry.skeleton import BONES, Body
 from hits import find_hits
 from lift_players import fit_players
 from players import HALVES
-from shot_names import Model, ShotName, name_shot
+from shot_names import Launch, Model, ShotName, name_shot
 from shots import ShotFacts, rally_shots
 from track_players import players_document
 from video import VideoFile
@@ -93,6 +93,9 @@ def shot_entry(number: int, shot: ShotFacts) -> dict:
         "apexM": _estimate(shot.apex_m),
         "net": None if shot.net is None else {"xM": round(shot.net.x_m, 3), "heightM": _estimate(shot.net.height_m), "clearanceM": _estimate(shot.net.clearance_m)},
         "flightMs": round(shot.flight_ms, 1),
+        # The contact and the velocity leaving the racket, with their covariance: what the name
+        # rests on, so a stored analysis can be named again (shot_names.Launch.entry).
+        "launch": {"value": rounded((*shot.contact, *shot.velocity), 4), "covariance": [rounded(row, 7) for row in shot.launch_covariance]},
         "landing": None if shot.landing is None else {
             "point": rounded(shot.landing.point, 3),
             "covariance": [rounded(row, 6) for row in shot.landing.covariance],
@@ -306,7 +309,7 @@ def main(argv: list[str] | None = None) -> int:
     facts = rally_body_facts(shots, bodies, times_ms) if bodies is not None else [None] * len(shots)
     stood = [{half: standing_at(bodies[half], times_ms, shot.hit_ms) for half in HALVES} if bodies is not None else None for shot in shots]
     model, rng = Model.load(), np.random.default_rng(0)
-    names = [name_shot(shot, model, rng) for shot in shots]
+    names = [name_shot(Launch.of(shot), shot.serve, model, rng) for shot in shots]
 
     result = hits_document(args.video, shuttle_doc, analysis, onsets, sound_error, times_ms)
     calls = [shot.landing.call for shot in shots if shot.landing is not None]

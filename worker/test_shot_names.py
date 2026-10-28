@@ -7,10 +7,11 @@ from pathlib import Path
 import numpy as np
 
 from evaluation.hits_benchmark import Scenario
-from evaluation.shot_names_benchmark import TEST_FIRST_SEED, learning_set, measure_scenario
+from evaluation.hand_labels import read_labels
+from evaluation.shot_names_benchmark import REAL_HOLDS, TEST_FIRST_SEED, adapt, learning_set, measure_scenario, named_again, real_set
 from geometry.court_model import NET_Y_M
 from geometry.shuttle_physics import simulate
-from shot_names import DRAWS, FACTS, NAMES, SURE, Model, call_of, facts, learn, measured_facts, name_shot, nominal_facts, true_facts
+from shot_names import DRAWS, FACTS, NAMES, SIMULATED_PATH, SURE, Launch, Model, call_of, chances, facts, learn, measured_facts, name_shot, nominal_facts, true_facts
 from shots import flight_facts
 from simulation.rally import SHOT_TYPES, canned_rally
 from test_shots import exact_fit
@@ -58,11 +59,11 @@ class FactTests(unittest.TestCase):
         sure = flight_facts(exact_fit(p0, v0, sigma=1e-4), 0.0, "near", "singles", ends_ms=900.0)
         unsure = flight_facts(exact_fit(p0, v0, sigma=0.1), 0.0, "near", "singles", ends_ms=900.0)
         rng = np.random.default_rng(0)
-        nominal = nominal_facts(sure)
+        nominal = nominal_facts(Launch.of(sure))
         np.testing.assert_allclose(nominal, facts(p0, v0, True, 0.9, 6.7)[0], atol=1e-6)
-        drawn = measured_facts(sure, rng)
+        drawn = measured_facts(Launch.of(sure), rng)
         np.testing.assert_allclose(drawn.mean(axis=0), nominal, atol=0.05)
-        spread = measured_facts(unsure, rng).std(axis=0)
+        spread = measured_facts(Launch.of(unsure), rng).std(axis=0)
         flown = [COLUMN[name] for name in FACTS if name != "flightS"]  # played again at a known time
         self.assertTrue((spread[flown] > drawn.std(axis=0)[flown]).all())
         self.assertAlmostEqual(spread[COLUMN["flightS"]], 0.0, places=9)
@@ -97,6 +98,14 @@ class ModelTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 Model.load(path)
 
+    def test_a_draw_that_could_not_be_flown_is_left_out(self):
+        model = Model.load(SIMULATED_PATH)
+        rng = np.random.default_rng(2)
+        drawn = model.mean + rng.normal(0.0, 0.3, (5, len(FACTS))) * model.scale
+        spoilt = np.vstack([drawn, np.full(len(FACTS), np.nan)])
+        np.testing.assert_allclose(chances(model, spoilt), model.probabilities(drawn).mean(axis=0))
+        np.testing.assert_allclose(chances(model, np.stack([spoilt, spoilt])), np.stack([chances(model, drawn)] * 2))
+
     def test_a_name_is_given_alone_only_when_sure(self):
         p = np.zeros(len(NAMES))
         p[NAMES.index("drop")], p[NAMES.index("smash")] = SURE, 1 - SURE
@@ -104,17 +113,69 @@ class ModelTests(unittest.TestCase):
         p[NAMES.index("drop")], p[NAMES.index("smash")] = 0.3, 0.7
         self.assertEqual(call_of(p), "smash or drop")
 
-    def test_the_learnt_model_names_the_simulators_canned_rally(self):
-        model, rally, rng = Model.load(), canned_rally(), np.random.default_rng(0)
+    def test_the_model_learnt_from_simulation_names_the_simulators_canned_rally(self):
+        model, rally, rng = Model.load(SIMULATED_PATH), canned_rally(), np.random.default_rng(0)
         calls = []
         for n, (contact, flight) in enumerate(zip(rally.contacts, rally.flights)):
             ends = flight.end_time * 1000.0 if n + 1 < len(rally.flights) else None
             shot = flight_facts(exact_fit(flight.p0, flight.v0, start_ms=flight.start_time * 1000.0, sigma=0.01), flight.start_time * 1000.0, contact.hitter, "singles", ends, serve=n == 0)
-            calls.append(name_shot(shot, model, rng))
+            calls.append(name_shot(Launch.of(shot), shot.serve, model, rng))
         self.assertEqual(calls[0].call, "serve")
         right = [call.call.split(" or ")[0] == contact.kind for call, contact in zip(calls[1:], rally.contacts[1:])]
         self.assertGreaterEqual(sum(right), len(right) - 1, [c.call for c in calls])
         self.assertTrue(all(abs(sum(call.p.values()) - 1.0) < 0.01 for call in calls))
+
+
+def canned_clip() -> tuple[str, dict]:
+    """The canned rally named by hand, its block and net shot named the other way round from the
+    simulator, and as an analysis file (only what names need of each shot)."""
+    rally = canned_rally()
+    shots = []
+    for n, (contact, flight) in enumerate(zip(rally.contacts, rally.flights)):
+        ends = flight.end_time * 1000.0 if n + 1 < len(rally.flights) else None
+        shot = flight_facts(exact_fit(flight.p0, flight.v0, start_ms=flight.start_time * 1000.0, sigma=0.01), flight.start_time * 1000.0, contact.hitter, "singles", ends, serve=n == 0)
+        shots.append({
+            "shot": n + 1, "hitMs": shot.hit_ms, "hitter": shot.hitter, "serve": shot.serve, "flightMs": shot.flight_ms,
+            "landing": None if shot.landing is None else {}, "launch": {"value": [*shot.contact, *shot.velocity], "covariance": [list(row) for row in shot.launch_covariance]},
+        })
+    swapped = {"block": "net", "net": "block"}
+    lines = [f"Serve time({rally.contacts[0].hitter} player serve):{rally.contacts[0].time}"]
+    for half in ("near", "far"):
+        lines.append(f"{half} player hit times:" + ",".join(f"{c.time}({swapped.get(c.kind, c.kind)})" for c in rally.contacts[1:] if c.hitter == half))
+    analysis = {"events": [{"type": "contact", "timeMs": shot["hitMs"], "evidence": "flights"} for shot in shots], "shots": shots, "summary": {"terminalVelocity": {"value": 6.7, "sigma": 0.05}}}
+    return "\n".join(lines), analysis
+
+
+class RealTests(unittest.TestCase):
+    def test_a_strong_hold_keeps_the_prior_but_for_its_sureness_and_a_weak_one_learns_the_new_shots(self):
+        prior = Model.load(SIMULATED_PATH)
+        rows = np.array([np.full(len(FACTS), 0.5), np.full(len(FACTS), -0.5)]) * prior.scale + prior.mean
+        names = [("push", "lift"), "net"]
+        held = learn(names, rows, 1e6, prior).weights
+        scale = float((held * prior.weights).sum() / (prior.weights**2).sum())
+        np.testing.assert_allclose(held, scale * prior.weights, atol=1e-3)
+        p = learn(names, rows, 1e-6, prior).probabilities(rows)
+        self.assertAlmostEqual(p[0, NAMES.index("push")], p[0, NAMES.index("lift")], delta=0.05)
+        self.assertGreater(p[0, NAMES.index("push")] + p[0, NAMES.index("lift")], 0.95)
+        self.assertGreater(p[1, NAMES.index("net")], 0.95)
+
+    def test_clips_named_by_hand_move_the_names_and_each_is_named_by_a_model_learnt_without_it(self):
+        text, analysis = canned_clip()
+        labelled = {f"Clip {n}": read_labels(f"Clip {n}:\n" + text)[f"Clip {n}"] for n in (1, 2, 3)}
+        analyses = {clip: analysis for clip in labelled}
+        rows = real_set(labelled, analyses)
+        self.assertEqual(len(rows), 3 * (len(analysis["shots"]) - 1))  # every shot but the serve
+        prior = Model.load(SIMULATED_PATH)
+        model, report, named = adapt(prior, labelled, analyses)
+        self.assertEqual(report["shots"], len(rows))
+        self.assertLess(report["hold"], max(REAL_HOLDS))  # the clips say more than the simulator
+        kinds = [c.kind for c in canned_rally().contacts]
+        for clip in labelled:
+            calls = [shot["name"]["call"] for shot in named[clip]["shots"]]
+            self.assertEqual(calls[0], "serve")
+            self.assertEqual(calls[kinds.index("block")], "net", calls)
+            self.assertEqual(calls[kinds.index("net")], "block", calls)
+        self.assertEqual(named_again(analysis, prior)["shots"][kinds.index("block")]["name"]["call"].split(" or ")[0], "block")
 
 
 class SetTests(unittest.TestCase):

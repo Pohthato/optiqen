@@ -1,18 +1,25 @@
 # worker/evaluation/shot_names_benchmark.py
-"""Shots to learn names from, the model learnt from them, and shots to test the names on.
+"""Shots to learn names from, the models learnt from them, and shots to test the names on.
 
-Learning: the true facts of simulated rallies' shots (simulation.rally.random_rally), drawn from a
-random stream of their own, so no test rally is among them. The weights' hold towards zero is
-chosen on further learning rallies the fit never saw. Testing: the hits benchmark's scenarios
-(every view at 30 and 60 fps, with sound and without, jitter, dropout, false detections,
-neighbouring courts), from seeds the learning never uses (from TEST_FIRST_SEED; the first sixty
-are the hits benchmark's held-out rallies), through the real hit finding and flight fitting. Each shot matched to a true hit (within ±33 ms) keeps its true name and facts, its
-measured facts, and draws of them from their uncertainty. Serves are left out: the rally names
-them.
+Learning from simulation: the true facts of simulated rallies' shots
+(simulation.rally.random_rally), drawn from a random stream of their own, so no test rally is
+among them. The weights' hold towards zero is chosen on further learning rallies the fit never
+saw. Testing: the hits benchmark's scenarios (every view at 30 and 60 fps, with sound and
+without, jitter, dropout, false detections, neighbouring courts), from seeds the learning never
+uses (from TEST_FIRST_SEED; the first sixty are the hits benchmark's held-out rallies), through
+the real hit finding and flight fitting. Each shot matched to a true hit (within ±33 ms) keeps its
+true name and facts, its measured facts, and draws of them from their uncertainty. Serves are
+left out: the rally names them.
+
+Learning from real play: shots named by hand (evaluation.hand_labels) move the simulated model as
+far as they can show (shot_names.learn), held towards it. Each clip is named by a model learnt
+without it, its hold chosen the same way on the other clips alone, so its score is honest; the
+model kept is learnt from every clip.
 
     python -m evaluation.shot_names_benchmark measure --scenarios 120 --workers 12 --out held_out.npz
     python -m evaluation.shot_names_benchmark measure --scenarios 120 --workers 12 --stress --out stressed.npz
     python -m evaluation.shot_names_benchmark learn --rallies 3000 --workers 12
+    python -m evaluation.shot_names_benchmark adapt Clips/hittimes.txt "Clip 9=clip9.analysis.json" ... --named named/
     python -m evaluation.shot_names_benchmark score held_out.npz stressed.npz --out names.json
 """
 from __future__ import annotations
@@ -28,19 +35,20 @@ from typing import Any
 
 import numpy as np
 
+from evaluation.hand_labels import LabelledHit, match_clip, read_labels, summarise
 from evaluation.hits_benchmark import TOLERANCE_MS, simulate, standard_scenarios
-from evaluation.metrics import macro_f1, match_events
+from evaluation.metrics import macro_f1, macro_f1_interval, match_events
 from hits import find_hits
-from shot_names import FACTS, MODEL_PATH, NAMES, Model, call_of, learn, measured_facts, nominal_facts, true_facts
+from shot_names import MODEL_PATH, NAMES, SIMULATED_PATH, Launch, Model, call_of, chances, learn, measured_facts, name_shot, nominal_facts, true_facts
 from shots import rally_shots
 from simulation.rally import random_rally
 
 LEARNING_STREAM = 5
 TEST_FIRST_SEED = 5000
 HOLDS = (1e-7, 1e-6, 1e-5, 1e-4)  # the weights' hold towards zero, chosen among these
+REAL_HOLDS = (1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0)  # real shots' hold towards the simulated weights
 CHECK_SHARE = 0.2  # further learning rallies, as a share of those learnt from, to choose it on
 CONFIDENCE_BINS = (0.0, 0.5, 0.65, 0.8, 0.9, 1.0001)
-RESAMPLES = 1000
 
 
 def _learning_rally(seed: int):
@@ -84,7 +92,7 @@ def measure_scenario(scenario) -> list[dict[str, Any]]:
     rng = np.random.default_rng(scenario.seed)
     return [
         {
-            "name": names[t], "truth": truth[t], "nominal": nominal_facts(shots[p]), "draws": measured_facts(shots[p], rng),
+            "name": names[t], "truth": truth[t], "nominal": nominal_facts(Launch.of(shots[p])), "draws": measured_facts(Launch.of(shots[p]), rng),
             "view": scenario.view, "fps": scenario.fps, "seed": scenario.seed,
         }
         for p, t in match.pairs
@@ -106,14 +114,8 @@ def _f1(names: list[str], p: np.ndarray, seeds: np.ndarray) -> dict[str, float]:
     """Macro-F1 of the likeliest names, with its 95 % interval over resamples of whole scenarios
     (one rally's shots are not independent of each other)."""
     calls = [NAMES[k] for k in p.argmax(axis=1)]
-    groups = [np.flatnonzero(seeds == seed) for seed in np.unique(seeds)]
-    rng = np.random.default_rng(0)
-    again = []
-    for _ in range(RESAMPLES):
-        rows = np.concatenate([groups[k] for k in rng.integers(len(groups), size=len(groups))])
-        again.append(macro_f1([names[r] for r in rows], [calls[r] for r in rows], NAMES)["macroF1"])
-    low, high = np.percentile(again, [2.5, 97.5])
-    return {"value": round(macro_f1(names, calls, NAMES)["macroF1"], 4), "low": round(float(low), 3), "high": round(float(high), 3)}
+    low, high = macro_f1_interval(names, calls, NAMES, seeds)
+    return {"value": round(macro_f1(names, calls, NAMES)["macroF1"], 4), "low": round(low, 3), "high": round(high, 3)}
 
 
 def score(model: Model, held_out: dict[str, np.ndarray]) -> dict[str, Any]:
@@ -123,7 +125,7 @@ def score(model: Model, held_out: dict[str, np.ndarray]) -> dict[str, Any]:
     and by how sure."""
     names = held_out["name"].tolist()
     draws, seeds = held_out["draws"], held_out["seed"]
-    p = model.probabilities(draws.reshape(-1, len(FACTS))).reshape(len(names), draws.shape[1], len(NAMES)).mean(axis=1)
+    p = chances(model, draws)
     calls = [call_of(row) for row in p]
     alone = {name: {"given": 0, "right": 0} for name in NAMES}
     for name, call in zip(names, calls):
@@ -156,6 +158,67 @@ def score(model: Model, held_out: dict[str, np.ndarray]) -> dict[str, Any]:
     }
 
 
+def real_set(labelled: dict[str, list[LabelledHit]], analyses: dict[str, dict]) -> list[dict[str, Any]]:
+    """Every hit named by hand that was found as a shot, serves left out (the rally names them):
+    its clip, the names it may be, and its measured facts and draws of them."""
+    rng = np.random.default_rng(0)
+    rows = []
+    for clip, analysis in analyses.items():
+        drag = analysis["summary"]["terminalVelocity"]
+        for row in match_clip(labelled[clip], analysis)[0]:
+            if row["shot"] is not None and row["labels"] and "serve" not in row["labels"]:
+                launch = Launch.entry(analysis["shots"][row["shot"] - 1], drag)
+                rows.append({"clip": clip, "names": tuple(row["labels"]), "nominal": nominal_facts(launch), "draws": measured_facts(launch, rng)})
+    return rows
+
+
+def _learnt(prior: Model, rows: list[dict[str, Any]], hold: float) -> Model:
+    return learn([row["names"] for row in rows], np.array([row["nominal"] for row in rows]), hold, prior)
+
+
+def _log_loss(model: Model, rows: list[dict[str, Any]]) -> float:
+    """Over the shots' draws, as the pipeline names them; a shot that may be either of two names
+    is right with either."""
+    right = [sum(chances(model, row["draws"])[NAMES.index(name)] for name in row["names"]) for row in rows]
+    return -float(np.sum(np.log(np.array(right) + 1e-12)))
+
+
+def choose_hold(prior: Model, rows: list[dict[str, Any]], clips: list[str]) -> tuple[float, dict[float, float]]:
+    """The hold under which each of `clips` is best named by a model learnt from the others."""
+    tried = {}
+    for hold in REAL_HOLDS:
+        tried[hold] = round(sum(
+            _log_loss(_learnt(prior, [r for r in rows if r["clip"] in clips and r["clip"] != clip], hold), [r for r in rows if r["clip"] == clip])
+            for clip in clips
+        ), 3)
+    return min(tried, key=tried.get), tried
+
+
+def named_again(analysis: dict[str, Any], model: Model) -> dict[str, Any]:
+    """The analysis with every shot named by `model`."""
+    rng = np.random.default_rng(0)
+    drag = analysis["summary"]["terminalVelocity"]
+    shots = []
+    for shot in analysis["shots"]:
+        name = name_shot(Launch.entry(shot, drag), shot["serve"], model, rng)
+        shots.append({**shot, "name": {"call": name.call, "p": name.p}})
+    return {**analysis, "shots": shots}
+
+
+def adapt(prior: Model, labelled: dict[str, list[LabelledHit]], analyses: dict[str, dict]) -> tuple[Model, dict[str, Any], dict[str, dict]]:
+    """The model learnt from every clip's named shots, a report, and each clip named by a model
+    learnt without it."""
+    rows = real_set(labelled, analyses)
+    clips = list(analyses)
+    named, holds = {}, {}
+    for clip in clips:
+        holds[clip], _ = choose_hold(prior, rows, [c for c in clips if c != clip])
+        named[clip] = named_again(analyses[clip], _learnt(prior, [r for r in rows if r["clip"] != clip], holds[clip]))
+    hold, tried = choose_hold(prior, rows, clips)
+    report = {"shots": len(rows), "byClip": dict(Counter(row["clip"] for row in rows)), "holdWithout": holds, "hold": hold, "tried": tried}
+    return _learnt(prior, rows, hold), report, named
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Learn shot names from simulated shots and test them on held-out ones.")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -168,7 +231,14 @@ def main(argv: list[str] | None = None) -> int:
     learning = commands.add_parser("learn", help="learn the model from simulated rallies' true facts")
     learning.add_argument("--rallies", type=int, default=3000)
     learning.add_argument("--workers", type=int, default=1)
-    learning.add_argument("--out", type=Path, default=MODEL_PATH)
+    learning.add_argument("--out", type=Path, default=SIMULATED_PATH)
+    adapting = commands.add_parser("adapt", help="move the simulated model by shots named by hand")
+    adapting.add_argument("labels", type=Path, help="the hittimes file")
+    adapting.add_argument("clips", nargs="+", help='"Clip 9=clip9.analysis.json", one per clip')
+    adapting.add_argument("--prior", type=Path, default=SIMULATED_PATH)
+    adapting.add_argument("--out", type=Path, default=MODEL_PATH)
+    adapting.add_argument("--named", type=Path, help="a folder for each clip's analysis named by the model learnt without it")
+    adapting.add_argument("--report", type=Path)
     scoring = commands.add_parser("score", help="score the model on held-out shots")
     scoring.add_argument("held_out", type=Path, nargs="+")
     scoring.add_argument("--model", type=Path, default=MODEL_PATH)
@@ -183,6 +253,26 @@ def main(argv: list[str] | None = None) -> int:
         model, report = learn_model(args.rallies, args.workers)
         model.save(args.out)
         print(json.dumps(report))
+    elif args.command == "adapt":
+        labelled = read_labels(args.labels.read_text(encoding="utf-8"))
+        paths = dict(item.partition("=")[::2] for item in args.clips)
+        analyses = {clip: json.loads(Path(path).read_text(encoding="utf-8")) for clip, path in paths.items()}
+        model, report, named = adapt(Model.load(args.prior), labelled, analyses)
+        model.save(args.out)
+        everything = [], []
+        for clip, analysis in named.items():
+            rows, extras = match_clip(labelled[clip], analysis)
+            report.setdefault("clips", {})[clip] = summarise(rows, extras)["names"]
+            everything[0].extend(rows)
+            everything[1].extend(extras)
+            if args.named:
+                args.named.mkdir(parents=True, exist_ok=True)
+                (args.named / Path(paths[clip]).name).write_text(json.dumps(analysis), encoding="utf-8")
+        report["pooled"] = summarise(*everything)["names"]
+        text = json.dumps(report, indent=2)
+        if args.report:
+            args.report.write_text(text, encoding="utf-8")
+        print(text)
     else:
         model = Model.load(args.model)
         report = {path.name: score(model, dict(np.load(path))) for path in args.held_out}

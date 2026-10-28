@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from statistics import median
 from typing import Any
 
+import numpy as np
+
 
 @dataclass(frozen=True)
 class EventMatch:
@@ -77,3 +79,17 @@ def macro_f1(y_true: list[str], y_pred: list[str], labels: tuple[str, ...] | Non
         }
     scored = [row["f1"] for row in per_label.values() if row["support"] > 0 or row["predicted"] > 0]
     return {"macroF1": sum(scored) / len(scored) if scored else 0.0, "perLabel": per_label}
+
+
+def macro_f1_interval(y_true: list[str], y_pred: list[str], labels: tuple[str, ...] | None = None, groups=None, resamples: int = 1000) -> tuple[float, float]:
+    """The 95 % interval of macro-F1 over resamples of the items, or of whole `groups` of them
+    (items that are not independent of each other, such as one rally's shots)."""
+    keys = np.arange(len(y_true)) if groups is None else np.asarray(groups)
+    members = [np.flatnonzero(keys == key) for key in np.unique(keys)]
+    rng = np.random.default_rng(0)
+    again = []
+    for _ in range(resamples):
+        rows = np.concatenate([members[k] for k in rng.integers(len(members), size=len(members))])
+        again.append(macro_f1([y_true[r] for r in rows], [y_pred[r] for r in rows], labels)["macroF1"])
+    low, high = np.percentile(again, [2.5, 97.5])
+    return float(low), float(high)

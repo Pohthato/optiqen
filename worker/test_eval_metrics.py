@@ -1,7 +1,7 @@
 # worker/test_eval_metrics.py
 import unittest
 
-from evaluation.metrics import macro_f1, match_events
+from evaluation.metrics import macro_f1, macro_f1_interval, match_events
 
 
 class MatchEventsTests(unittest.TestCase):
@@ -53,6 +53,18 @@ class MacroF1Tests(unittest.TestCase):
     def test_length_mismatch_raises(self):
         with self.assertRaises(ValueError):
             macro_f1(["clear"], [])
+
+    def test_the_interval_holds_the_score_and_narrows_with_more_items(self):
+        y_true = ["clear", "smash", "drop", "drive"] * 5
+        y_pred = ["clear", "smash", "drop", "clear"] * 5
+        value = macro_f1(y_true, y_pred)["macroF1"]
+        low, high = macro_f1_interval(y_true, y_pred)
+        self.assertLessEqual(low, value)
+        self.assertGreaterEqual(high, value)
+        more_low, more_high = macro_f1_interval(y_true * 10, y_pred * 10)
+        self.assertLess(more_high - more_low, high - low)
+        # Ten copies of one rally are one rally: resampled whole, they are no surer than it.
+        self.assertEqual(macro_f1_interval(y_true * 10, y_pred * 10, groups=list(range(20)) * 10), macro_f1_interval(y_true, y_pred))
 
 
 if __name__ == "__main__":

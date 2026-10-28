@@ -44,7 +44,8 @@ Each step is pushed on its own.
 | 5b | **The facts a name rests on, and simulated shots to learn from.** Per shot, the facts below, from the shuttle's state leaving the racket. Each shot now keeps that state with its whole uncertainty, so draws from it are flights that agree with themselves. The model learns from the true facts of simulated shots. The test shots are simulated rallies from seeds the learning never uses (from 5000; the first sixty are the hits benchmark's held-out rallies), run through the real hit finding and flight fitting, so their facts carry the real error. (Learning from measured facts and then drawing them from their uncertainty again would count the error twice.) | `worker/shots.py`, `worker/shot_names.py`, `worker/evaluation/shot_names_benchmark.py` | The facts are exact on true flights. The launch's uncertainty agrees with each fact's own. The test set is written once and never learned from. |
 | 5c | **The model.** Multinomial logistic regression on the facts and their pairwise products, fitted with numpy and scipy (no new package). The weights are a small JSON file in the repo, and the benchmark regenerates them. Each name's probability is averaged over draws of the facts from their uncertainty. The name is given when it is at least 80 % likely; otherwise the two most likely names are given. | `worker/shot_names.py`, `worker/shot_names.json` | Held-out simulation: macro-F1, set beside the macro-F1 the true facts give (how far the families overlap by themselves). Calibrated: names given at 80 % or more are right at least 80 % of the time, for every family, and in the stressed world too. |
 | 5d | **Into the one command, and the real test.** Each shot in `analyse_rally.py` gets its name with the probabilities. The overlay writes it next to the speed, and the diagram's legend names each flight. Then the five labelled clips are scored. | `worker/analyse_rally.py` | Real macro-F1 by family and by camera (the corner tripod of clips 6–9, Clip 10). It is reported twice: on the shots whose hit was found, and end to end, where a missed hit counts as a wrong name. |
-| 5e | **Cross or straight, forehand or backhand, from a jump.** Cross: the flight crosses the court diagonally. Backhand: the racket hand meets the shuttle across the body, on the side away from the racket arm, beyond the uncertainty. The racket arm is the one the player hits with on most shots of the clip. Jump: both feet are off the floor at contact (4c already measures it). Each is "too close to call" when the measurements cannot tell. | `worker/shot_names.py` | Simulation: each one right within its stated uncertainty. Real: your labels mark 17 cross shots, 7 backhands and 3 jumps. Unmarked shots are not taken as straight or forehand, so for those the report gives only how often the app said cross or backhand. |
+| 5e | **Learning from your shots.** Your named shots move the simulator's model. Its weights are scaled as a whole, and the intercepts and the single facts' weights move from there, held by a hold chosen on held-out clips. Each clip is named by a model learnt without it. Each analysis keeps each shot's launch, so it can be named again without the video. | `worker/shot_names.py`, `worker/evaluation/shot_names_benchmark.py`, `worker/evaluation/hand_labels.py`, `worker/analyse_rally.py` | Real macro-F1, each clip named by a model learnt without it, beside 5d's. Names given alone are right about as often as they say. |
+| 5f | **Cross or straight, forehand or backhand, from a jump.** Cross: the flight crosses the court diagonally. Backhand: the racket hand meets the shuttle across the body, on the side away from the racket arm, beyond the uncertainty. The racket arm is the one the player hits with on most shots of the clip. Jump: both feet are off the floor at contact (4c already measures it). Each is "too close to call" when the measurements cannot tell. | `worker/shot_names.py` | Simulation: each one right within its stated uncertainty. Real: your labels mark 17 cross shots, 7 backhands and 3 jumps. Unmarked shots are not taken as straight or forehand, so for those the report gives only how often the app said cross or backhand. |
 
 **The facts a name rests on (5b):**
 
@@ -115,11 +116,49 @@ A "push or lift" shot is counted under the name given when that name is either, 
 - **The simulator's short game is not the one in your clips.** Most of your net shots (11 of 14) were measured leaving the racket 1.4 to 2.6 m from the net, 0.8 to 1.4 m high, at 7 to 14 m/s and 21 to 35° up. They were played again 1.0 to 2.5 m past the net, 0.3 to 1.3 m high. The simulator's net shots end 0.4 to 1.6 m past the net, 0.2 to 0.8 m high. Its pushes end 2.5 to 4.5 m past, 0.8 to 1.6 m high. Your net shots fall between the two, nearer push. All but one of your pushes went further, 3.8 to 7.7 m past the net, so they read as drives and lifts. Your blocks read as the simulator's pushes.
 - **The model is sure when it should not be.** On your shots, a name given alone was right 22 of 37 times, while its stated probability averaged 0.96. When two names were given, yours was among them 10 of 24 times. The probabilities carry the measurement's uncertainty, but not the distance between the simulator's families and real play.
 - **One serve was not called a serve.** The hit finder found Clip 10's serve from its flight, not as a serve, so the model named it ("push or block").
-- **What would close the gap** is shots named in real play to learn from. The 66 here could be used now, each clip named by a model learnt without it (simulation plus the other four clips). More labelled rallies would do it better. Either way the names on the simulator's families alone should not be shown as sure.
+- **What would close the gap** is shots named in real play to learn from. The 66 here could be used now, each clip named by a model learnt without it (simulation plus the other four clips); 5e does this. More labelled rallies would do it better. Either way the names on the simulator's families alone should not be shown as sure.
+
+### 5e: learning from your shots
+
+The model learns from 61 of your shots: every named hit that was found as a shot, serves left out. A "push or lift" counts as either. It starts from the simulator's model. Its weights are scaled as a whole, and the intercepts and the single facts' weights move from there, held towards them. The products of facts stay the simulator's.
+
+Each clip is named by a model learnt from the other four. That model's hold is chosen by naming each of those four in turn from the remaining three, on log loss over the draws. The model kept (`worker/shot_names.json`) is learnt from all five clips, its hold chosen the same way: 0.01 (log loss 46.2; 52.0 at 0.1, 73.5 at 0.001). Every clip's own choice was 0.01 too. The simulator's model stays beside it as `worker/shot_names_simulated.json`.
+
+| Clips | Found shots right | Macro-F1 | Eight families only | End to end |
+| --- | --- | --- | --- | --- |
+| All five | 46 of 66 | 0.65 (0.53–0.72) | 0.62 (0.51–0.71) | 0.61 (0.50–0.69) |
+| Corner tripod, clips 6–9 | 36 of 51 | 0.67 (0.55–0.76) | 0.63 (0.49–0.73) | 0.66 (0.53–0.75) |
+| Clip 10 | 10 of 15 | 0.54 (0.32–0.75) | 0.62 (0.35–0.84) | 0.50 (0.27–0.69) |
+
+In 5d, from the simulator alone, it was 31 of 66 and 0.51. The proposed gate (0.70) is still not met, though the interval reaches it.
+
+| Your label | Found | Named |
+| --- | --- | --- |
+| net | 14 | net 13, drop 1 |
+| clear | 5 | clear 5 |
+| smash | 6 | smash 5, drive 1 |
+| drop | 7 | drop 6, net 1 |
+| serve | 5 | serve 4, net 1 |
+| lift | 9 | lift 6, push 3 |
+| push | 8 | push 5, lift 2, drive 1 |
+| block | 7 | net 3, block 2, push 1, drop 1 |
+| drive | 4 | block 2, smash 1, push 1 |
+| push or lift | 1 | clear 1 |
+
+The other "push or lift" shot is counted under the name given.
+
+- **The sureness is now close to honest.** A name given alone was right 23 of 27 times, at a mean stated probability of 0.89 (5d: 22 of 37 at 0.96). When two names were given, yours was among them 31 of 35 times (5d: 10 of 24). The kept model scales the simulator's weights by 0.11: the simulator was about nine times too sure for real play.
+- **Net shots and drops are now right**, 13 of 14 and 6 of 7, and clears and smashes stay right (10 of 11). Lifts lost some to push: 6 of 9, from 10 of 10.
+- **Blocks and drives are still wrong:** 2 of 11. Blocks read as net shots. There are only 7 blocks and 4 drives to learn from, and what tells a block from a net shot is the shot before it.
+- **Clip 10, the other venue, is named worse** (0.54 against 0.67 for the corner tripod), but on 15 shots its interval is wide.
+- **Two ways of moving the model were tried.** This one was kept because its held-out log loss was lower (46.2 against 66.7). The other let the products move too; fitted to a few shots, they named two of Clip 10's fast clears "net" at 0.82 and 0.90. Choosing between two on the same shots makes the scores above a little optimistic.
+- **What it costs on simulated shots.** On 5c's held-out simulation the kept model's macro-F1 is 0.58 (0.53–0.62) in the standard world and 0.53 (0.50–0.57) in the stressed one, against 0.855 and 0.851 for the simulator's model. The simulator's families are not real play's, and the model now follows real play.
+- **A draw that cannot be flown is left out.** Clip 10's shot at 20.81 s (the smash given to the wrong hitter) has a launch speed uncertain by about 2000 m/s. One of its 200 draws left the racket too fast for the flight's integration and spoilt every average it was in.
+- **What would help most now** is more named rallies, above all from other venues and with blocks and drives.
 
 ## Decisions
 
-- **The model learns from simulation and is tested on your shots.** The 74 real shots are too few to learn from and test on at once. Learning from them would also leave nothing honest to test on. The real score therefore measures how far the simulated families are from real play. If it is low, the next step is more labelled real rallies, which the labeller already records.
+- **The model learns from simulation, then from your shots, and each clip is tested by a model that never saw it.** The 61 real shots are too few to learn names from alone. They are enough to correct the simulator's model: how sure it is, and where its families sit. Leaving one clip out at a time keeps the test honest. More labelled rallies, which the labeller already records, would do more.
 - **The same honesty as Phase 3.** A name that the measurements cannot settle comes as two names with their probabilities, never a guess. The far court from a low corner camera is measured worst, and its probabilities spread accordingly.
 - **The serve comes from the rally, not the model.** The first hit of a rally is the serve.
 - **"other" is never given by the model.** It is for a person to use.
@@ -127,8 +166,8 @@ A "push or lift" shot is counted under the name given when that name is either, 
 
 ## Proposed gate (for you to agree)
 
-- **Held-out simulation:** macro-F1 within 0.05 of what the true facts give, and calibrated as in 5c.
-- **Your shots:** macro-F1 of at least 0.70 on the shots whose hit was found, both cameras pooled, with each camera reported.
+- **Held-out simulation:** macro-F1 within 0.05 of what the true facts give, and calibrated as in 5c. The simulator's model meets it (5c), apart from drive in the stressed world (3 of 4).
+- **Your shots:** macro-F1 of at least 0.70 on the shots whose hit was found, both cameras pooled, with each camera reported. Not met: 0.65 (0.53–0.72), each clip named by a model learnt without it (5e).
 
 ## Not in this phase
 

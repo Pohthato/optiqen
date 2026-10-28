@@ -13,6 +13,7 @@ import numpy as np
 from analyse_rally import find_players, main
 from evaluation.hits_benchmark import SIZE, Scenario, simulate
 from geometry.skeleton import JOINTS
+from shot_names import Launch
 from simulation.people import model_pose, playing, skeleton
 from test_find_hits import shuttle_doc, track_doc
 
@@ -76,6 +77,9 @@ class AnalyseRallyTests(unittest.TestCase):
             self.assertTrue({"hitMs", "hitter", "contact", "speedMS", "elevationDeg", "apexM", "net", "flightMs", "landing", "path", "name"} <= set(shot))
             self.assertGreater(len(shot["path"]), 2)
             self.assertAlmostEqual(sum(shot["name"]["p"].values()), 1.0, delta=0.01)
+            launch = Launch.entry(shot, self.result["summary"]["terminalVelocity"])
+            np.testing.assert_allclose(launch.state[:3], shot["contact"], atol=1e-3)
+            self.assertGreater(float(np.linalg.eigvalsh(launch.covariance).min()), 0.0)
         self.assertEqual(shots[0]["name"], {"call": "serve", "p": {"serve": 1.0}})
         self.assertEqual(sum(self.result["summary"]["names"].values()), len(shots))
         last = shots[-1]["landing"]

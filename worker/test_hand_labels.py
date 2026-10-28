@@ -19,10 +19,16 @@ Serve time(near player serve):0.5
 """
 
 
+def named(call):
+    """A shot's name as the analysis gives it: alone at 0.9, or two names at 0.6 and 0.4."""
+    first, *second = call.split(" or ")
+    return {"call": call, "p": {first: 0.6, second[0]: 0.4} if second else {first: 0.9, "other": 0.1}}
+
+
 def analysis(contacts, shots):
     return {
         "events": [{"type": "contact", "timeMs": t, "evidence": "flights"} for t in contacts],
-        "shots": [{"hitMs": t, "hitter": who, **({"name": {"p": {name: 0.9, "other": 0.1}}} if name else {})} for t, who, name in shots],
+        "shots": [{"shot": n, "hitMs": t, "hitter": who, **({"name": named(call)} if call else {})} for n, (t, who, call) in enumerate(shots, start=1)],
     }
 
 
@@ -56,7 +62,7 @@ class ScoreTests(unittest.TestCase):
     def test_hits_hitters_and_names_against_the_labels(self):
         found = analysis(
             [1150, 1850, 2600, 3300, 5500, 6400, 7200, 9000],
-            [(1150, "far", "serve"), (1850, "near", "net"), (2600, "far", "drop"), (3300, "near", "lift"), (5500, "near", "net"), (7200, "far", "push"), (9000, "near", "clear")],
+            [(1150, "far", "serve"), (1850, "near", "net"), (2600, "far", "drop or net"), (3300, "near", "lift"), (5500, "near", "net"), (7200, "far", "push"), (9000, "near", "clear")],
         )
         report = summarise(*match_clip(self.hits, found))
         self.assertEqual((report["labelled"], report["found"], report["matched"]), (8, 8, 7))
@@ -74,6 +80,11 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(names["confusion"]["lift"], {"lift": 1})
         self.assertEqual(names["confusion"]["net"], {"net": 1, "drop": 1})
         self.assertLess(names["endToEnd"]["macroF1"], names["found"]["macroF1"])
+        low, high = names["found"]["interval"]
+        self.assertTrue(low <= names["found"]["macroF1"] <= high)
+        # The model's own calls, the serve left out: net, lift, net (for the block) and push alone,
+        # each said at 0.9; "drop or net" for the chop net has its label among the two.
+        self.assertEqual(names["calls"], {"alone": {"given": 4, "right": 3, "meanP": 0.9}, "twoNames": {"given": 1, "labelAmong": 1}})
 
     def test_no_names_in_the_analysis_scores_hits_only(self):
         found = analysis([1170, 1820], [(1170, "far", None), (1820, "near", None)])

@@ -27,7 +27,7 @@ from typing import Any
 import numpy as np
 
 from evaluation.golden import GOLDEN_SHOT_LABELS
-from evaluation.metrics import macro_f1, match_events
+from evaluation.metrics import macro_f1, macro_f1_interval, match_events
 
 TOLERANCE_MS = 250.0  # hits timed by eye, some with the racket blurred or hidden
 SHOT_WITHIN_MS = 100.0
@@ -97,6 +97,11 @@ def _top_name(shot: dict[str, Any] | None) -> str | None:
     return max(name["p"], key=name["p"].get) if name else None
 
 
+def _sureness(shot: dict[str, Any] | None) -> float | None:
+    name = (shot or {}).get("name")
+    return max(name["p"].values()) if name else None
+
+
 def match_clip(hits: list[LabelledHit], analysis: dict[str, Any], tolerance_ms: float = TOLERANCE_MS) -> tuple[list[dict], list[dict]]:
     """Each labelled hit with what was found for it, and the found hits that match none."""
     shots = analysis.get("shots") or []
@@ -115,8 +120,11 @@ def match_clip(hits: list[LabelledHit], analysis: dict[str, Any], tolerance_ms: 
         rows.append({
             "timeMs": hit.time_ms, "hitter": hit.hitter, "name": hit.name, "labels": list(hit.labels),
             "foundMs": None if event is None else event["timeMs"],
+            "shot": None if shot is None else shot.get("shot"),
             "foundHitter": None if shot is None else shot["hitter"],
             "predicted": _top_name(shot),
+            "call": (shot or {}).get("name", {}).get("call"),
+            "sure": _sureness(shot),
         })
     matched = set(by_truth.values())
     extras = []
@@ -137,7 +145,23 @@ def _names(rows: list[dict], end_to_end: bool) -> dict[str, Any] | None:
     truth = [row["predicted"] if row["predicted"] in row["labels"] else row["labels"][0] for row in scored]
     predicted = [row["predicted"] or "none" for row in scored]
     result = macro_f1(truth, predicted, GOLDEN_SHOT_LABELS)
-    return {"shots": len(scored), "right": sum(t == p for t, p in zip(truth, predicted)), "macroF1": round(result["macroF1"], 4), "perLabel": result["perLabel"]}
+    low, high = macro_f1_interval(truth, predicted, GOLDEN_SHOT_LABELS)
+    return {
+        "shots": len(scored), "right": sum(t == p for t, p in zip(truth, predicted)),
+        "macroF1": round(result["macroF1"], 4), "interval": [round(low, 3), round(high, 3)], "perLabel": result["perLabel"],
+    }
+
+
+def _calls(rows: list[dict]) -> dict[str, Any]:
+    """How the model's calls fared (the rally's serves left out): a name given alone, against how
+    sure it said it was, and two names, against whether the label was one of them."""
+    called = [row for row in rows if row["labels"] and row["call"] not in (None, "serve")]
+    alone = [row for row in called if " or " not in row["call"]]
+    two = [row for row in called if " or " in row["call"]]
+    return {
+        "alone": {"given": len(alone), "right": sum(row["call"] in row["labels"] for row in alone), "meanP": round(float(np.mean([row["sure"] for row in alone])), 3) if alone else None},
+        "twoNames": {"given": len(two), "labelAmong": sum(bool(set(row["call"].split(" or ")) & set(row["labels"])) for row in two)},
+    }
 
 
 def summarise(rows: list[dict], extras: list[dict]) -> dict[str, Any]:
@@ -163,7 +187,7 @@ def summarise(rows: list[dict], extras: list[dict]) -> dict[str, Any]:
         "missed": [row for row in rows if row["foundMs"] is None],
         "extra": extras,
         "wrongHitter": [row for row in known if row["foundHitter"] != row["hitter"]],
-        "names": None if not named else {"found": _names(rows, False), "endToEnd": _names(rows, True), "confusion": confusion},
+        "names": None if not named else {"found": _names(rows, False), "endToEnd": _names(rows, True), "confusion": confusion, "calls": _calls(rows)},
     }
 
 
@@ -174,8 +198,11 @@ def _line(title: str, report: dict[str, Any]) -> str:
     if timing:
         text += f", timing {timing['medianAbs']:.0f} / {timing['maxAbs']:.0f} ms, hitter {report['hitterRight']} of {report['hitterKnown']}"
     if report["names"]:
-        found, end = report["names"]["found"], report["names"]["endToEnd"]
-        text += f", names {found['right']} of {found['shots']} (macro-F1 {found['macroF1']:.2f}; end to end {end['macroF1']:.2f})"
+        found, end, alone = report["names"]["found"], report["names"]["endToEnd"], report["names"]["calls"]["alone"]
+        low, high = found["interval"]
+        text += f", names {found['right']} of {found['shots']} (macro-F1 {found['macroF1']:.2f}, {low:.2f}-{high:.2f}; end to end {end['macroF1']:.2f})"
+        if alone["given"]:
+            text += f", alone right {alone['right']} of {alone['given']} at mean p {alone['meanP']:.2f}"
     for row in report["missed"]:
         text += f"\n  missed {row['timeMs'] / 1000:6.2f} s {row['hitter']:4s} {row['name']}"
     for row in report["extra"]:
