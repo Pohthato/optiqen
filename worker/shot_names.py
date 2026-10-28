@@ -19,18 +19,29 @@ as they can show (`shot_names.json`, written by `... adapt`; see `learn`): the s
 families are not real play's. A shot's chance of each name is the model's averaged over the
 draws, so it is as unsure as the measurement. The likeliest name is given alone when it is at
 least `SURE`; otherwise the two likeliest are.
+
+Then the details a coach adds, each with its chance, said when it is at least `SURE` either way
+and "too close to call" between:
+- Cross or straight: cross when the shot ended on the other side of the court's centre line from
+  where it was hit, at least `CROSS_M` across from it; over the same draws of the flight.
+- Backhand or forehand: backhand when the contact was on the side of the hips away from the
+  racket arm. Each shot's arm is the one whose wrist was nearer the contact (body.hit_body), and
+  a pose can take one wrist for the other, so the racket arm is only as sure as the player's
+  shots agree on it: right with the share of their shots hit with the right (`racket_arms`).
+- From a jump or not: the lower foot more than `JUMP_M` off the floor at contact.
 """
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
 from scipy.optimize import minimize
-from scipy.special import logsumexp, softmax
+from scipy.special import logsumexp, ndtr, softmax
 
-from geometry.court_model import NET_Y_M
+from body import BodyFacts
+from geometry.court_model import NET_Y_M, SINGLES_WIDTH_M
 from geometry.shuttle_physics import FEATHER_TERMINAL_VELOCITY
 from shots import MAX_FLIGHT_S, PATH_STEP_S, Estimate, ShotFacts, _integrate
 
@@ -41,12 +52,16 @@ CHUNK = 2000  # launches flown at once (each keeps its whole path in memory)
 SURE = 0.8
 MODEL_PATH = Path(__file__).with_name("shot_names.json")
 SIMULATED_PATH = Path(__file__).with_name("shot_names_simulated.json")
+CROSS_M = SINGLES_WIDTH_M / 4  # so a shot from the middle that drifts over the line is not cross
+JUMP_M = 0.15  # past what an ankle rises on tiptoe, or in a split step's hop
+TOO_CLOSE = "too close to call"
 
 
-def facts(contact, velocity, near, duration_s, terminal_velocity) -> np.ndarray:
-    """The facts (B, len(FACTS)) of B launches: contacts and velocities (B, 3), each flown until
-    its `duration_s` (inf: until the floor) or the floor, whichever comes first. `near` (the
-    hitter's half), `duration_s` and `terminal_velocity` are one for all or one per launch."""
+def facts(contact, velocity, near, duration_s, terminal_velocity) -> tuple[np.ndarray, np.ndarray]:
+    """The facts (B, len(FACTS)) of B launches, and whether each went cross-court (B: 1 or 0, NaN
+    for one that could not be flown): contacts and velocities (B, 3), each flown until its
+    `duration_s` (inf: until the floor) or the floor, whichever comes first. `near` (the hitter's
+    half), `duration_s` and `terminal_velocity` are one for all or one per launch."""
     p = np.asarray(contact, dtype=float).reshape(-1, 3)
     v = np.asarray(velocity, dtype=float).reshape(-1, 3)
     count = len(p)
@@ -54,6 +69,7 @@ def facts(contact, velocity, near, duration_s, terminal_velocity) -> np.ndarray:
     durations = np.minimum(np.broadcast_to(np.asarray(duration_s, dtype=float), (count,)), MAX_FLIGHT_S)
     drag = np.broadcast_to(np.asarray(terminal_velocity, dtype=float), (count,))
     out = np.empty((count, len(FACTS)))
+    cross = np.empty(count)
     for start in range(0, count, CHUNK):
         rows = slice(start, start + CHUNK)
         span = float(durations[rows].max())
@@ -83,12 +99,15 @@ def facts(contact, velocity, near, duration_s, terminal_velocity) -> np.ndarray:
             end[:, 2],
             (i + f) * step,
         ])
-    return out
+        middle = SINGLES_WIDTH_M / 2
+        across = ((pr[:, 0] - middle) * (end[:, 0] - middle) < 0) & (np.abs(end[:, 0] - pr[:, 0]) >= CROSS_M)
+        cross[rows] = np.where(np.isfinite(end[:, 0]), across, np.nan)
+    return out, cross
 
 
-def true_facts(rallies) -> tuple[list[str], np.ndarray]:
+def true_facts(rallies) -> tuple[list[str], np.ndarray, np.ndarray]:
     """Every shot of simulated rallies (simulation.rally.Rally), serves included: its name, and its
-    facts from the true flight, all flown at once."""
+    facts and whether it went cross-court from the true flight, all flown at once."""
     names, p, v, near, durations, drag = [], [], [], [], [], []
     for rally in rallies:
         for n, (contact, flight) in enumerate(zip(rally.contacts, rally.flights)):
@@ -98,7 +117,7 @@ def true_facts(rallies) -> tuple[list[str], np.ndarray]:
             near.append(contact.hitter == "near")
             durations.append(flight.end_time - flight.start_time if n + 1 < len(rally.flights) else np.inf)  # the last one lands
             drag.append(rally.terminal_velocity)
-    return names, facts(p, v, near, durations, drag) if names else np.empty((0, len(FACTS)))
+    return (names, *facts(p, v, near, durations, drag)) if names else (names, np.empty((0, len(FACTS))), np.empty(0))
 
 
 def _duration_s(landed: bool, flight_ms: float) -> float:
@@ -133,12 +152,12 @@ class Launch:
 
 def nominal_facts(launch: Launch) -> np.ndarray:
     drag = launch.drag.value if launch.drag is not None else FEATHER_TERMINAL_VELOCITY
-    return facts(launch.state[:3], launch.state[3:], launch.near, launch.duration_s, drag)[0]
+    return facts(launch.state[:3], launch.state[3:], launch.near, launch.duration_s, drag)[0][0]
 
 
-def measured_facts(launch: Launch, rng: np.random.Generator, draws: int = DRAWS) -> np.ndarray:
+def measured_facts(launch: Launch, rng: np.random.Generator, draws: int = DRAWS) -> tuple[np.ndarray, np.ndarray]:
     """The facts of `draws` flights drawn from a measured launch and its uncertainty, each flown
-    with its own draw of the shuttle's drag."""
+    with its own draw of the shuttle's drag, and whether each went cross-court."""
     launches = rng.multivariate_normal(launch.state, launch.covariance, size=draws, method="eigh")
     drag = launch.drag
     drags = FEATHER_TERMINAL_VELOCITY if drag is None else np.maximum(rng.normal(drag.value, drag.sigma, draws), 1.0)
@@ -146,9 +165,65 @@ def measured_facts(launch: Launch, rng: np.random.Generator, draws: int = DRAWS)
 
 
 @dataclass(frozen=True)
+class Detail:
+    call: str  # "cross" or "straight", "backhand" or "forehand", "jump" or "no jump", "right" or "left", or TOO_CLOSE
+    p: float  # the chance of the first of the two
+
+
+def detail(p: float, first: str, second: str) -> Detail:
+    """The call follows the chance as given, to three places."""
+    p = round(float(p), 3)
+    return Detail(first if p >= SURE else second if 1 - p >= SURE else TOO_CLOSE, p)
+
+
+def _beyond(fact: Estimate, limit: float) -> float:
+    """The chance that a measured fact is truly past `limit`."""
+    return float(ndtr((fact.value - limit) / max(fact.sigma, 1e-9)))
+
+
+def racket_arms(bodies: list[BodyFacts | None]) -> dict[str, Detail | None]:
+    """Each half's racket arm, right with the share of its player's shots hit with the right arm
+    (None: no body seen)."""
+    arms = {}
+    for half in ("near", "far"):
+        hit = [body.arm for body in bodies if body is not None and body.hitter == half]
+        arms[half] = detail(hit.count("right") / len(hit), "right", "left") if hit else None
+    return arms
+
+
+def backhand(body: BodyFacts | None, racket_arm: Detail | None) -> Detail | None:
+    """None when the body or the racket arm is not known. The body's contact aside is towards the
+    arm whose wrist was nearer it; here it is turned to the hips' right."""
+    if body is None or racket_arm is None:
+        return None
+    right = Estimate((1.0 if body.arm == "right" else -1.0) * body.aside_m.value, body.aside_m.sigma)
+    left = _beyond(Estimate(-right.value, right.sigma), 0.0)
+    return detail(racket_arm.p * left + (1.0 - racket_arm.p) * (1.0 - left), "backhand", "forehand")
+
+
+def jump(body: BodyFacts | None) -> Detail | None:
+    return None if body is None else detail(_beyond(body.off_floor_m, JUMP_M), "jump", "no jump")
+
+
+@dataclass(frozen=True)
 class ShotName:
     call: str  # a name, or "drop or smash" when neither is sure enough alone
     p: dict[str, float]  # each name's chance
+    cross: Detail | None = None  # None for a serve: the rules send it cross
+    backhand: Detail | None = None  # None with the body or the racket arm unknown
+    jump: Detail | None = None
+
+    @property
+    def said(self) -> str:
+        """The name as a coach says it, with each detail that is sure: "cross jump smash"."""
+        sure = [d.call for d in (self.cross, self.backhand, self.jump) if d is not None and d.call in ("cross", "backhand", "jump")]
+        return " ".join([*sure, self.call])
+
+    def entry(self) -> dict:
+        """As an analysis reports it (analyse_rally): the call with each family's chance, the name as
+        a coach says it, and each detail's call and chance (None: not known)."""
+        details = {"cross": self.cross, "backhand": self.backhand, "jump": self.jump}
+        return {"call": self.call, "p": self.p, "said": self.said, **{key: None if d is None else asdict(d) for key, d in details.items()}}
 
 
 @dataclass(frozen=True)
@@ -235,9 +310,12 @@ def call_of(p: np.ndarray) -> str:
     return NAMES[first] if p[first] >= SURE else f"{NAMES[first]} or {NAMES[second]}"
 
 
-def name_shot(launch: Launch, serve: bool, model: Model, rng: np.random.Generator) -> ShotName:
-    """A measured shot's name. A serve is named by the rally, not the model."""
+def name_shot(launch: Launch, serve: bool, model: Model, rng: np.random.Generator, body: BodyFacts | None = None, racket_arm: Detail | None = None) -> ShotName:
+    """A measured shot's name and details, from its launch and the hitter's body at contact. A
+    serve is named by the rally, not the model."""
     if serve:
-        return ShotName("serve", {"serve": 1.0})
-    p = chances(model, measured_facts(launch, rng))
-    return ShotName(call_of(p), {name: round(float(chance), 3) for name, chance in zip(NAMES, p)})
+        return ShotName("serve", {"serve": 1.0}, None, backhand(body, racket_arm), jump(body))
+    drawn, cross = measured_facts(launch, rng)
+    p = chances(model, drawn)
+    names = {name: round(float(chance), 3) for name, chance in zip(NAMES, p)}
+    return ShotName(call_of(p), names, detail(np.nanmean(cross), "cross", "straight"), backhand(body, racket_arm), jump(body))

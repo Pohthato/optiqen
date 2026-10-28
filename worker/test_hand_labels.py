@@ -86,6 +86,23 @@ class ScoreTests(unittest.TestCase):
         # each said at 0.9; "drop or net" for the chop net has its label among the two.
         self.assertEqual(names["calls"], {"alone": {"given": 4, "right": 3, "meanP": 0.9}, "twoNames": {"given": 1, "labelAmong": 1}})
 
+    def test_details_on_the_hits_marked_with_them_and_how_often_said_on_the_rest(self):
+        found = analysis([1170, 1820, 3380, 5460, 6400, 7260], [(1170, "far", "serve"), (1820, "near", "net"), (3380, "near", "push"), (5460, "near", "block"), (6400, "far", "drop"), (7260, "near", "push")])
+        said = {1820: ("cross", "forehand"), 3380: ("cross", None), 5460: ("too close to call", "backhand"), 6400: ("straight", "backhand"), 7260: ("straight", "forehand")}
+        for shot in found["shots"]:
+            if shot["hitMs"] in said:
+                cross, hand = said[shot["hitMs"]]
+                shot["name"]["cross"] = {"call": cross, "p": 0.5}
+                shot["name"]["backhand"] = None if hand is None else {"call": hand, "p": 0.5}
+        details = summarise(*match_clip(self.hits, found))["details"]
+        # Marked cross: 3.38 s (cross push/lift), 5.46 s (cross block), 6.4 s (backhand cut off cross).
+        self.assertEqual(details["cross"]["marked"], {"labelled": 3, "shots": 3, "calls": {"cross": 1, "straight": 1, "too close to call": 1}})
+        # The rest, the serve left out, are not taken as straight: 1.82 s was said to be cross.
+        self.assertEqual(details["cross"]["unmarked"], {"shots": 2, "said": 1, "known": 2})
+        self.assertEqual(details["backhand"]["marked"], {"labelled": 1, "shots": 1, "calls": {"backhand": 1}})
+        self.assertEqual(details["backhand"]["unmarked"], {"shots": 4, "said": 1, "known": 3})  # 3.38 s had no body
+        self.assertEqual(details["jump"]["marked"]["shots"], 0)
+
     def test_no_names_in_the_analysis_scores_hits_only(self):
         found = analysis([1170, 1820], [(1170, "far", None), (1820, "near", None)])
         report = summarise(*match_clip(self.hits, found))

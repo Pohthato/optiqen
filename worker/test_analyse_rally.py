@@ -80,7 +80,10 @@ class AnalyseRallyTests(unittest.TestCase):
             launch = Launch.entry(shot, self.result["summary"]["terminalVelocity"])
             np.testing.assert_allclose(launch.state[:3], shot["contact"], atol=1e-3)
             self.assertGreater(float(np.linalg.eigvalsh(launch.covariance).min()), 0.0)
-        self.assertEqual(shots[0]["name"], {"call": "serve", "p": {"serve": 1.0}})
+        self.assertEqual((shots[0]["name"]["call"], shots[0]["name"]["p"], shots[0]["name"]["cross"]), ("serve", {"serve": 1.0}, None))
+        for shot in shots[1:]:
+            self.assertIn(shot["name"]["cross"]["call"], ("cross", "straight", "too close to call"))
+            self.assertTrue(shot["name"]["said"].endswith(shot["name"]["call"]))
         self.assertEqual(sum(self.result["summary"]["names"].values()), len(shots))
         last = shots[-1]["landing"]
         self.assertIn(last["call"], ("in", "out", "too close to call"))
@@ -108,6 +111,13 @@ class AnalyseRallyTests(unittest.TestCase):
             self.assertTrue(0.0 <= body["elbowDeg"]["value"] <= 180.0)
             self.assertTrue(0.4 <= body["hipsHeightM"]["value"] <= 1.3)
         self.assertTrue(any(shot["body"]["ready"] is not None for shot in with_body[1:]))
+        # The simulated players are right-handed and play every shot forehand.
+        self.assertEqual([players[half]["racketArm"] for half in ("near", "far")], [{"call": "right", "p": 1.0}] * 2)
+        self.assertFalse(any(shot["name"]["backhand"]["call"] == "backhand" for shot in with_body))
+        truth = {round(c.time * 1000.0): c.position[2] > 2.7 for c in SIM.clip.rally.contacts}
+        for shot in with_body:
+            jumped = min(truth.items(), key=lambda item: abs(item[0] - shot["hitMs"]))[1]
+            self.assertNotEqual(shot["name"]["jump"]["call"], "no jump" if jumped else "jump", shot["hitMs"])
         misses = []
         for shot in shots:
             for half in ("near", "far"):

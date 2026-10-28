@@ -8,8 +8,8 @@ saw. Testing: the hits benchmark's scenarios (every view at 30 and 60 fps, with 
 without, jitter, dropout, false detections, neighbouring courts), from seeds the learning never
 uses (from TEST_FIRST_SEED; the first sixty are the hits benchmark's held-out rallies), through
 the real hit finding and flight fitting. Each shot matched to a true hit (within ±33 ms) keeps its
-true name and facts, its measured facts, and draws of them from their uncertainty. Serves are
-left out: the rally names them.
+true name and facts, its measured facts, and draws of them from their uncertainty, and whether it
+went cross-court, truly and over the draws. Serves are left out: the rally names them.
 
 Learning from real play: shots named by hand (evaluation.hand_labels) move the simulated model as
 far as they can show (shot_names.learn), held towards it. Each clip is named by a model learnt
@@ -39,7 +39,7 @@ from evaluation.hand_labels import LabelledHit, match_clip, read_labels, summari
 from evaluation.hits_benchmark import TOLERANCE_MS, simulate, standard_scenarios
 from evaluation.metrics import macro_f1, macro_f1_interval, match_events
 from hits import find_hits
-from shot_names import MODEL_PATH, NAMES, SIMULATED_PATH, Launch, Model, call_of, chances, learn, measured_facts, name_shot, nominal_facts, true_facts
+from shot_names import MODEL_PATH, NAMES, SIMULATED_PATH, TOO_CLOSE, Detail, Launch, Model, call_of, chances, detail, learn, measured_facts, name_shot, nominal_facts, true_facts
 from shots import rally_shots
 from simulation.rally import random_rally
 
@@ -63,7 +63,7 @@ def learning_set(rallies: int, first_seed: int = 0, workers: int = 1) -> tuple[l
             built = list(pool.map(_learning_rally, seeds, chunksize=16))
     else:
         built = [_learning_rally(seed) for seed in seeds]
-    names, rows = true_facts(built)
+    names, rows, _ = true_facts(built)
     keep = [k for k, name in enumerate(names) if name != "serve"]
     return [names[k] for k in keep], rows[keep]
 
@@ -87,17 +87,19 @@ def measure_scenario(scenario) -> list[dict[str, Any]]:
     sim = simulate(scenario)
     analysis = find_hits(sim.track, sim.times_ms, sim.cameras, sim.onsets)
     shots = rally_shots(analysis, sim.track, sim.times_ms, sim.cameras)
-    names, truth = true_facts([sim.clip.rally])
+    names, truth, crossed = true_facts([sim.clip.rally])
     match = match_events([shot.hit_ms for shot in shots], [c.time * 1000.0 for c in sim.clip.rally.contacts], TOLERANCE_MS)
     rng = np.random.default_rng(scenario.seed)
-    return [
-        {
-            "name": names[t], "truth": truth[t], "nominal": nominal_facts(Launch.of(shots[p])), "draws": measured_facts(Launch.of(shots[p]), rng),
-            "view": scenario.view, "fps": scenario.fps, "seed": scenario.seed,
-        }
-        for p, t in match.pairs
-        if names[t] != "serve"
-    ]
+    rows = []
+    for p, t in match.pairs:
+        if names[t] == "serve":
+            continue
+        draws, cross = measured_facts(Launch.of(shots[p]), rng)
+        rows.append({
+            "name": names[t], "truth": truth[t], "nominal": nominal_facts(Launch.of(shots[p])), "draws": draws,
+            "cross": crossed[t], "crossDrawn": float(np.nanmean(cross)), "view": scenario.view, "fps": scenario.fps, "seed": scenario.seed,
+        })
+    return rows
 
 
 def measure(scenarios, workers: int = 1) -> dict[str, np.ndarray]:
@@ -107,7 +109,7 @@ def measure(scenarios, workers: int = 1) -> dict[str, np.ndarray]:
     else:
         found = [measure_scenario(s) for s in scenarios]
     rows = [row for scenario in found for row in scenario]
-    return {key: np.array([row[key] for row in rows]) for key in ("name", "truth", "nominal", "draws", "view", "fps", "seed")}
+    return {key: np.array([row[key] for row in rows]) for key in ("name", "truth", "nominal", "draws", "cross", "crossDrawn", "view", "fps", "seed")}
 
 
 def _f1(names: list[str], p: np.ndarray, seeds: np.ndarray) -> dict[str, float]:
@@ -116,6 +118,18 @@ def _f1(names: list[str], p: np.ndarray, seeds: np.ndarray) -> dict[str, float]:
     calls = [NAMES[k] for k in p.argmax(axis=1)]
     low, high = macro_f1_interval(names, calls, NAMES, seeds)
     return {"value": round(macro_f1(names, calls, NAMES)["macroF1"], 4), "low": round(low, 3), "high": round(high, 3)}
+
+
+def score_cross(held_out: dict[str, np.ndarray]) -> dict[str, Any]:
+    """Cross or straight over the draws against the true flight: per call, how often it was given,
+    the chance of cross it said on average, and the share truly cross."""
+    truth, p = held_out["cross"].astype(bool), held_out["crossDrawn"]
+    calls = np.array([detail(chance, "cross", "straight").call for chance in p])
+    out: dict[str, Any] = {"shots": len(truth), "trulyCross": int(truth.sum())}
+    for call in ("cross", "straight", TOO_CLOSE):
+        given = calls == call
+        out[call] = {"given": int(given.sum()), "meanP": round(float(p[given].mean()), 3) if given.any() else None, "trulyCross": int(truth[given].sum())}
+    return out
 
 
 def score(model: Model, held_out: dict[str, np.ndarray]) -> dict[str, Any]:
@@ -168,7 +182,7 @@ def real_set(labelled: dict[str, list[LabelledHit]], analyses: dict[str, dict]) 
         for row in match_clip(labelled[clip], analysis)[0]:
             if row["shot"] is not None and row["labels"] and "serve" not in row["labels"]:
                 launch = Launch.entry(analysis["shots"][row["shot"] - 1], drag)
-                rows.append({"clip": clip, "names": tuple(row["labels"]), "nominal": nominal_facts(launch), "draws": measured_facts(launch, rng)})
+                rows.append({"clip": clip, "names": tuple(row["labels"]), "nominal": nominal_facts(launch), "draws": measured_facts(launch, rng)[0]})
     return rows
 
 
@@ -195,13 +209,14 @@ def choose_hold(prior: Model, rows: list[dict[str, Any]], clips: list[str]) -> t
 
 
 def named_again(analysis: dict[str, Any], model: Model) -> dict[str, Any]:
-    """The analysis with every shot named by `model`."""
+    """The analysis with every shot named by `model`, the details from the hitter's body kept."""
     rng = np.random.default_rng(0)
     drag = analysis["summary"]["terminalVelocity"]
     shots = []
     for shot in analysis["shots"]:
         name = name_shot(Launch.entry(shot, drag), shot["serve"], model, rng)
-        shots.append({**shot, "name": {"call": name.call, "p": name.p}})
+        kept = {key: Detail(**shot["name"][key]) if shot["name"].get(key) else None for key in ("backhand", "jump")}
+        shots.append({**shot, "name": replace(name, **kept).entry()})
     return {**analysis, "shots": shots}
 
 
@@ -275,7 +290,7 @@ def main(argv: list[str] | None = None) -> int:
         print(text)
     else:
         model = Model.load(args.model)
-        report = {path.name: score(model, dict(np.load(path))) for path in args.held_out}
+        report = {path.name: {**score(model, dict(np.load(path))), "crossOrStraight": score_cross(dict(np.load(path)))} for path in args.held_out}
         text = json.dumps(report, indent=2)
         if args.out:
             args.out.write_text(text, encoding="utf-8")

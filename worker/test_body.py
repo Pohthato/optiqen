@@ -174,6 +174,12 @@ class BenchmarkTests(unittest.TestCase):
             limit = 25.0 if name.endswith("_deg") else 0.25
             self.assertLess(np.median(errors), limit, name)
         self.assertLess(abs(result["reach"][0]), 0.05)
+        # The simulated player is right-handed; a detail said is the one the true body gives.
+        self.assertEqual(result["racketArm"], "right")
+        self.assertEqual(len(result["details"]), len(result["facts"]["elbow_deg"]))
+        for detail in result["details"]:
+            for truth, said, _ in detail.values():
+                self.assertIn(said, (truth, "too close to call"))
 
 
 if __name__ == "__main__":

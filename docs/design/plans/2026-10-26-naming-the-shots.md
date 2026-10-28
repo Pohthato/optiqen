@@ -156,11 +156,69 @@ The other "push or lift" shot is counted under the name given.
 - **A draw that cannot be flown is left out.** Clip 10's shot at 20.81 s (the smash given to the wrong hitter) has a launch speed uncertain by about 2000 m/s. One of its 200 draws left the racket too fast for the flight's integration and spoilt every average it was in.
 - **What would help most now** is more named rallies, above all from other venues and with blocks and drives.
 
+### 5f: cross or straight, forehand or backhand, from a jump
+
+Each shot now has three details. Each comes with its chance, and is said when that chance is at least 0.8 either way; between, it is "too close to call".
+
+- **Cross:** the shot ended on the other side of the court's centre line from where it was hit, at least 1.3 m across from it (a quarter of the singles width, so a shot from the middle that drifts over the line does not count). The chance is the share of the flight's 200 draws that went cross: the same draws the family is named over.
+- **Backhand:** the contact was on the side of the hips away from the racket arm. A shot's arm is the one whose wrist was nearer the contact, and a pose can take one wrist for the other. So the racket arm is only as sure as the player's shots agree on it: right with the share of their shots hit with the right arm. The backhand's chance takes both arms, each at that share.
+- **Jump:** the lower foot more than 0.15 m off the floor at contact. That is higher than an ankle rises on tiptoe or in a split step's hop.
+
+The one command writes them into each shot's name, with the name as a coach would say it, the sure details first ("cross backhand lift"). The overlay and the diagram show that name, and the summary gives each player's racket arm.
+
+**Simulation: backhand and jump** (`python -m evaluation.body_benchmark --seeds 30 --first-seed 100`). These are thirty held-out rallies, every view, both halves, at 30 and 60 fps. The first three rallies, 4c's, have no contact high enough for the simulator to jump for, so thirty are used. The truth is the same call on the true body at the exact moment of contact.
+
+| Detail, truth | Hits at 30 fps | Said | Hits at 60 fps | Said |
+| --- | --- | --- | --- | --- |
+| Jump | 24 | jump 24 | 24 | jump 24 |
+| No jump | 444 | no jump 442, too close to call 2 | 444 | no jump 442, too close to call 2 |
+| Backhand | 6 | too close to call 6 | 6 | backhand 2, too close to call 4 |
+| Forehand | 444 | forehand 433, too close to call 11 | 444 | forehand 437, too close to call 7 |
+| Racket arm unsure on the true body | 18 | too close to call 18 | 18 | too close to call 18 |
+
+- **Neither detail is ever said wrong.** Every jump said was one, and so was every backhand and forehand.
+- **The simulated players are right-handed, and nearly every contact is on their racket side.** The six true backhands are one contact in each of two rallies, seen from the three views. The simulator has no real backhand strokes and no left-handers, so this tests forehands not being called backhand far more than it tests backhands.
+- **A few shots are not enough to be sure of the racket arm.** Even on the true body, the left wrist is sometimes nearer the contact. For two players with three hits each, one hit went that way, so their arm is right at only 0.67 and all their backhands are too close to call. The arm came out left for no player.
+- **The body's facts are as sure as they say.** The lower foot off the floor and the contact aside are each within twice their stated uncertainty for 98 to 99 % of hits.
+
+**Simulation: cross** (`measure`, then `score`, as in 5c). This uses the same 120 held-out scenarios and the same shots, serves left out. The truth is the true flight's contact and end.
+
+| World | Shots | Truly cross | Said cross | Said straight | Too close to call |
+| --- | --- | --- | --- | --- | --- |
+| Standard | 459 | 162 | 137, all cross (stated 0.98) | 268, 267 straight (stated 0.99) | 54, 24 cross (stated 0.47) |
+| Stressed | 442 | 158 | 126, 123 cross (stated 0.98) | 260, 254 straight (stated 0.99) | 56, 29 cross (stated 0.53) |
+
+- **Cross is right about as often as it says.** In the stressed world, shots said straight were cross 6 times against the 3 or 4 their stated chances allow; everywhere else the calls match their chances.
+- **About one shot in eight is too close to call**, most of them from the corner and the side. There the line of sight runs across the court, so where the shuttle is across it is measured worst.
+
+**The 5f gate.** Simulation: each detail is right within its stated uncertainty. Met for cross, jump and forehand; backhand strokes are not in the simulator. Your clips: cross 12 of 14 found, backhand 4 of 7, jump 1 of 1 with a body.
+
+**Your clips.** Your names mark 17 cross shots, 7 backhands and 3 jumps. A name without the word is not taken as straight or forehand, so for the other shots only the number of times the app said the detail is given. Serves are left out: a serve goes cross by the rules.
+
+| Detail | Marked | Found as a shot | What the app said | Said on the other found shots |
+| --- | --- | --- | --- | --- |
+| Cross | 17 | 14 | cross 12, straight 2 | cross on 5 of 48 |
+| Backhand | 7 | 7 | backhand 4, forehand 2, too close to call 1 | backhand on 5 of 46 with the body seen |
+| Jump | 3 | 3 | jump 1; no body at the hit 2 | jump on 1 of 52 with the body seen |
+
+- **Cross is right on 12 of the 14.** The two said straight:
+  - Clip 7's cross drive at 7.74 s went 2.7 m across but stayed on one side of the centre line. It was hit from 6.3 m, outside the doubles line as measured.
+  - Clip 6's "backhand cut off cross" at 15.01 s moved 0.7 m across as measured.
+- **Five shots you did not mark were said to be cross.** Each crossed the centre line and moved 1.7 to 3.2 m across: two middle net shots (Clip 9 at 1.07 s, Clip 10 at 4.13 s), Clip 9's intercepting smash, and Clip 7's backhand save clear and long net. Whether those are cross is for you to say.
+- **Backhand is right on 4 of 7**, said at 0.86 to 0.95.
+  - Clip 7's backhand save clear (11.85 s) is too close to call (0.57).
+  - Clip 6's backhand block (13.30 s) and backhand cut off cross (15.01 s) were said forehand at 0.02 and 0.19. The contact was measured 0.4 m and 0.2 m to the racket side of the hips.
+  - Of the five other shots said backhand, three are blocks and drives played at the body, as backhands often are.
+  - Three serves were said backhand. Backhand serves are common in singles, but your names do not say.
+- **The racket arm's sureness matters.** Clip 8's near player hit with the right arm on 2 of 5 shots, so every backhand of theirs is too close to call. Taking the arm of most shots instead made them left-handed, and five of their shots were called backhand at 0.98 to 1.00. Clip 9's far player is right on 2 of 3 (0.67). Both of Clip 7's players are right on 0.86 and 0.88 of their shots, so a backhand of theirs is said at no more than that.
+- **Jump is right on the one jump with a body.** That was Clip 7's jump out stop drop at 16.13 s, with the lower foot 0.29 ± 0.03 m up. The other two jumps (Clip 8 at 9.48 s, Clip 6 at 8.66 s) have no body at the hit. Clip 10's high lift at 9.14 s was said to be a jump: the lower foot read 0.19 ± 0.03 m up, either a hop or the pose's foot off the floor. Two shots whose foot read 0.12 to 0.13 m up are too close to call.
+
 ## Decisions
 
 - **The model learns from simulation, then from your shots, and each clip is tested by a model that never saw it.** The 61 real shots are too few to learn names from alone. They are enough to correct the simulator's model: how sure it is, and where its families sit. Leaving one clip out at a time keeps the test honest. More labelled rallies, which the labeller already records, would do more.
 - **The same honesty as Phase 3.** A name that the measurements cannot settle comes as two names with their probabilities, never a guess. The far court from a low corner camera is measured worst, and its probabilities spread accordingly.
 - **The serve comes from the rally, not the model.** The first hit of a rally is the serve.
+- **The details are measured, not learnt.** Cross comes from where the flight went, backhand and jump from the body at contact. Their lines (1.3 m across, the side of the hips, 0.15 m off the floor) come from the court and the body, not from fitting your marks. Your clips' measurements were looked at while they were chosen, so the real scores in 5f are not wholly held out.
 - **"other" is never given by the model.** It is for a person to use.
 - **Logistic regression, not a network.** About ten facts and eight families: a linear model on the facts and their products can draw curved boundaries, and its weights can be read. A network would need more data than this phase has.
 

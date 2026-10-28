@@ -12,7 +12,10 @@ readiness at the opponent's hit is taken (body.readiness).
 The truth is the same facts on the true body at the exact moment of contact, and the
 readiness from the true bodies 240 times a second. Per fact: the median and 90th percentile
 error, and how often the error is within twice the stated uncertainty. Per split step: found
-when there was one, found when there was none, and the error in its timing.
+when there was one, found when there was none, and the error in its timing. Per hit, the jump
+and backhand calls (shot_names), each against the same call on the true body: how often each
+call was given and right. The simulated players are right-handed, and nearly every contact is
+on the racket side of the hips.
 
     python -m evaluation.body_benchmark --seeds 3 --first-seed 100 --workers 12 --out body.json
 """
@@ -30,11 +33,13 @@ from body import hit_body, readiness, standing_reach
 from evaluation.hits_benchmark import FOCAL_PX, SIZE, VIEWS
 from geometry.camera import Camera
 from geometry.skeleton import JOINTS, Body, fit_bodies
+from shot_names import TOO_CLOSE, backhand, jump, racket_arms
 from simulation.camera_path import stable_handheld
 from simulation.people import model_pose, playing
 from simulation.rally import random_rally
 
 CONTACT_SIGMA_M = 0.05
+DETAILS = {"jump": ("jump", "no jump"), "backhand": ("backhand", "forehand")}
 FACTS = ("above_reach_m", "ahead_m", "aside_m", "elbow_deg", "side_on_deg", "hips_height_m", "front_knee_deg", "off_floor_m", "weight_ahead_m")
 TRUE_RATE = 240.0
 
@@ -63,7 +68,8 @@ def score(job: tuple[str, str, float, int]) -> dict:
     contacts = sorted(rally.contacts, key=lambda c: c.time)
     contact_rng = np.random.default_rng([seed, list(VIEWS).index(view), side == "far", int(fps)])
     out = {"view": view, "side": side, "fps": fps, "seed": seed, "facts": {name: [] for name in FACTS}, "reach": [reach.value - true_reach.value, reach.sigma],
-           "fromBase": [], "splits": []}
+           "fromBase": [], "splits": [], "details": []}
+    hits = []
     for k, contact in enumerate(contacts):
         if contact.hitter != side or not times[0] < contact.time * 1000.0 < times[-1]:
             continue
@@ -75,6 +81,7 @@ def score(job: tuple[str, str, float, int]) -> dict:
         for name in FACTS:
             got, want = getattr(fitted, name), getattr(true, name)
             out["facts"][name].append([got.value - want.value, got.sigma])
+        hits.append((fitted, true))
         if k == 0 or contacts[k - 1].hitter == side:
             continue
         opponent = contacts[k - 1].time
@@ -89,6 +96,23 @@ def score(job: tuple[str, str, float, int]) -> dict:
             timing = [ready.split_lowest_ms.value - true_ready.split_lowest_ms.value, ready.split_lowest_ms.sigma]
         out["splits"].append({"true": true_ready.split_lowest_ms is not None, "found": ready.split_lowest_ms is not None, "timing": timing,
                               "drop": [ready.split_drop_m.value - true_ready.split_drop_m.value, ready.split_drop_m.sigma]})
+    arm, true_arm = (racket_arms([hit[k] for hit in hits])[side] for k in (0, 1))
+    for fitted, true in hits:
+        said = {"jump": jump(fitted), "backhand": backhand(fitted, arm)}
+        truth = {"jump": jump(true), "backhand": backhand(true, true_arm)}
+        out["details"].append({key: [truth[key].call, None if said[key] is None else said[key].call, None if said[key] is None else said[key].p] for key in DETAILS})
+    out["racketArm"] = None if arm is None else arm.call
+    return out
+
+
+def _calls(details: list[dict], key: str) -> dict:
+    """How often each call was given and right, and how sure it was."""
+    out = {"hits": len(details), "true": sum(d[key][0] == DETAILS[key][0] for d in details)}
+    for call in (*DETAILS[key], TOO_CLOSE, None):
+        given = [d[key] for d in details if d[key][1] == call]
+        out[str(call)] = {"given": len(given), "right": sum(g[0] == call for g in given)} if call in DETAILS[key] else len(given)
+    p = np.array([d[key][2] for d in details if d[key][2] is not None])
+    out["meanP"] = round(float(p.mean()), 3) if len(p) else None
     return out
 
 
@@ -108,8 +132,11 @@ def summarise(results: list[dict]) -> dict:
         splits = [split for r in group for split in r["splits"]]
         real = [s for s in splits if s["true"]]
         none = [s for s in splits if not s["true"]]
+        details = [d for r in group for d in r["details"]]
         out[key] = {
             **{name: _errors([pair for r in group for pair in r["facts"][name]]) for name in FACTS},
+            **{name: _calls(details, name) for name in DETAILS},
+            "racketArmRight": f"{sum(r['racketArm'] == 'right' for r in group)} of {len(group)}",
             "standingReachM": _errors([r["reach"] for r in group]),
             "fromBaseM": _errors([pair for r in group for pair in r["fromBase"]]),
             "splitStep": {

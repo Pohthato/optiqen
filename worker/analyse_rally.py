@@ -1,7 +1,8 @@
 # worker/analyse_rally.py
 """A rally video understood in one command: the camera of every frame, the shuttle in every frame,
 the hits, each flight in 3D, the two players' bodies in 3D, and every shot's facts with the
-hitter's body at the hit and the shot's name (shot_names.py).
+hitter's body at the hit and the shot's name: its family, cross or straight, forehand or
+backhand, and from a jump or not (shot_names.py).
 
     python analyse_rally.py clip.mp4 --golden clip.json --out clip.analysis.json
         [--court singles|doubles] [--overlay clip.analysis.mp4] [--diagram clip.court.png]
@@ -39,7 +40,7 @@ from geometry.skeleton import BONES, Body
 from hits import find_hits
 from lift_players import fit_players
 from players import HALVES
-from shot_names import Launch, Model, ShotName, name_shot
+from shot_names import Launch, Model, ShotName, name_shot, racket_arms
 from shots import ShotFacts, rally_shots
 from track_players import players_document
 from video import VideoFile
@@ -189,7 +190,7 @@ def write_overlay(video: VideoFile, cameras, shots: list[ShotFacts], path: Path,
                 if time_ms - shot.hit_ms <= 400.0 and len(at):
                     x, y = (int(v) for v in at[0])
                     cv2.circle(frame, (x, y), 10, HITTER_COLOURS[shot.hitter], 2, cv2.LINE_AA)
-                    name = names[number - 1].call if names else ("serve" if shot.serve else "")
+                    name = names[number - 1].said if names else ("serve" if shot.serve else "")
                     label = f"{number} {name} {shot.speed_m_s.value * 3.6:.0f} km/h".replace("  ", " ")
                     cv2.putText(frame, label, (x + 12, y - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
                 landed = _pixels(camera, [[*shot.landing.point, 0.0]]) if shot.landing is not None else []
@@ -240,7 +241,7 @@ def draw_diagram(shots: list[ShotFacts], court: str, stood: list[Stood] | None =
             if half == shot.hitter:
                 cv2.line(image, centre, at, colour, 1, cv2.LINE_AA)
         cv2.circle(image, at, 7, colour, -1, cv2.LINE_AA)
-        label = f"{number} {names[number - 1].call}" if names else str(number)
+        label = f"{number} {names[number - 1].said}" if names else str(number)
         (text_width, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
         x = at[0] + 9 if at[0] + 9 + text_width <= width else at[0] - 9 - text_width  # kept inside the image
         cv2.putText(image, label, (x, at[1] - 9), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
@@ -309,7 +310,8 @@ def main(argv: list[str] | None = None) -> int:
     facts = rally_body_facts(shots, bodies, times_ms) if bodies is not None else [None] * len(shots)
     stood = [{half: standing_at(bodies[half], times_ms, shot.hit_ms) for half in HALVES} if bodies is not None else None for shot in shots]
     model, rng = Model.load(), np.random.default_rng(0)
-    names = [name_shot(Launch.of(shot), shot.serve, model, rng) for shot in shots]
+    arms = racket_arms(facts)
+    names = [name_shot(Launch.of(shot), shot.serve, model, rng, fact, arms[shot.hitter]) for shot, fact in zip(shots, facts)]
 
     result = hits_document(args.video, shuttle_doc, analysis, onsets, sound_error, times_ms)
     calls = [shot.landing.call for shot in shots if shot.landing is not None]
@@ -327,12 +329,13 @@ def main(argv: list[str] | None = None) -> int:
         half: {
             "frames": sum(body is not None for body in bodies[half]),
             "standingReachM": _estimate(standing_reach(bodies[half])) if any(body is not None for body in bodies[half]) else None,
+            "racketArm": None if arms[half] is None else {"call": arms[half].call, "p": arms[half].p},
         }
         for half in HALVES
     }
     result["summary"]["playersError"] = players_error
     result["shots"] = [
-        {**shot_entry(number, shot), "name": {"call": name.call, "p": name.p}, "body": body_entry(fact), "players": None if at is None else stood_entry(at)}
+        {**shot_entry(number, shot), "name": name.entry(), "body": body_entry(fact), "players": None if at is None else stood_entry(at)}
         for number, (shot, name, fact, at) in enumerate(zip(shots, names, facts, stood), start=1)
     ]
     result["sources"] = {"track": Path(track_path).name, "shuttle": Path(shuttle_path).name, "poses": Path(poses_path).name if bodies is not None else None}

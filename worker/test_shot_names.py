@@ -2,18 +2,22 @@
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 
+from body import hit_body, standing_reach
 from evaluation.hits_benchmark import Scenario
 from evaluation.hand_labels import read_labels
-from evaluation.shot_names_benchmark import REAL_HOLDS, TEST_FIRST_SEED, adapt, learning_set, measure_scenario, named_again, real_set
-from geometry.court_model import NET_Y_M
+from evaluation.shot_names_benchmark import REAL_HOLDS, TEST_FIRST_SEED, adapt, learning_set, measure_scenario, named_again, real_set, score_cross
+from geometry.court_model import NET_Y_M, SINGLES_WIDTH_M
 from geometry.shuttle_physics import simulate
-from shot_names import DRAWS, FACTS, NAMES, SIMULATED_PATH, SURE, Launch, Model, call_of, chances, facts, learn, measured_facts, name_shot, nominal_facts, true_facts
-from shots import flight_facts
+from shot_names import (CROSS_M, DRAWS, FACTS, JUMP_M, NAMES, SIMULATED_PATH, SURE, TOO_CLOSE, Detail, Launch, Model, ShotName, backhand, call_of, chances,
+                        detail, facts, jump, learn, measured_facts, name_shot, nominal_facts, racket_arms, true_facts)
+from shots import Estimate, flight_facts
 from simulation.rally import SHOT_TYPES, canned_rally
+from test_body import exact, standing
 from test_shots import exact_fit
 
 COLUMN = {name: k for k, name in enumerate(FACTS)}
@@ -22,9 +26,13 @@ COLUMN = {name: k for k, name in enumerate(FACTS)}
 class FactTests(unittest.TestCase):
     def test_the_facts_of_true_flights_are_exact(self):
         rally = canned_rally()
-        names, rows = true_facts([rally, rally])
+        names, rows, crossed = true_facts([rally, rally])
         self.assertEqual(names, [c.kind for c in rally.contacts] * 2)
         np.testing.assert_array_equal(rows[: len(rally.contacts)], rows[len(rally.contacts):])
+        ends = [c.position[0] for c in rally.contacts[1:]] + [rally.landing[0]]
+        middle = SINGLES_WIDTH_M / 2
+        want = [(c.position[0] - middle) * (x - middle) < 0 and abs(x - c.position[0]) >= CROSS_M for c, x in zip(rally.contacts, ends)]
+        self.assertEqual(crossed[: len(rally.contacts)].tolist(), [float(w) for w in want])
         for n, (row, contact, flight) in enumerate(zip(rows, rally.contacts, rally.flights)):
             side = 1.0 if contact.hitter == "near" else -1.0
             self.assertAlmostEqual(row[COLUMN["contactHeightM"]], contact.position[2], places=9)
@@ -44,13 +52,14 @@ class FactTests(unittest.TestCase):
     def test_a_far_players_shot_reads_like_the_same_shot_from_the_near_half(self):
         p, v = np.array([2.0, 2.5, 2.6]), np.array([0.5, 18.0, 6.0])
         mirrored_p, mirrored_v = np.array([p[0], 2 * NET_Y_M - p[1], p[2]]), v * [1.0, -1.0, 1.0]
-        near = facts(p, v, True, 0.9, 6.7)
-        far = facts(mirrored_p, mirrored_v, False, 0.9, 6.7)
+        near, near_cross = facts(p, v, True, 0.9, 6.7)
+        far, far_cross = facts(mirrored_p, mirrored_v, False, 0.9, 6.7)
         np.testing.assert_allclose(near, far, atol=1e-9)
+        np.testing.assert_array_equal(near_cross, far_cross)
 
     def test_a_flight_on_the_floor_before_it_was_played_again_ends_there(self):
         p, v = np.array([2.0, 5.0, 1.0]), np.array([0.0, 8.0, 2.0])
-        row = facts(p, v, True, 2.5, 6.7)[0]
+        row = facts(p, v, True, 2.5, 6.7)[0][0]
         self.assertAlmostEqual(row[COLUMN["endHeightM"]], 0.0, places=6)
         self.assertLess(row[COLUMN["flightS"]], 2.5)
 
@@ -60,14 +69,95 @@ class FactTests(unittest.TestCase):
         unsure = flight_facts(exact_fit(p0, v0, sigma=0.1), 0.0, "near", "singles", ends_ms=900.0)
         rng = np.random.default_rng(0)
         nominal = nominal_facts(Launch.of(sure))
-        np.testing.assert_allclose(nominal, facts(p0, v0, True, 0.9, 6.7)[0], atol=1e-6)
-        drawn = measured_facts(Launch.of(sure), rng)
+        np.testing.assert_allclose(nominal, facts(p0, v0, True, 0.9, 6.7)[0][0], atol=1e-6)
+        drawn, _ = measured_facts(Launch.of(sure), rng)
         np.testing.assert_allclose(drawn.mean(axis=0), nominal, atol=0.05)
-        spread = measured_facts(Launch.of(unsure), rng).std(axis=0)
+        spread = measured_facts(Launch.of(unsure), rng)[0].std(axis=0)
         flown = [COLUMN[name] for name in FACTS if name != "flightS"]  # played again at a known time
         self.assertTrue((spread[flown] > drawn.std(axis=0)[flown]).all())
         self.assertAlmostEqual(spread[COLUMN["flightS"]], 0.0, places=9)
         self.assertAlmostEqual(spread[COLUMN["speedMS"]], unsure.speed_m_s.sigma, delta=0.2 * unsure.speed_m_s.sigma)
+
+
+def body_facts(arm: str, aside: float, off_floor: float = 0.0, hitter: str = "near", sigma: float = 0.05):
+    """The facts of a body built to have them, standing still: the contact `aside` of the hips'
+    middle towards the `arm` hand, which meets it, the feet `off_floor`."""
+    joints = standing(lift=off_floor)
+    hips = (joints[11] + joints[12]) / 2
+    side = 1.0 if arm == "right" else -1.0
+    contact = hips + np.array([side * aside, 0.4, 1.0])
+    hand = contact - np.array([0.0, 0.0, 0.3])
+    joints = standing(lift=off_floor, right_hand=hand) if arm == "right" else standing(lift=off_floor)
+    if arm == "left":
+        joints[9] = hand
+    facts = hit_body(exact(joints), [0.0], 0.0, "near", contact, (0.0, 0.0, 0.0), standing_reach(exact(standing())))
+    return replace(facts, hitter=hitter, aside_m=Estimate(facts.aside_m.value, sigma), off_floor_m=Estimate(facts.off_floor_m.value, sigma))
+
+
+class DetailTests(unittest.TestCase):
+    def test_each_detail_is_said_only_when_sure_either_way(self):
+        self.assertEqual(detail(SURE, "cross", "straight"), Detail("cross", SURE))
+        self.assertEqual(detail(1 - SURE, "cross", "straight").call, "straight")
+        self.assertEqual(detail(0.2 + 1e-12, "cross", "straight").call, "straight")  # 0.2 as given
+        self.assertEqual(detail(0.5, "cross", "straight").call, TOO_CLOSE)
+
+    def test_cross_is_to_the_other_side_of_the_centre_line_and_far_enough_across(self):
+        middle = SINGLES_WIDTH_M / 2
+        p = np.array([[middle - 1.5, 2.0, 1.0]] * 3)
+        v = np.array([[5.0, 9.0, 3.0], [0.4, 9.0, 3.0], [-0.5, 9.0, 3.0]])  # over the line, straight on, away from it
+        _, crossed = facts(p, v, True, 1.0, 6.7)
+        self.assertEqual(crossed.tolist(), [1.0, 0.0, 0.0])
+        _, drifted = facts([middle - 0.3, 2.0, 1.0], [1.5, 9.0, 3.0], True, 1.0, 6.7)  # over the line, but not CROSS_M across
+        self.assertEqual(drifted.tolist(), [0.0])
+
+    def test_a_shot_that_ends_about_the_line_is_too_close_to_call(self):
+        model, rng = Model.load(SIMULATED_PATH), np.random.default_rng(0)
+        middle = SINGLES_WIDTH_M / 2
+        cases = {}
+        for vx in (5.0, 2.75, 0.3):  # well over, about CROSS_M across, straight
+            p0, v0 = np.array([middle - 1.0, 2.5, 1.0]), np.array([vx, 9.0, 3.0])
+            shot = flight_facts(exact_fit(p0, v0, sigma=0.03), 0.0, "near", "singles", ends_ms=1000.0)
+            cases[vx] = name_shot(Launch.of(shot), False, model, rng).cross
+        self.assertEqual(cases[5.0].call, "cross")
+        self.assertEqual(cases[2.75].call, TOO_CLOSE, cases[2.75])
+        self.assertEqual(cases[0.3].call, "straight")
+
+    def test_backhand_is_across_the_body_from_the_racket_arm(self):
+        right, left = Detail("right", 1.0), Detail("left", 0.0)
+        self.assertEqual(backhand(body_facts("right", 0.4), right).call, "forehand")
+        self.assertEqual(backhand(body_facts("right", -0.4), right).call, "backhand")
+        self.assertEqual(backhand(body_facts("right", -0.02), right).call, TOO_CLOSE)
+        # The other wrist was nearer the contact: the contact was on the hips' left all the same.
+        self.assertEqual(backhand(body_facts("left", 0.4), right).call, "backhand")
+        self.assertEqual(backhand(body_facts("left", 0.4), left).call, "forehand")
+        self.assertIsNone(backhand(body_facts("right", 0.4), None))
+        self.assertIsNone(backhand(None, right))
+
+    def test_the_racket_arm_is_as_sure_as_the_player_s_shots_agree_on_it(self):
+        bodies = [body_facts("right", 0.4)] * 5 + [body_facts("left", 0.4), body_facts("left", 0.4, hitter="far")]
+        arms = racket_arms(bodies)
+        self.assertEqual((arms["near"], arms["far"]), (Detail("right", 0.833), Detail("left", 0.0)))
+        self.assertIsNone(racket_arms(bodies[:-1])["far"])
+        # Split three to two, a shot played clearly on one side is too close to call.
+        split = racket_arms([body_facts("right", 0.4)] * 2 + [body_facts("left", -0.4)] * 3)["near"]
+        self.assertEqual(split, Detail(TOO_CLOSE, 0.4))
+        self.assertEqual(backhand(body_facts("right", 0.4), split), Detail(TOO_CLOSE, 0.6))
+        self.assertEqual(backhand(body_facts("right", 0.4), arms["near"]).call, "forehand")
+
+    def test_a_jump_is_the_lower_foot_clear_of_tiptoe(self):
+        self.assertEqual(jump(body_facts("right", 0.4, off_floor=0.35)).call, "jump")
+        self.assertEqual(jump(body_facts("right", 0.4)).call, "no jump")
+        self.assertEqual(jump(body_facts("right", 0.4, off_floor=JUMP_M)).call, TOO_CLOSE)
+        self.assertIsNone(jump(None))
+
+    def test_the_name_as_a_coach_says_it_holds_only_the_sure_details(self):
+        name = ShotName("smash", {"smash": 0.9}, Detail("cross", 0.95), Detail("forehand", 0.01), Detail(TOO_CLOSE, 0.6))
+        self.assertEqual(name.said, "cross smash")
+        self.assertEqual(ShotName("drop or smash", {}, Detail("straight", 0.0), Detail("backhand", 0.9), Detail("jump", 0.99)).said, "backhand jump drop or smash")
+        entry = name.entry()
+        self.assertEqual(entry["cross"], {"call": "cross", "p": 0.95})
+        self.assertEqual(entry["said"], "cross smash")
+        self.assertEqual(ShotName("serve", {"serve": 1.0}).entry(), {"call": "serve", "p": {"serve": 1.0}, "said": "serve", "cross": None, "backhand": None, "jump": None})
 
 
 class ModelTests(unittest.TestCase):
@@ -115,6 +205,7 @@ class ModelTests(unittest.TestCase):
 
     def test_the_model_learnt_from_simulation_names_the_simulators_canned_rally(self):
         model, rally, rng = Model.load(SIMULATED_PATH), canned_rally(), np.random.default_rng(0)
+        _, _, crossed = true_facts([rally])
         calls = []
         for n, (contact, flight) in enumerate(zip(rally.contacts, rally.flights)):
             ends = flight.end_time * 1000.0 if n + 1 < len(rally.flights) else None
@@ -124,6 +215,8 @@ class ModelTests(unittest.TestCase):
         right = [call.call.split(" or ")[0] == contact.kind for call, contact in zip(calls[1:], rally.contacts[1:])]
         self.assertGreaterEqual(sum(right), len(right) - 1, [c.call for c in calls])
         self.assertTrue(all(abs(sum(call.p.values()) - 1.0) < 0.01 for call in calls))
+        self.assertIsNone(calls[0].cross)
+        self.assertEqual([call.cross.call for call in calls[1:]], ["cross" if x else "straight" for x in crossed[1:]])
 
 
 def canned_clip() -> tuple[str, dict]:
@@ -137,6 +230,7 @@ def canned_clip() -> tuple[str, dict]:
         shots.append({
             "shot": n + 1, "hitMs": shot.hit_ms, "hitter": shot.hitter, "serve": shot.serve, "flightMs": shot.flight_ms,
             "landing": None if shot.landing is None else {}, "launch": {"value": [*shot.contact, *shot.velocity], "covariance": [list(row) for row in shot.launch_covariance]},
+            "name": {"call": contact.kind, "p": {contact.kind: 1.0}, "backhand": {"call": "forehand", "p": 0.01}, "jump": None},  # as first named
         })
     swapped = {"block": "net", "net": "block"}
     lines = [f"Serve time({rally.contacts[0].hitter} player serve):{rally.contacts[0].time}"]
@@ -172,6 +266,8 @@ class RealTests(unittest.TestCase):
         kinds = [c.kind for c in canned_rally().contacts]
         for clip in labelled:
             calls = [shot["name"]["call"] for shot in named[clip]["shots"]]
+            self.assertTrue(all(shot["name"]["backhand"] == {"call": "forehand", "p": 0.01} for shot in named[clip]["shots"]))
+            self.assertTrue(all(shot["name"]["cross"]["call"] in ("cross", "straight") for shot in named[clip]["shots"][1:]))
             self.assertEqual(calls[0], "serve")
             self.assertEqual(calls[kinds.index("block")], "net", calls)
             self.assertEqual(calls[kinds.index("net")], "block", calls)
@@ -194,6 +290,15 @@ class SetTests(unittest.TestCase):
             self.assertIn(row["name"], SHOT_TYPES)
             self.assertEqual(row["draws"].shape, (DRAWS, len(FACTS)))
             self.assertLess(abs(row["nominal"][COLUMN["contactHeightM"]] - row["truth"][COLUMN["contactHeightM"]]), 0.5)
+            self.assertIn(row["cross"], (0.0, 1.0))
+            self.assertTrue(0.0 <= row["crossDrawn"] <= 1.0)
+
+    def test_cross_or_straight_is_scored_by_each_call(self):
+        report = score_cross({"cross": np.array([1.0, 1.0, 0.0, 0.0, 1.0]), "crossDrawn": np.array([0.9, 0.85, 0.85, 0.1, 0.5])})
+        self.assertEqual((report["shots"], report["trulyCross"]), (5, 3))
+        self.assertEqual(report["cross"], {"given": 3, "meanP": 0.867, "trulyCross": 2})
+        self.assertEqual(report["straight"], {"given": 1, "meanP": 0.1, "trulyCross": 0})
+        self.assertEqual(report[TOO_CLOSE], {"given": 1, "meanP": 0.5, "trulyCross": 1})
 
 
 if __name__ == "__main__":

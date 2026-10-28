@@ -12,6 +12,11 @@ A found hit is matched to a labelled one, closest pairs first, within the tolera
 and name are those of the analysis's shot that starts within 100 ms of it (the name: the most
 likely one). A labelled name stands for the golden labels it may be (`labels_for`).
 
+A labelled name marks a detail with its word (`DETAIL_WORDS`: "cross smash", "backhand block",
+"jump out smash"). A name without the word is not taken as the other way: it may be cross and
+not say so. So on marked hits the report gives what the analysis said, and on the rest only how
+often it said the detail.
+
     python -m evaluation.hand_labels Clips/hittimes.txt "Clip 9=clip9.analysis.json" "Clip 8=clip8.analysis.json"
 """
 from __future__ import annotations
@@ -20,6 +25,7 @@ import argparse
 import json
 import re
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -45,6 +51,7 @@ NAME_WORDS = (
     ("push", ("push",)),
     ("net", ("net",)),
 )
+DETAIL_WORDS = (("cross", "cros"), ("backhand", "backhand"), ("jump", "jump"))  # "cros net" too
 
 
 @dataclass(frozen=True)
@@ -125,6 +132,7 @@ def match_clip(hits: list[LabelledHit], analysis: dict[str, Any], tolerance_ms: 
             "predicted": _top_name(shot),
             "call": (shot or {}).get("name", {}).get("call"),
             "sure": _sureness(shot),
+            **{key: ((shot or {}).get("name") or {}).get(key) for key, _ in DETAIL_WORDS},
         })
     matched = set(by_truth.values())
     extras = []
@@ -164,6 +172,23 @@ def _calls(rows: list[dict]) -> dict[str, Any]:
     }
 
 
+def _details(rows: list[dict]) -> dict[str, Any]:
+    """Each detail on the labelled hits, serves left out: how many names mark it; on those found
+    as shots, how often the analysis said each call (None: it did not know); on the other found
+    hits, how often it said the detail."""
+    found = [row for row in rows if row["shot"] is not None and row["name"] != "serve"]
+    out = {}
+    for key, word in DETAIL_WORDS:
+        marked = [row for row in found if word in row["name"]]
+        rest = [row for row in found if word not in row["name"]]
+        calls = Counter((row[key] or {}).get("call") for row in marked)
+        out[key] = {
+            "marked": {"labelled": sum(word in row["name"] for row in rows), "shots": len(marked), "calls": {str(call): n for call, n in sorted(calls.items(), key=str)}},
+            "unmarked": {"shots": len(rest), "said": sum((row[key] or {}).get("call") == key for row in rest), "known": sum(row[key] is not None for row in rest)},
+        }
+    return out
+
+
 def summarise(rows: list[dict], extras: list[dict]) -> dict[str, Any]:
     """Hits, hitters and names over labelled hits from one clip or many."""
     matched = [row for row in rows if row["foundMs"] is not None]
@@ -188,6 +213,7 @@ def summarise(rows: list[dict], extras: list[dict]) -> dict[str, Any]:
         "extra": extras,
         "wrongHitter": [row for row in known if row["foundHitter"] != row["hitter"]],
         "names": None if not named else {"found": _names(rows, False), "endToEnd": _names(rows, True), "confusion": confusion, "calls": _calls(rows)},
+        "details": _details(rows),
     }
 
 
@@ -203,6 +229,11 @@ def _line(title: str, report: dict[str, Any]) -> str:
         text += f", names {found['right']} of {found['shots']} (macro-F1 {found['macroF1']:.2f}, {low:.2f}-{high:.2f}; end to end {end['macroF1']:.2f})"
         if alone["given"]:
             text += f", alone right {alone['right']} of {alone['given']} at mean p {alone['meanP']:.2f}"
+    for key, detail in report["details"].items():
+        marked, rest = detail["marked"], detail["unmarked"]
+        if marked["shots"] or rest["said"]:
+            calls = ", ".join(f"{call} {n}" for call, n in marked["calls"].items())
+            text += f"\n  {key}: marked {marked['labelled']}, found {marked['shots']} ({calls or 'none'}); said on {rest['said']} of {rest['known']} unmarked"
     for row in report["missed"]:
         text += f"\n  missed {row['timeMs'] / 1000:6.2f} s {row['hitter']:4s} {row['name']}"
     for row in report["extra"]:
