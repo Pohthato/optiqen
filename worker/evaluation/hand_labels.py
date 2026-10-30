@@ -17,6 +17,11 @@ A labelled name marks a detail with its word (`DETAIL_WORDS`: "cross smash", "ba
 not say so. So on marked hits the report gives what the analysis said, and on the rest only how
 often it said the detail.
 
+The hit whose notes say "end of rally" ended it, and the notes say how: "in", "out" or "into the
+net" (`END_WORDS`). The hitter won when it was in, and lost otherwise. The analysis ended the
+rally with its last shot, as its landing's call says; a shot not followed to the floor says
+nothing about the end.
+
     python -m evaluation.hand_labels Clips/hittimes.txt "Clip 9=clip9.analysis.json" "Clip 8=clip8.analysis.json"
 """
 from __future__ import annotations
@@ -52,6 +57,8 @@ NAME_WORDS = (
     ("net", ("net",)),
 )
 DETAIL_WORDS = (("cross", "cros"), ("backhand", "backhand"), ("jump", "jump"))  # "cros net" too
+END_NOTE = "end of rally"
+END_WORDS = (("net", r"\bnet\b"), ("out", r"\bout\b"), ("in", r"\bin\b"))  # "into the net" is net
 
 
 @dataclass(frozen=True)
@@ -60,11 +67,30 @@ class LabelledHit:
     hitter: str  # "near" | "far"
     name: str  # as written, without its notes
     labels: tuple[str, ...]  # the golden labels it may be; () when it is not scored
+    end: str | None = None  # "in", "out" or "net" when the rally ended at this hit
 
 
 def _clean(name: str) -> str:
     """The name alone, in lower case: notes after a colon or comma, or in brackets, dropped."""
     return " ".join(re.split(r"[:,(]", name.lower())[0].split())
+
+
+def _end(name: str) -> str | None:
+    """How the rally ended at this hit, from the notes after its name; None when they do not say
+    it ended here, or not how."""
+    notes = name.lower()
+    if END_NOTE not in notes:
+        return None
+    notes = re.split(r"[:,]", notes, maxsplit=1)[-1]  # "jump out smash" is not out
+    return next((end for end, word in END_WORDS if re.search(word, notes)), None)
+
+
+def winner(hitter: str, end: str | None) -> str | None:
+    """Who won a rally that ended at `hitter`'s shot: the hitter when it was in, the other player
+    when it was out or in the net."""
+    if end is None:
+        return None
+    return hitter if end == "in" else "far" if hitter == "near" else "near"
 
 
 def labels_for(name: str) -> tuple[str, ...]:
@@ -95,7 +121,7 @@ def read_labels(text: str) -> dict[str, list[LabelledHit]]:
         elif "hit times" in lower:
             hitter = "near" if lower.startswith("near") else "far"
             for time, name in re.findall(r"(\d+(?:\.\d+)?)\s*(?:\(([^)]*)\))?", times):
-                hits.append(LabelledHit(float(time) * 1000.0, hitter, _clean(name), labels_for(name)))
+                hits.append(LabelledHit(float(time) * 1000.0, hitter, _clean(name), labels_for(name), _end(name)))
     return {clip: sorted(found, key=lambda hit: hit.time_ms) for clip, found in clips.items()}
 
 
@@ -109,8 +135,24 @@ def _sureness(shot: dict[str, Any] | None) -> float | None:
     return max(name["p"].values()) if name else None
 
 
+def said_end(analysis: dict[str, Any]) -> dict[str, Any] | None:
+    """How the analysis ended the rally: with its last shot, as that shot's landing was called
+    (None when it was not followed to the floor), and the winner the call gives."""
+    shots = analysis.get("shots") or []
+    if not shots:
+        return None
+    last = shots[-1]
+    landing = last.get("landing")
+    call = None if landing is None else landing["call"]
+    return {
+        "shot": last["shot"], "hitMs": last["hitMs"], "hitter": last["hitter"], "call": call,
+        "pIn": None if landing is None else landing["pIn"], "winner": winner(last["hitter"], call if call in ("in", "out") else None),
+    }
+
+
 def match_clip(hits: list[LabelledHit], analysis: dict[str, Any], tolerance_ms: float = TOLERANCE_MS) -> tuple[list[dict], list[dict]]:
-    """Each labelled hit with what was found for it, and the found hits that match none."""
+    """Each labelled hit with what was found for it, and the found hits that match none. The hit
+    that ended the rally also carries how the analysis ended it."""
     shots = analysis.get("shots") or []
     found = [event for event in analysis["events"] if event["type"] == "contact"]
 
@@ -133,6 +175,8 @@ def match_clip(hits: list[LabelledHit], analysis: dict[str, Any], tolerance_ms: 
             "call": (shot or {}).get("name", {}).get("call"),
             "sure": _sureness(shot),
             **{key: ((shot or {}).get("name") or {}).get(key) for key, _ in DETAIL_WORDS},
+            "end": hit.end,
+            "saidEnd": said_end(analysis) if hit.end is not None else None,
         })
     matched = set(by_truth.values())
     extras = []
@@ -189,8 +233,31 @@ def _details(rows: list[dict]) -> dict[str, Any]:
     return out
 
 
+def _ends(rows: list[dict]) -> dict[str, Any] | None:
+    """The rallies' ends against the labels: whether the analysis's last shot was the labelled
+    last hit, how often it called the end (in or out) and was right, and the same for the winner."""
+    ended = [row for row in rows if row["end"] is not None]
+    if not ended:
+        return None
+    rallies = []
+    for row in ended:
+        said = row["saidEnd"] or {}
+        rallies.append({
+            "timeMs": row["timeMs"], "hitter": row["hitter"], "name": row["name"], "end": row["end"], "winner": winner(row["hitter"], row["end"]),
+            "lastShot": row["shot"] is not None and row["shot"] == said.get("shot"), "said": row["saidEnd"],
+        })
+    called = [rally for rally in rallies if (rally["said"] or {}).get("call") in ("in", "out")]
+    won = [rally for rally in rallies if (rally["said"] or {}).get("winner") is not None]
+    return {
+        "labelled": len(rallies), "lastShot": sum(rally["lastShot"] for rally in rallies),
+        "called": len(called), "right": sum(rally["said"]["call"] == rally["end"] for rally in called),
+        "winnerCalled": len(won), "winnerRight": sum(rally["said"]["winner"] == rally["winner"] for rally in won),
+        "rallies": rallies,
+    }
+
+
 def summarise(rows: list[dict], extras: list[dict]) -> dict[str, Any]:
-    """Hits, hitters and names over labelled hits from one clip or many."""
+    """Hits, hitters, names and the rally's end over labelled hits from one clip or many."""
     matched = [row for row in rows if row["foundMs"] is not None]
     errors = np.array([row["foundMs"] - row["timeMs"] for row in matched])
     known = [row for row in matched if row["foundHitter"] is not None]
@@ -214,6 +281,7 @@ def summarise(rows: list[dict], extras: list[dict]) -> dict[str, Any]:
         "wrongHitter": [row for row in known if row["foundHitter"] != row["hitter"]],
         "names": None if not named else {"found": _names(rows, False), "endToEnd": _names(rows, True), "confusion": confusion, "calls": _calls(rows)},
         "details": _details(rows),
+        "ends": _ends(rows),
     }
 
 
@@ -234,6 +302,20 @@ def _line(title: str, report: dict[str, Any]) -> str:
         if marked["shots"] or rest["said"]:
             calls = ", ".join(f"{call} {n}" for call, n in marked["calls"].items())
             text += f"\n  {key}: marked {marked['labelled']}, found {marked['shots']} ({calls or 'none'}); said on {rest['said']} of {rest['known']} unmarked"
+    ends = report["ends"]
+    if ends:
+        text += (f"\n  ends: labelled {ends['labelled']}, the last shot {ends['lastShot']}, called {ends['called']} (right {ends['right']}),"
+                 f" winner called {ends['winnerCalled']} (right {ends['winnerRight']})")
+    for rally in (ends or {}).get("rallies", []):
+        said = rally["said"]
+        text += f"\n  end    {rally['timeMs'] / 1000:6.2f} s {rally['hitter']:4s} {rally['name']}: {rally['end']}, {rally['winner']} won; said "
+        if said is None:
+            text += "nothing (no shots)"
+            continue
+        text += said["call"] or "no landing"
+        if said["pIn"] is not None:
+            text += f" ({said['pIn']:.2f} in)"
+        text += f" at shot {said['shot']} ({said['hitMs'] / 1000:.2f} s)" + ("" if rally["lastShot"] else ", not the labelled last hit")
     for row in report["missed"]:
         text += f"\n  missed {row['timeMs'] / 1000:6.2f} s {row['hitter']:4s} {row['name']}"
     for row in report["extra"]:
@@ -265,7 +347,8 @@ def main(argv: list[str] | None = None) -> int:
         print(_line(clip, report["clips"][clip]))
     if len(args.clips) > 1:
         report["pooled"] = summarise(all_rows, all_extras)
-        print(_line("All", {**report["pooled"], "missed": [], "extra": [], "wrongHitter": []}))
+        ends = report["pooled"]["ends"]
+        print(_line("All", {**report["pooled"], "missed": [], "extra": [], "wrongHitter": [], "ends": ends and {**ends, "rallies": []}}))
     if args.out:
         args.out.write_text(json.dumps(report, indent=2), encoding="utf-8")
     return 0

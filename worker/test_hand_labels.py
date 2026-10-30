@@ -6,13 +6,13 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 
-from evaluation.hand_labels import labels_for, main, match_clip, read_labels, summarise
+from evaluation.hand_labels import labels_for, main, match_clip, read_labels, summarise, winner
 
 LABELS = """// notes: push vs lift is subjective
 Clip 3:
 Serve time(far player serve):1.17(serve)
 Near player hit times: 1.82(net), 3.38(cross push/lift),5.46 (cross block(near body)), 7.26(push, out long end of rally),
-Far Player hit times: 2.51(chop net), 4.88(half smash: in, end of rally), 6.4(backhand cut off cross)
+Far Player hit times: 2.51(chop net), 4.88(half smash: in), 6.4(backhand cut off cross)
 
 clip 4:
 Serve time(near player serve):0.5
@@ -53,6 +53,18 @@ class ReadLabelsTests(unittest.TestCase):
         self.assertEqual(labels_for("long net"), ("net",))
         self.assertEqual(labels_for("backhand save clear"), ("clear",))
         self.assertEqual(labels_for("waved at the crowd"), ())
+
+    def test_the_hit_that_ended_the_rally_and_how(self):
+        self.assertEqual([h.end for h in read_labels(LABELS)["Clip 3"]], [None] * 7 + ["out"])  # 4.88 s was in, but not the end
+        ends = read_labels("""Clip 1:
+Near player hit times:1.0(intercepting flat smash: in, end of rally)
+Clip 2:
+Far Player hit times:1.0(jump out stop drop: into the net, end of rally)
+Clip 3:
+Near player hit times:1.0(jump out smash, end of rally), 2.0(clear: in)
+""")
+        self.assertEqual([[h.end for h in ends[f"Clip {n}"]] for n in (1, 2, 3)], [["in"], ["net"], [None, None]])  # not how: no end
+        self.assertEqual([winner("near", "in"), winner("near", "out"), winner("far", "net"), winner("far", None)], ["near", "far", "near", None])
 
 
 class ScoreTests(unittest.TestCase):
@@ -102,6 +114,25 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(details["backhand"]["marked"], {"labelled": 1, "shots": 1, "calls": {"backhand": 1}})
         self.assertEqual(details["backhand"]["unmarked"], {"shots": 4, "said": 1, "known": 3})  # 3.38 s had no body
         self.assertEqual(details["jump"]["marked"]["shots"], 0)
+
+    def test_the_rally_end_against_how_the_analysis_ended_it(self):
+        found = analysis([1170, 1820, 7260], [(1170, "far", "serve"), (1820, "near", "net"), (7260, "near", "push")])
+        ends = summarise(*match_clip(self.hits, found))["ends"]
+        # The push at 7.26 s went out, so the far player won; the analysis's last shot is that hit,
+        # but it was not followed to the floor.
+        self.assertEqual((ends["labelled"], ends["lastShot"], ends["called"], ends["winnerCalled"]), (1, 1, 0, 0))
+        rally = ends["rallies"][0]
+        self.assertEqual((rally["end"], rally["winner"], rally["said"]["call"], rally["said"]["winner"]), ("out", "far", None, None))
+        for call, p_in, right in (("out", 0.01, 1), ("in", 0.99, 0), ("too close to call", 0.5, None)):
+            found["shots"][-1]["landing"] = {"call": call, "pIn": p_in}
+            ends = summarise(*match_clip(self.hits, found))["ends"]
+            called = right is not None
+            self.assertEqual((ends["called"], ends["right"], ends["winnerCalled"], ends["winnerRight"]), (int(called), right or 0, int(called), right or 0))
+        # A later shot ends the analysis's rally: it is not the labelled last hit.
+        found["shots"].append({"shot": 4, "hitMs": 9000, "hitter": "far", "landing": {"call": "in", "pIn": 0.97}})
+        ends = summarise(*match_clip(self.hits, found))["ends"]
+        self.assertEqual((ends["lastShot"], ends["called"], ends["right"], ends["winnerCalled"], ends["winnerRight"]), (0, 1, 0, 1, 1))
+        self.assertIsNone(summarise(*match_clip(read_labels(LABELS)["Clip 4"], found))["ends"])
 
     def test_no_names_in_the_analysis_scores_hits_only(self):
         found = analysis([1170, 1820], [(1170, "far", None), (1820, "near", None)])
