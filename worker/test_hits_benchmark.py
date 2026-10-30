@@ -41,6 +41,16 @@ class SimulateTests(unittest.TestCase):
         again = simulate(Scenario(seed=7, stress=True))
         self.assertEqual(again.track, stressed.track)
 
+    def test_after_a_rally_into_the_net_the_detector_sees_the_shuttle_lying_and_sent_back(self):
+        sim = simulate(Scenario(seed=12, end="net", afterwards=True, dropout=0.0, false_per_s=0.0))
+        rally = sim.clip.rally
+        self.assertEqual(rally.end, "net")
+        lying = [i for i, t in enumerate(sim.times_ms) if rally.end_time < t / 1000.0 <= rally.lying_until]
+        self.assertTrue(lying and all(sim.track[i] is not None for i in lying))
+        self.assertGreater(sim.times_ms[-1] / 1000.0, rally.sent_back.end_time)
+        self.assertIsNotNone(sim.track[round(rally.sent_back.start_time * sim.clip.fps) + 1])
+        self.assertEqual(simulate(Scenario(seed=12)).clip.rally.end, "in")
+
     def test_the_standard_set_has_every_view_and_frame_rate_with_sound_and_without(self):
         scenarios = standard_scenarios(18)
         self.assertEqual({(s.view, s.fps, s.sound) for s in scenarios}, {(v, f, s) for v in ("behind", "corner", "side") for f in (30.0, 60.0) for s in (True, False)})

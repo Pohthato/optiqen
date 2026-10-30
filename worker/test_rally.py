@@ -5,7 +5,7 @@ import numpy as np
 
 from geometry.court_model import NET_POST_HEIGHT_M, NET_Y_M, SINGLES_WIDTH_M, COURT_LENGTH_M
 from geometry.shuttle_physics import simulate
-from simulation.rally import BODY_OFFSET_M, Shot, build_rally, canned_rally, player_positions, random_rally
+from simulation.rally import BODY_OFFSET_M, NET_HIT_HEIGHTS_M, SHUTTLE_LYING_M, Shot, afterwards, build_rally, canned_rally, player_positions, random_rally
 
 
 def net_crossing_height(flight, terminal_velocity):
@@ -110,6 +110,74 @@ class RandomRallyTests(unittest.TestCase):
     def test_the_same_seed_gives_the_same_rally(self):
         a, b = random_rally(np.random.default_rng(3)), random_rally(np.random.default_rng(3))
         self.assertEqual(a.contacts, b.contacts)
+
+    def test_a_rally_in_court_is_won_by_its_last_hitter(self):
+        for rally in self.rallies:
+            self.assertEqual((rally.end, rally.winner), ("in", rally.contacts[-1].hitter))
+
+
+def inside(rally) -> bool:
+    x, y = rally.landing
+    near = rally.contacts[-1].hitter == "near"
+    return 0.0 <= x <= SINGLES_WIDTH_M and (NET_Y_M <= y <= COURT_LENGTH_M if near else 0.0 <= y <= NET_Y_M)
+
+
+class RallyEndTests(unittest.TestCase):
+    def test_a_last_shot_into_the_net_stops_there_and_drops_at_its_foot(self):
+        rally = build_rally((3.3, 3.6, 1.0), [Shot("serve", (1.5, 12.9), 1.9, 2.4), Shot("drop", (2.0, NET_Y_M), 0.8, None, net_height=1.2)])
+        self.assertEqual((rally.end, rally.winner), ("net", "near"))
+        meets = rally.flights[1]
+        np.testing.assert_allclose(rally.shuttle_at(meets.end_time), [2.0, NET_Y_M, 1.2], atol=0.01)
+        self.assertEqual(len(rally.flights), len(rally.contacts) + 1)  # the drop down the net
+        x, y = rally.landing
+        self.assertTrue(NET_Y_M < y < NET_Y_M + 0.5 and abs(x - 2.0) < 0.01)  # on the far hitter's side
+        np.testing.assert_allclose(rally.shuttle_at(rally.end_time), [x, y, 0.0], atol=0.01)
+
+    def test_only_the_last_shot_goes_into_the_net_and_only_under_the_tape(self):
+        for height in (NET_HIT_HEIGHTS_M[0] - 0.05, NET_HIT_HEIGHTS_M[1] + 0.05):
+            with self.assertRaisesRegex(ValueError, "into the net"):
+                build_rally((3.3, 3.6, 1.0), [Shot("serve", (1.5, 12.9), 1.9, 2.4), Shot("drop", (2.0, NET_Y_M), 0.8, None, net_height=height)])
+        with self.assertRaisesRegex(ValueError, "into the net"):
+            build_rally((3.3, 3.6, 1.0), [Shot("serve", (1.5, NET_Y_M), 0.6, 2.4, net_height=1.2), Shot("drop", (2.0, 4.0), 0.8, None)])
+
+    def test_random_rallies_end_out_or_in_the_net_when_asked(self):
+        for seed in range(8):
+            out = random_rally(np.random.default_rng(seed), end="out")
+            self.assertEqual(out.end, "out")
+            x, y = out.landing
+            past = max(-x, x - SINGLES_WIDTH_M, -y, y - COURT_LENGTH_M)
+            self.assertTrue(0.29 < past < 1.21, out.landing)
+            net = random_rally(np.random.default_rng(seed), end="net")
+            hitter = net.contacts[-1].hitter
+            self.assertEqual((net.end, net.winner), ("net", "far" if hitter == "near" else "near"))
+            self.assertTrue(0.0 < (NET_Y_M - net.landing[1]) * (1 if hitter == "near" else -1) < 0.5)
+            line = random_rally(np.random.default_rng(seed), final_near_line=True)
+            self.assertEqual(line.end, "in" if inside(line) else "out")
+        with self.assertRaises(ValueError):
+            random_rally(np.random.default_rng(0), end="in")
+
+    def test_afterwards_the_shuttle_lies_then_goes_back_over_the_net_to_the_winner(self):
+        sent = 0
+        for seed in range(8):
+            for end in (None, "out", "net"):
+                rally = random_rally(np.random.default_rng(seed), end=end)
+                after = afterwards(rally, np.random.default_rng(seed))
+                self.assertEqual((after.contacts, after.flights, after.end), (rally.contacts, rally.flights, rally.end))
+                self.assertTrue(0.8 <= after.lying_until - after.end_time <= 2.0)
+                np.testing.assert_allclose(after.shuttle_at(after.end_time + 0.5), [*rally.landing, SHUTTLE_LYING_M])
+                lies_near = rally.landing[1] < NET_Y_M
+                if lies_near == (rally.winner == "near") or after.sent_back is None:
+                    self.assertIsNone(after.shuttle_at(after.lying_until + 0.01))
+                    self.assertEqual(end == "out", lies_near == (rally.winner == "near"))  # an out lies on the winner's side
+                    continue
+                sent += 1
+                back = after.sent_back
+                self.assertIsNone(after.shuttle_at((after.lying_until + back.start_time) / 2))  # in the hand
+                self.assertLess(np.hypot(back.p0[0] - rally.landing[0], back.p0[1] - rally.landing[1]), 1.5)
+                self.assertGreater(net_crossing_height(back, rally.terminal_velocity), NET_POST_HEIGHT_M)
+                caught = after.shuttle_at(back.end_time)
+                self.assertEqual(caught[1] < NET_Y_M, rally.winner == "near")
+        self.assertGreater(sent, 10)
 
 
 if __name__ == "__main__":

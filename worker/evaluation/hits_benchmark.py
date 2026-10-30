@@ -5,7 +5,9 @@
 
 Each scenario is a random singles rally (simulation.rally.random_rally) filmed by a steadily held
 phone from behind, the corner or the side (its position jittered), at 30 or 60 fps, followed by
-two seconds with no play. The shuttle detector is simulated with position jitter, missed frames
+two seconds with no play. A scenario may end its rally out or in the net instead of in court,
+and may go on to what follows: the shuttle lying where it came down, then sent back over the net
+(simulation.rally.afterwards). The shuttle detector is simulated with position jitter, missed frames
 and false detections (still blobs that last a few frames, during play and between rallies), and a
 neighbouring court's hits are heard at uniformly random times, as close to the rally's as chance
 puts them. A hit counts when found within 33 ms.
@@ -29,7 +31,7 @@ from geometry.shuttle_physics import FEATHER_TERMINAL_VELOCITY
 from hits import ONSET_GAP_MS, Hit, find_hits
 from simulation.audio import SAMPLE_RATE
 from simulation.clip import SyntheticClip, make_clip
-from simulation.rally import random_rally
+from simulation.rally import afterwards, random_rally
 
 SIZE = (1280, 720)
 FOCAL_PX = 1300.0 * SIZE[0] / 1920
@@ -55,6 +57,8 @@ class Scenario:
     neighbour_per_s: float = 0.4  # a neighbouring court's hits, heard at random times
     sound: bool = True
     final_near_line: bool = False  # aim the rally's last shot within 40 cm of a line, in or out
+    end: str | None = None  # "out" or "net": how the rally's last shot comes down instead (random_rally)
+    afterwards: bool = False  # the shuttle is seen lying, then sent back over the net, after the rally
     stress: bool = False  # the world differs from the method's models: see simulate()
 
 
@@ -96,11 +100,15 @@ def simulate(scenario: Scenario) -> Simulated:
     position = tuple(np.asarray(position) + rng.uniform(-0.5, 0.5, 3) * (1, 1, 0.4))
     camera = Camera.look_at(position, target, FOCAL_PX, SIZE)
     terminal = FEATHER_TERMINAL_VELOCITY * (stress.uniform(0.9, 1.1) if stress is not None else 1.0)
-    rally = random_rally(rng, terminal_velocity=terminal, final_near_line=scenario.final_near_line)
-    duration = rally.end_time + IDLE_AFTER_S
+    rally = random_rally(rng, terminal_velocity=terminal, final_near_line=scenario.final_near_line, end=scenario.end)
+    if scenario.afterwards:
+        rally = afterwards(rally, np.random.default_rng(scenario.seed + 7_919))
+    over = rally.sent_back.end_time if rally.sent_back is not None else rally.lying_until or rally.end_time
+    tail = max(IDLE_AFTER_S, over - rally.end_time + 0.5)
+    duration = rally.end_time + tail
     neighbours = sorted(rng.uniform(0.0, duration - 0.05, rng.poisson(scenario.neighbour_per_s * duration)).tolist())
     clip = make_clip(
-        camera, SIZE, rally, fps=scenario.fps, handheld=True, seed=scenario.seed, tail_s=IDLE_AFTER_S,
+        camera, SIZE, rally, fps=scenario.fps, handheld=True, seed=scenario.seed, tail_s=tail,
         distractor_times=neighbours, render=False,
         audio_offset_s=stress.uniform(-0.02, 0.08) if stress is not None else 0.0,
         hit_levels=[0.25 if stress.random() < 0.2 else 1.0 for _ in rally.contacts] if stress is not None else None,
