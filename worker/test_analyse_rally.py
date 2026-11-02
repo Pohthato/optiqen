@@ -141,6 +141,19 @@ class AnalyseRallyTests(unittest.TestCase):
                 self.assertLess(float(miss @ np.linalg.solve(np.asarray(stood["covariance"]), miss)), 13.8, (shot["shot"], half))  # 99.9 %
         self.assertLess(np.median(misses), 0.15)
 
+    def test_each_shot_with_the_work_it_gave_the_receiver(self):
+        shots = self.result["shots"]
+        for half in ("near", "far"):
+            self.assertTrue(0.7 < self.result["summary"]["players"][half]["armReachM"]["value"] < 1.6)
+        answered = [(shot, after) for shot, after in zip(shots, shots[1:]) if after["hitter"] != shot["hitter"] and not after["serve"]]
+        self.assertGreaterEqual(len(answered), 3)
+        for shot, after in answered:
+            work = shot["pressure"]
+            self.assertAlmostEqual(work["timeMs"]["value"], after["hitMs"] - shot["hitMs"], delta=0.2)
+            self.assertEqual(work["heightM"]["value"], round(after["contact"][2], 3))
+            self.assertGreaterEqual(work["goM"]["value"], 0.0)
+        self.assertTrue(any(shot["pressure"]["goM"]["sigma"] > 0.0 for shot, _ in answered))
+
     def test_without_the_pose_model_or_with_poses_of_other_frames_there_are_no_players(self):
         cameras, times_ms = [None] * 3, [0.0, 33.3, 66.7]
         bodies, why = find_players(self.video, self.root / "clip.track.json", self.root / "none.poses.json", True, self.root / "missing.task", cameras, times_ms)

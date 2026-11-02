@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from body import BASE_FROM_NET_M, RACKET_REACH_M, body_at, centre_of_mass, hit_body, rally_body_facts, readiness, standing_reach
+from body import BASE_FROM_NET_M, RACKET_REACH_M, arm_reach, body_at, centre_of_mass, hit_body, rally_body_facts, readiness, standing_reach
 from evaluation.body_benchmark import FACTS, score
 from geometry.court_model import NET_Y_M, SINGLES_WIDTH_M
 from geometry.skeleton import ANKLE_HEIGHT_M, Body
@@ -40,6 +40,15 @@ class AtContactTests(unittest.TestCase):
         own = ANKLE_HEIGHT_M + LENGTH["shank"] + LENGTH["thigh"] + LENGTH["torso"] + LENGTH["upper_arm"] + LENGTH["forearm"] + RACKET_REACH_M
         self.assertAlmostEqual(reach.value, own, places=6)
         self.assertGreater(reach.sigma, 0.01)  # the bones may all run a little long
+
+    def test_arm_reach_is_the_player_s_own(self):
+        joints = standing()
+        reach = arm_reach(exact(joints) * 3)
+        own = float(np.linalg.norm(joints[5] - joints[6])) / 2 + LENGTH["upper_arm"] + LENGTH["forearm"] + RACKET_REACH_M
+        self.assertAlmostEqual(reach.value, own, places=6)
+        self.assertGreater(reach.sigma, 0.0)
+        with self.assertRaises(ValueError):
+            arm_reach([None])
 
     def test_where_and_how_high_against_the_body(self):
         joints = standing()

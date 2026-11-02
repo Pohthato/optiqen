@@ -89,26 +89,44 @@ class BodyFacts:
     ready: Readiness | None = None  # None for a serve, or with the body unknown at the opponent's hit
 
 
+def _joints(bodies: Sequence[Body | None]) -> np.ndarray:
+    joints = np.array([b.joints for b in bodies if b is not None])
+    if len(joints) == 0:
+        raise ValueError("no bodies")
+    return joints
+
+
+def _median(values: np.ndarray) -> tuple[float, float]:
+    """A median and its standard error."""
+    values = values[np.isfinite(values)]
+    return float(np.median(values)), float(1.2533 * np.std(values) / np.sqrt(max(len(values), 1)))
+
+
+def _bone(joints: np.ndarray, *pairs) -> tuple[float, float]:
+    return _median(np.concatenate([np.linalg.norm(joints[:, a] - joints[:, b], axis=1) for a, b in pairs]))
+
+
+def _sum_of(parts: list[tuple[float, float]], plus: float) -> Estimate:
+    body = sum(p[0] for p in parts)
+    return Estimate(plus + body, float(np.sqrt(sum(p[1] ** 2 for p in parts) + (BONES_OFF * body) ** 2)))
+
+
 def standing_reach(bodies: Sequence[Body | None]) -> Estimate:
     """The player's standing reach with the racket: ankle height, shank, thigh, the trunk from the
     hips' middle to the shoulders' middle, upper arm and forearm (each the median over the clip,
     both sides together), and the racket."""
-    joints = np.array([b.joints for b in bodies if b is not None])
-    if len(joints) == 0:
-        raise ValueError("no bodies")
-
-    def median(values: np.ndarray) -> tuple[float, float]:
-        """A median and its standard error."""
-        values = values[np.isfinite(values)]
-        return float(np.median(values)), float(1.2533 * np.std(values) / np.sqrt(max(len(values), 1)))
-
-    def bone(*pairs) -> tuple[float, float]:
-        return median(np.concatenate([np.linalg.norm(joints[:, a] - joints[:, b], axis=1) for a, b in pairs]))
-
+    joints = _joints(bodies)
     trunk = np.linalg.norm((joints[:, 5] + joints[:, 6] - joints[:, 11] - joints[:, 12]) / 2, axis=1)
-    parts = [bone((13, 15), (14, 16)), bone((11, 13), (12, 14)), median(trunk), bone((5, 7), (6, 8)), bone((7, 9), (8, 10))]
-    body = sum(p[0] for p in parts)
-    return Estimate(ANKLE_HEIGHT_M + body + RACKET_REACH_M, float(np.sqrt(sum(p[1] ** 2 for p in parts) + (BONES_OFF * body) ** 2)))
+    parts = [_bone(joints, (13, 15), (14, 16)), _bone(joints, (11, 13), (12, 14)), _median(trunk), _bone(joints, (5, 7), (6, 8)), _bone(joints, (7, 9), (8, 10))]
+    return _sum_of(parts, ANKLE_HEIGHT_M + RACKET_REACH_M)
+
+
+def arm_reach(bodies: Sequence[Body | None]) -> Estimate:
+    """How far out from the middle of the hips the racket reaches, the arm straight out: half the
+    shoulders' width, upper arm and forearm (each the median over the clip), and the racket."""
+    joints = _joints(bodies)
+    width = _bone(joints, (5, 6))
+    return _sum_of([(width[0] / 2, width[1] / 2), _bone(joints, (5, 7), (6, 8)), _bone(joints, (7, 9), (8, 10))], RACKET_REACH_M)
 
 
 def body_at(bodies: Sequence[Body | None], times_ms: Sequence[float], time_ms: float) -> Body | None:

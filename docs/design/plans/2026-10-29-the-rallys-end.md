@@ -140,6 +140,21 @@ The hits table again, with the hits after the end left out:
 
 Precision rises from 90 % to 95 %, and recall stays at 97 %. The four hits gone are the ones on clips 6 and 7 after the shuttle met the net. The four left are flights split in two, as in the players plan.
 
+### 6e: pressure at each hit
+
+`evaluation.pressure_benchmark` fits a simulated player over a whole rally, as the body benchmark does, and measures the pressure of each of the opponent's hits that player answered. The contact is the true one off by 5 cm on each axis, and the flight's time off by 12 ms at each end, and each is said to be. The truth is the same measure on the true body, contact and times. The rallies were 108 (seeds 3000–3002 and 3100–3105, each for the three views, both halves, 30 and 60 fps), with 294 hits answered.
+
+| Fact | Median error | 90th percentile | Within twice the stated uncertainty |
+| --- | --- | --- | --- |
+| How far they had to go | 3.5 cm | 12.4 cm | 92.9 % (89.3–95.3) |
+| The speed that needed | 0.03 m/s | 0.10 m/s | 93.2 % (89.7–95.6) |
+| How high they met it | 3.0 cm | 7.2 cm | 98.3 % (96.1–99.3) |
+
+- **Coverage is a little under 95 % for the way to go and the speed** (92.9 % and 93.2 %), but 95 % lies inside both intervals, so 294 hits cannot tell them from it. The error over its stated size has an rms of 0.98 and 0.97, so the size is right on the whole and the misses come from a few large errors. The height covers more than it should (98.3 %, rms 0.87): its uncertainty is a little cautious.
+- **By view**, the way to go is within twice its uncertainty on 94 % of hits from behind, 90 % from the corner and 95 % from the side.
+- **The arm reach** (half the shoulders, the arm and the racket) is within 1.4 mm of the true body's at the median and 2.8 mm at the 90th percentile, and within twice its uncertainty on all 108 rallies.
+- **In the one command** each shot gets its `pressure` (to the receiver's next contact, or to where the shot came down when nothing met it), and each half its `armReachM`. A shot has none when the receiver was not seen at the hit, when it went into the net, or when neither a reply nor a landing followed it.
+
 ## Decisions
 
 - **The end comes from the flight.** The players' reactions and the sound could add to it later; the flight is what every camera tier sees.

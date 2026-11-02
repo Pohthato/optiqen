@@ -48,8 +48,9 @@ def _exact(rally, side: str, time_s: float) -> Body:
     return Body(playing(rally, side, time_s), np.zeros(17), 0.0)
 
 
-def score(job: tuple[str, str, float, int]) -> dict:
-    view, side, fps, seed = job
+def fitted_player(view: str, side: str, fps: float, seed: int):
+    """A random rally with one player's bodies fitted from what a pose detector would report:
+    the rally, the frames' times, the fitted bodies and the true joints."""
     rng = np.random.default_rng(seed)
     rally = random_rally(rng)
     position, target = VIEWS[view]
@@ -63,6 +64,12 @@ def score(job: tuple[str, str, float, int]) -> dict:
     model_rng = np.random.default_rng(seed + 100)
     priors = [model_pose(c, t[idx], model_rng) for c, t in zip(cameras, truth)]
     bodies = fit_bodies(frames, cameras, times, facing=np.pi / 2 if side == "near" else -np.pi / 2, priors=priors)
+    return rally, times, bodies, truth
+
+
+def score(job: tuple[str, str, float, int]) -> dict:
+    view, side, fps, seed = job
+    rally, times, bodies, truth = fitted_player(view, side, fps, seed)
     reach = standing_reach(bodies)
     true_reach = standing_reach([Body(t, np.zeros(17), 0.0) for t in truth])
     contacts = sorted(rally.contacts, key=lambda c: c.time)

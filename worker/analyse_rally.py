@@ -2,7 +2,8 @@
 """A rally video understood in one command: the camera of every frame, the shuttle in every frame,
 the hits, each flight in 3D, the two players' bodies in 3D, and every shot's facts with the
 hitter's body at the hit and the shot's name: its family, cross or straight, forehand or
-backhand, and from a jump or not (shot_names.py).
+backhand, and from a jump or not (shot_names.py), and how hard it made the receiver work
+(pressure.py).
 
     python analyse_rally.py clip.mp4 --golden clip.json --out clip.analysis.json
         [--court singles|doubles] [--overlay clip.analysis.mp4] [--diagram clip.court.png]
@@ -36,7 +37,7 @@ import numpy as np
 import detect_poses
 import detect_shuttle
 import track_camera
-from body import BodyFacts, rally_body_facts, standing_at, standing_reach
+from body import BodyFacts, arm_reach, rally_body_facts, standing_at, standing_reach
 from find_hits import hear, hits_document, load_detections, rounded
 from geometry.camera import Camera
 from geometry.court_model import COURT_LENGTH_M, DOUBLES_MARGIN_M, NET_Y_M, SINGLES_WIDTH_M, court_lines, net_tape_lines
@@ -44,6 +45,7 @@ from geometry.skeleton import BONES, Body
 from hits import find_hits
 from lift_players import fit_players
 from players import HALVES
+from pressure import Pressure, rally_pressure
 from shot_names import Launch, Model, ShotName, name_shot, racket_arms
 from shots import RallyEnd, ShotFacts, rally_end, rally_shots
 from track_players import players_document
@@ -160,6 +162,18 @@ def body_entry(facts: BodyFacts | None) -> dict | None:
             "splitDropM": _estimate(ready.split_drop_m),
             "splitLowestMs": None if ready.split_lowest_ms is None else _estimate(ready.split_lowest_ms),
         },
+    }
+
+
+def pressure_entry(pressure: Pressure | None) -> dict | None:
+    """The work a shot gave the receiver, or None when nothing says what it was."""
+    if pressure is None:
+        return None
+    return {
+        "goM": _estimate(pressure.go_m),
+        "timeMs": _estimate(pressure.time_ms),
+        "speedMS": _estimate(pressure.speed_m_s),
+        "heightM": None if pressure.height_m is None else _estimate(pressure.height_m),
     }
 
 
@@ -357,6 +371,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"no players: {players_error}", file=sys.stderr)
     facts = rally_body_facts(shots, bodies, times_ms) if bodies is not None else [None] * len(shots)
     stood = [{half: standing_at(bodies[half], times_ms, shot.hit_ms) for half in HALVES} if bodies is not None else None for shot in shots]
+    reaches = {half: arm_reach(bodies[half]) for half in HALVES if any(body is not None for body in bodies[half])} if bodies is not None else {}
+    pressures = rally_pressure(shots, stood, reaches)
     model, rng = Model.load(), np.random.default_rng(0)
     arms = racket_arms(facts)
     names = [name_shot(Launch.of(shot), shot.serve, model, rng, fact, arms[shot.hitter]) for shot, fact in zip(shots, facts)]
@@ -376,15 +392,16 @@ def main(argv: list[str] | None = None) -> int:
     result["summary"]["players"] = None if bodies is None else {
         half: {
             "frames": sum(body is not None for body in bodies[half]),
-            "standingReachM": _estimate(standing_reach(bodies[half])) if any(body is not None for body in bodies[half]) else None,
+            "standingReachM": _estimate(standing_reach(bodies[half])) if half in reaches else None,
+            "armReachM": _estimate(reaches[half]) if half in reaches else None,
             "racketArm": None if arms[half] is None else {"call": arms[half].call, "p": arms[half].p},
         }
         for half in HALVES
     }
     result["summary"]["playersError"] = players_error
     result["shots"] = [
-        {**shot_entry(number, shot), "name": name.entry(), "body": body_entry(fact), "players": None if at is None else stood_entry(at)}
-        for number, (shot, name, fact, at) in enumerate(zip(shots, names, facts, stood), start=1)
+        {**shot_entry(number, shot), "name": name.entry(), "body": body_entry(fact), "players": None if at is None else stood_entry(at), "pressure": pressure_entry(on_them)}
+        for number, (shot, name, fact, at, on_them) in enumerate(zip(shots, names, facts, stood, pressures), start=1)
     ]
     result["sources"] = {"track": Path(track_path).name, "shuttle": Path(shuttle_path).name, "poses": Path(poses_path).name if bodies is not None else None}
     args.out.write_text(json.dumps(_clean(result), allow_nan=False), encoding="utf-8")
