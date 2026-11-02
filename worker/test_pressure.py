@@ -5,7 +5,7 @@ from dataclasses import replace
 import numpy as np
 
 from evaluation.pressure_benchmark import FACTS, score
-from pressure import HIT_TIME_SIGMA_MS, REACT_MS, TOP_M_S, rally_pressure, work
+from pressure import HIT_TIME_SIGMA_MS, LEAN_M, REACT_MS, TOP_M_S, contradicts, rally_pressure, work
 from shots import Estimate, Landing, ShotFacts
 
 REACH = Estimate(1.3, 0.02)
@@ -25,7 +25,7 @@ class WorkTests(unittest.TestCase):
         self.assertAlmostEqual(done.go_m.sigma, 0.0)
         self.assertEqual((done.time_ms.value, done.time_ms.sigma), (800.0, HIT_TIME_SIGMA_MS))
         self.assertAlmostEqual(done.speed_m_s.value, 5.0)
-        self.assertAlmostEqual(done.spare_ms.value, 800.0 - REACT_MS - 4.0 / TOP_M_S * 1000.0)
+        self.assertAlmostEqual(done.spare_ms.value, 800.0 - REACT_MS - (4.0 - LEAN_M) / TOP_M_S * 1000.0)
         self.assertAlmostEqual(done.spare_ms.sigma, HIT_TIME_SIGMA_MS, delta=1.0)
         self.assertEqual(done.height_m, Estimate(1.5, 0.1))
 
@@ -49,7 +49,9 @@ class RallyPressureTests(unittest.TestCase):
 
     def test_each_shot_on_the_other_player_up_to_their_contact(self):
         shots = [shot(0.0, "near"), shot(1000.0, "far", (3.0, 12.5, 1.0)), shot(2200.0, "near", (0.5, 3.0, 0.5))]
-        first, second, last = rally_pressure(shots, [self.stood] * 3, self.reaches)
+        far_back = {**self.stood, "far": (np.array([3.0, 11.5]), CERTAIN)}
+        stood = [self.stood, far_back, {**far_back, "near": (np.array([1.5, 3.0]), CERTAIN)}]  # each a metre from the contact when they meet it
+        first, second, last = rally_pressure(shots, stood, self.reaches)
         self.assertAlmostEqual(first.go_m.value, 2.5 - 1.3)
         self.assertAlmostEqual(first.time_ms.value, 1000.0)
         self.assertEqual(first.height_m, Estimate(1.0, 0.1))
@@ -65,6 +67,18 @@ class RallyPressureTests(unittest.TestCase):
         self.assertIsNone(down.height_m)
         into_net = replace(landing, p_over_net=0.01)
         self.assertEqual(rally_pressure([replace(shot(1000.0, "far"), landing=into_net)], [self.stood], self.reaches), [None])
+
+    def test_none_when_the_measurements_contradict_each_other(self):
+        shots = [shot(0.0, "near"), shot(1000.0, "far", (3.0, 12.5, 1.0))]
+        self.assertIsNone(rally_pressure(shots, [self.stood] * 2, self.reaches)[0])  # met 2.5 m from the hips
+        flew = {**self.stood, "far": (np.array([3.0, 4.0]), CERTAIN)}  # 6 m away at the hit, then a metre from the contact
+        self.assertIsNone(rally_pressure(shots, [flew, {**self.stood, "far": (np.array([3.0, 11.5]), CERTAIN)}], self.reaches)[0])
+
+    def test_contradiction_within_the_uncertainty_is_not_one(self):
+        loose = np.eye(2) * 0.5**2
+        self.assertFalse(contradicts((np.array([3.0, 10.0]), CERTAIN), (np.array([3.0, 10.0]), loose), (3.0, 12.5), CERTAIN, REACH, 1000.0))
+        self.assertTrue(contradicts((np.array([3.0, 10.0]), CERTAIN), (np.array([3.0, 10.0]), CERTAIN), (3.0, 12.5), CERTAIN, REACH, 1000.0))
+        self.assertFalse(contradicts((np.array([3.0, 4.0]), loose * 16), (np.array([3.0, 11.5]), CERTAIN), (3.0, 12.5), CERTAIN, REACH, 1000.0))
 
     def test_none_without_the_player_or_a_reply(self):
         shots = [shot(0.0, "near"), shot(900.0, "far")]
@@ -84,6 +98,7 @@ class BenchmarkTests(unittest.TestCase):
             self.assertGreater(len(errors), 2)
             self.assertLess(np.median(np.abs(errors[:, 0])), 75.0 if name == "spare_ms" else 0.25, name)
         self.assertEqual(len(result["pressed"]), len(result["facts"]["go_m"]))
+        self.assertLessEqual(result["setAside"], 1)
         self.assertTrue(all(0.0 <= p <= 1.0 for p, _ in result["pressed"]))
 
 

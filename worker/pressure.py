@@ -3,11 +3,14 @@
 
 For a shot: how far they had to go from where they stood at the hit to get the racket to the
 shuttle, less their reach; the time the flight gave them; the speed that needed; the time that
-left them to spare, for a player who starts REACT_MS after the hit and covers the way at TOP_M_S;
-and how high they met it. A shot that came down unmet is measured to where it landed. A shot
-into the net, or one followed by neither a reply nor a landing, has none. Each number comes with
-its uncertainty, from draws of where they stood (body.standing_at), the contact or the landing,
-their reach (body.arm_reach) and the time.
+left them to spare, for a player who starts REACT_MS after the hit, covers the way at TOP_M_S
+and leans LEAN_M further at a stretch; and how high they met it. A shot that came down unmet is
+measured to where it landed. A shot into the net, or one followed by neither a reply nor a
+landing, has none, and so has one whose measurements contradict each other: the reply's contact
+out of the receiver's reach at a stretch from where they stood when they met it, or a way between
+the two hits faster than MAX_RUN_M_S. Each number comes with its uncertainty, from draws of where
+they stood (body.standing_at), the contact or the landing, their reach (body.arm_reach) and the
+time.
 """
 from __future__ import annotations
 
@@ -22,6 +25,9 @@ DRAWS = 2000
 HIT_TIME_SIGMA_MS = 12.0  # either end of a flight's time, about a third of a frame at 30 fps
 REACT_MS = 250.0  # a player starts to move about a quarter of a second after the other's hit
 TOP_M_S = 3.5  # and covers the way no faster than this on average
+LEAN_M = 0.5  # at a stretch the shoulders are up to this far ahead of the hips
+MAX_RUN_M_S = 5.0  # no one covers the court faster: a player seen to was put in the wrong place
+AGREE_SIGMAS = 2.0  # measurements further apart than this many standard deviations contradict each other
 
 
 @dataclass(frozen=True)
@@ -45,12 +51,30 @@ def work(
     to_draws = rng.multivariate_normal(target, np.asarray(target_covariance, float), DRAWS, check_valid="ignore")
     gos = np.maximum(np.linalg.norm(to_draws - from_draws, axis=1) - rng.normal(reach.value, reach.sigma, DRAWS), 0.0)
     times = np.maximum(rng.normal(time_ms, time_sigma_ms, DRAWS), MIN_FLIGHT_MS)
-    spares = times - REACT_MS - gos / TOP_M_S * 1000.0
+    spares = times - REACT_MS - np.maximum(gos - LEAN_M, 0.0) / TOP_M_S * 1000.0
     return Pressure(
         Estimate(go, float(np.std(gos))), Estimate(float(time_ms), float(time_sigma_ms)),
         Estimate(go / max(time_ms, MIN_FLIGHT_MS) * 1000.0, float(np.std(gos / times)) * 1000.0),
-        Estimate(time_ms - REACT_MS - go / TOP_M_S * 1000.0, float(np.std(spares))), height,
+        Estimate(time_ms - REACT_MS - max(go - LEAN_M, 0.0) / TOP_M_S * 1000.0, float(np.std(spares))), height,
     )
+
+
+def _apart(a, b, covariance) -> tuple[float, float]:
+    """How far `b` is from `a`, and the standard deviation of that along the way between them."""
+    way = np.asarray(b, float) - np.asarray(a, float)
+    length = float(np.linalg.norm(way))
+    unit = way / max(length, 1e-9)
+    return length, float(np.sqrt(unit @ np.asarray(covariance, float) @ unit))
+
+
+def contradicts(stood, there, contact, contact_covariance, reach: Estimate, time_ms: float) -> bool:
+    """Whether where the receiver stood at the hit (`stood`) and when they met the shuttle
+    (`there`, each where and its covariance) cannot both be right with the contact."""
+    reached, sigma = _apart(there[0], contact, np.asarray(there[1]) + np.asarray(contact_covariance))
+    if reached - reach.value - LEAN_M > AGREE_SIGMAS * float(np.hypot(sigma, reach.sigma)):
+        return True
+    moved, sigma = _apart(stood[0], there[0], np.asarray(stood[1]) + np.asarray(there[1]))
+    return moved - MAX_RUN_M_S * time_ms / 1000.0 > AGREE_SIGMAS * sigma
 
 
 def rally_pressure(shots: Sequence[ShotFacts], stood: Sequence[dict | None], reaches: dict[str, Estimate | None]) -> list[Pressure | None]:
@@ -65,9 +89,12 @@ def rally_pressure(shots: Sequence[ShotFacts], stood: Sequence[dict | None], rea
         if where is None or reach is None:
             out.append(None)
         elif after is not None and after.hitter == receiver and not after.serve:
-            sigma = np.asarray(after.contact_sigma[:2])
-            height = Estimate(after.contact[2], after.contact_sigma[2])
-            out.append(work(where, after.contact[:2], np.diag(sigma**2), reach, after.hit_ms - shot.hit_ms, height, rng))
+            covariance, time_ms = np.diag(np.asarray(after.contact_sigma[:2]) ** 2), after.hit_ms - shot.hit_ms
+            there = (stood[i + 1] or {}).get(receiver)
+            if there is not None and contradicts(where, there, after.contact[:2], covariance, reach, time_ms):
+                out.append(None)
+            else:
+                out.append(work(where, after.contact[:2], covariance, reach, time_ms, Estimate(after.contact[2], after.contact_sigma[2]), rng))
         elif after is None and shot.landing is not None and shot.landing.p_over_net >= 0.5:
             out.append(work(where, shot.landing.point, shot.landing.covariance, reach, shot.landing.time_ms - shot.hit_ms, None, rng))
         else:

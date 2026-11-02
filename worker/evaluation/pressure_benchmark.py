@@ -6,7 +6,9 @@ three views at 30 or 60 fps, with 3 px of joint noise, 5 % of joints missed and 
 learned 3D pose model, the bodies fitted over the whole rally. Each of the opponent's hits that
 the player answered gets its pressure (pressure.work), with the contact point as the shuttle's
 analysis gives it: the true one off by CONTACT_SIGMA_M on each axis, the hit times off by
-HIT_TIME_SIGMA_MS, and said to be. The truth is the same on the true body, contact and times.
+HIT_TIME_SIGMA_MS, and said to be. A hit whose measurements contradict each other
+(pressure.contradicts) is set aside and counted. The truth is the same on the true body, contact
+and times.
 Per fact: the median and 90th percentile error, and how often the error is within twice the
 stated uncertainty. And whether the receiver was under pressure (rally_reasoning): how many hits
 were called so at CALL_CONFIDENCE, how many of those were right, and how the rest lean.
@@ -27,7 +29,7 @@ from body import arm_reach, standing_at
 from evaluation.body_benchmark import CONTACT_SIGMA_M, _errors, fitted_player
 from evaluation.hits_benchmark import VIEWS
 from geometry.skeleton import Body
-from pressure import HIT_TIME_SIGMA_MS, work
+from pressure import HIT_TIME_SIGMA_MS, contradicts, work
 from rally_reasoning import PRESSED_SPARE_MS, p_under
 from shots import CALL_CONFIDENCE, Estimate
 from simulation.people import playing
@@ -41,7 +43,7 @@ def score(job: tuple[str, str, float, int]) -> dict:
     reach, true_reach = arm_reach(bodies), arm_reach([Body(t, np.zeros(17), 0.0) for t in truth])
     noise = np.random.default_rng([seed, list(VIEWS).index(view), side == "far", int(fps), 1])
     contacts = sorted(rally.contacts, key=lambda c: c.time)
-    out = {"view": view, "side": side, "fps": fps, "seed": seed, "reach": [reach.value - true_reach.value, reach.sigma], "facts": {name: [] for name in FACTS}, "pressed": []}
+    out = {"view": view, "side": side, "fps": fps, "seed": seed, "reach": [reach.value - true_reach.value, reach.sigma], "facts": {name: [] for name in FACTS}, "pressed": [], "setAside": 0}
     for before, after in zip(contacts, contacts[1:]):
         if after.hitter != side or before.hitter == side or not times[0] < before.time * 1000.0 < times[-1]:
             continue
@@ -50,6 +52,10 @@ def score(job: tuple[str, str, float, int]) -> dict:
             continue
         contact = np.asarray(after.position) + noise.normal(0, CONTACT_SIGMA_M, 3)
         flight_ms = (after.time - before.time) * 1000.0
+        there = standing_at(bodies, times, after.time * 1000.0)
+        if there is not None and contradicts(stood, there, contact[:2], np.eye(2) * CONTACT_SIGMA_M**2, reach, flight_ms):
+            out["setAside"] += 1
+            continue
         said = work(
             stood, contact[:2], np.eye(2) * CONTACT_SIGMA_M**2, reach, flight_ms + noise.normal(0, HIT_TIME_SIGMA_MS), Estimate(float(contact[2]), CONTACT_SIGMA_M),
             rng=noise, time_sigma_ms=HIT_TIME_SIGMA_MS * 2**0.5,
@@ -77,7 +83,7 @@ def summarise(results: list[dict]) -> dict:
     return {
         key: {
             **{name: _errors([pair for r in group for pair in r["facts"][name]]) for name in FACTS}, "armReachM": _errors([r["reach"] for r in group]),
-            "pressed": _calls([pair for r in group for pair in r["pressed"]]),
+            "pressed": _calls([pair for r in group for pair in r["pressed"]]), "setAside": sum(r["setAside"] for r in group),
         }
         for key, group in groups.items() if group
     }

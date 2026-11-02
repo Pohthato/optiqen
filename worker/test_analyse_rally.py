@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 
 from analyse_rally import find_players, main
-from pressure import REACT_MS, TOP_M_S
+from pressure import LEAN_M, REACT_MS, TOP_M_S
 from evaluation.hits_benchmark import SIZE, Scenario, simulate
 from geometry.skeleton import JOINTS
 from shot_names import Launch
@@ -146,14 +146,14 @@ class AnalyseRallyTests(unittest.TestCase):
         shots = self.result["shots"]
         for half in ("near", "far"):
             self.assertTrue(0.7 < self.result["summary"]["players"][half]["armReachM"]["value"] < 1.6)
-        answered = [(shot, after) for shot, after in zip(shots, shots[1:]) if after["hitter"] != shot["hitter"] and not after["serve"]]
+        answered = [(shot, after) for shot, after in zip(shots, shots[1:]) if after["hitter"] != shot["hitter"] and not after["serve"] and shot["pressure"] is not None]
         self.assertGreaterEqual(len(answered), 3)
         for shot, after in answered:
             work = shot["pressure"]
             self.assertAlmostEqual(work["timeMs"]["value"], after["hitMs"] - shot["hitMs"], delta=0.2)
             self.assertEqual(work["heightM"]["value"], round(after["contact"][2], 3))
             self.assertGreaterEqual(work["goM"]["value"], 0.0)
-            self.assertAlmostEqual(work["spareMs"]["value"], work["timeMs"]["value"] - REACT_MS - work["goM"]["value"] / TOP_M_S * 1000.0, delta=0.5)
+            self.assertAlmostEqual(work["spareMs"]["value"], work["timeMs"]["value"] - REACT_MS - max(work["goM"]["value"] - LEAN_M, 0.0) / TOP_M_S * 1000.0, delta=0.5)
         self.assertTrue(any(shot["pressure"]["goM"]["sigma"] > 0.0 for shot, _ in answered))
 
     def test_how_the_rally_was_won_and_where_it_turned(self):
