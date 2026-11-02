@@ -38,11 +38,13 @@ Each step is pushed on its own.
 | 6c | **How the rally ended, called.** The rally ends when the shuttle comes down, to the floor or into the net. When it is next seen, it has either gone on with the same flight (it went over), come back over the net (it was played), or neither (it stopped). A sighting is a missed hit only when a racket could have met the shuttle there, on the side it had crossed to, or when, with a flight that surely got over the net still up or just down, the shuttle is seen off that flight or a hit is heard. The end is in, out or net, each with its chance: net is the chance it did not get over, and in and out share the rest by where it landed. One is called when it is 95 % likely, as landings are now; otherwise the end is too close to call, with the two most likely. The winner has its own chance, since out and net both lose the rally for the hitter. Hits after the end are not the rally's. | `worker/shots.py`, `worker/evaluation/rally_end_benchmark.py` | Held-out simulation, standard and stressed: every end and winner called at 95 % is right at least 95 % of the time, for in, out and net alike. How often each is too close to call, by its distance from the line or the tape. |
 | 6d | **Into the one command, and your rallies.** The summary gets the end with its chances and the winner. The overlay writes them when the shuttle comes down, and the diagram marks the landing or the net. Then your five clips are run again from their saved camera track, shuttle and poses. | `worker/analyse_rally.py` | Your five ends and winners. The hits table again, with the hits after the end left out. |
 | 6e | **Pressure at each hit.** For every shot, how hard the receiver had to work to reply: how far they had to go from where they stood at the hit to the next contact, less their reach; the time the flight gave them; the speed that needed; and how high they met it. Each comes with its uncertainty, from the players' standing covariance and the contact's. | `worker/pressure.py` | Exact on simulated players. The stated uncertainty covers the truth on simulated rallies 95 % of the time. |
-| 6f | **Why the rally was won.** Rules for you to agree. A shot that lands in is a winner when the receiver could not reach it in time. An error (out or net) is forced when its hitter was under pressure at that hit, and unforced when not. The rally turned at the first shot after which the loser was under pressure at every hit. Each comes with its chance, or too close to call. | `worker/rally_reasoning.py` | Your labels for the five rallies (below), scored blind: the app's answers are written down before yours are read. |
+| 6f | **Why the rally was won.** Rules for you to agree. Each hit's pressure gets the time it left the receiver to spare: the flight's time less a 250 ms start and the way beyond their reach, less a 0.5 m lean at a stretch, at 3.5 m/s. A shot that lands in is a winner when the receiver had no time to spare, and let in when they had. An error (out or net) is forced when its hitter had less than 250 ms to spare after the shot before, and unforced when not; a serve is never under pressure. The rally turned at the first of the winner's shots from which every one of theirs left the loser under pressure. Each comes with its chance, or too close to call. | `worker/rally_reasoning.py` | Your labels for the five rallies (below), scored blind: the app's answers are written down before yours are read. |
 
 ## What 6f needs from you
 
-`hittimes.txt` says how each rally ended but not why. One line per clip would do: for Clip 10, 7 and 6 (out, net, net), whether the error was forced or unforced, and for every clip the shot where the rally turned, if one did. Five rallies only test the rules on your own judgement; a coach's labels on more rallies are what the spec's gate asks for.
+`hittimes.txt` says how each rally ended but not why. One line per clip in `worker/Clips/reasons.txt`, not in the chat, so they stay unread until the app's answers are pushed: for Clip 10, 7 and 6 (out, net, net), whether the error was forced or unforced, and for every clip the time of the shot where the rally turned, as in `hittimes.txt`, or "no turn". For example: `Clip 10: unforced; turned at 18.2 s`. Five rallies only test the rules on your own judgement; a coach's labels on more rallies are what the spec's gate asks for.
+
+How they are scored was fixed before any label was read. Forced or unforced is scored given the error, as you label it: the app's chance of forced over its chance of either error, called at 95 %. The turn agrees when both say no turn, or when the app's turning shot is within 250 ms of your time (the hits' tolerance). Too close to call is no call, and its lean is reported apart.
 
 ## Results
 
@@ -155,6 +157,39 @@ Precision rises from 90 % to 95 %, and recall stays at 97 %. The four hits gone 
 - **The arm reach** (half the shoulders, the arm and the racket) is within 1.4 mm of the true body's at the median and 2.8 mm at the 90th percentile, and within twice its uncertainty on all 108 rallies.
 - **In the one command** each shot gets its `pressure` (to the receiver's next contact, or to where the shot came down when nothing met it), and each half its `armReachM`. A shot has none when the receiver was not seen at the hit, when it went into the net, or when neither a reply nor a landing followed it.
 
+### 6f: why the rally was won
+
+The rules were committed (`4dd7d66`) before any clip was run with them. The answers below were pushed before any of your labels was read.
+
+**A check on your clips found the pressure wrong, and it was fixed before any label was read.** Every hit a player answered was reached, so the time to spare should not say otherwise. With the rules as first committed it said 13 of the 51 answered hits on your clips could not have been reached, 9 of them at 95 %. The movement was not at fault: from the hit to their own contact the receivers moved at 1.9 m/s at the median after the 250 ms start, and 3.7 m/s at the 90th percentile. The positions were. When the receiver met the shuttle, the contact was further from their hips than their arms reach on 55 % of the 44 hits with them seen at both hits, and by 3 m or more on a tenth, against a stated uncertainty of about 0.3 m. The 6e benchmark could not see this: it takes the true contact off by 5 cm, not the one the shuttle's flight gives.
+
+The fix (`7cba1ef`): a hit's pressure is not known when the reply's contact is out of the receiver's reach at a stretch from where they stood when they met it, or when they would have covered the way faster than 5 m/s, each by more than twice the stated uncertainty. And the time to spare allows for the shoulders being up to 0.5 m ahead of the hips at a stretch. On your clips it sets aside 9 of the 51 answered hits. Of the 42 left, 2 are still called out of reach at 95 %, about the 5 % such a call allows.
+
+`evaluation.pressure_benchmark` again, on held-out seeds 3200–3208 (108 rallies, 336 hits answered, none set aside):
+
+| Fact | Median error | 90th percentile | Within twice the stated uncertainty |
+| --- | --- | --- | --- |
+| How far they had to go | 3.6 cm | 11.7 cm | 95.5 % (92.8–97.3) |
+| The speed that needed | 0.03 m/s | 0.12 m/s | 95.5 % (92.8–97.3) |
+| The time to spare | 13 ms | 36 ms | 97.6 % (95.4–98.8) |
+| How high they met it | 3.5 cm | 8.0 cm | 96.4 % (93.9–97.9) |
+
+- **Under pressure or not** is called on 331 of the 336 hits, all right (lower bound 98.9 %); 18 were truly under pressure, and all 18 were called so. Of the 5 too close to call, 3 lean the right way.
+- **This does not vouch for your clips' contacts.** The benchmark's contact is the true one off by 5 cm; on your clips the contact from the shuttle's flight is the weak part, which the check above sets aside only when it contradicts the body.
+
+Your five rallies, with the rules as pushed:
+
+| Clip | Your end | How it was won | Where it turned |
+| --- | --- | --- | --- |
+| 9 | smash, in | too close to call (0.53 unforced error, 0.33 let in, 0.14 winner) | too close to call (0.59 no turn) |
+| 8 | clear, in | too close to call (0.42 let in; an error at even odds forced or not) | too close to call (0.71 no turn) |
+| 10 | push, out long | unforced error (1.00) | no turn (1.00) |
+| 7 | drop, into the net | unforced error (1.00) | no turn (1.00) |
+| 6 | cut, into the net | too close to call (0.71 let in; an error would be unforced, 1.00) | no turn (0.98) |
+
+- **The rules as first committed** said the same of how each rally was won, with Clip 10 at 0.95 unforced. On the turn they called Clip 8 no turn (1.00), where the last hit's pressure is now set aside, and left Clip 6 too close to call (0.80 no turn). Your labels score both.
+- **No rally is called as turning at a shot.** The rules see where the receiver stood at each hit, not which way they were moving, so a player wrong-footed or slow to recover is not seen as under pressure.
+
 ## Decisions
 
 - **The end comes from the flight.** The players' reactions and the sound could add to it later; the flight is what every camera tier sees.
@@ -163,6 +198,7 @@ Precision rises from 90 % to 95 %, and recall stays at 97 %. The four hits gone 
 - **A missed reply is worse than a false one.** A false reply costs a call: the end reads as not seen. A missed reply makes a wrong call. So doubt goes towards no landing: none is called on a last shot that may be the shuttle sent back, on a flight that does not explain its sightings, or on a landing that could be almost anywhere. The price is how many ends are called at all.
 - **The same honesty as Phases 3 and 5.** An end the measurements cannot settle is too close to call. The far baseline from a low corner camera is measured worst, which is where clips 8 and 9 landed.
 - **The rules in 6f are written down, not learnt.** Five rallies cannot teach them. A learned value of each position is Phase 7.
+- **Measurements that contradict each other say nothing.** A hit whose contact is out of the receiver's reach from where they stood when they met it has no pressure, rather than one from whichever of the two is wrong.
 
 ## Proposed gate (for you to agree)
 
