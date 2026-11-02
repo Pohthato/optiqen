@@ -35,7 +35,7 @@ Each step is pushed on its own.
 | --- | --- | --- | --- |
 | 6a | **Your rally ends in the evaluation.** Read how each rally ended from its notes ("in", "out", "into the net", next to "end of rally"), and the winner from that. Score an analysis against it: the shot that ended the rally, how it ended, and who won. | `worker/evaluation/hand_labels.py` | Reproduces the table above. |
 | 6b | **Simulated rally ends.** The simulator ends a rally in one of three ways: in court, out past a line, or into the net (the shuttle meets the net below the tape, stops and falls on the hitter's side). After the end the shuttle lies where it came down, and in some rallies a player picks it up and sends it back over the net to the server. The hits benchmark's scenarios gain these ends. | `worker/simulation/rally.py`, `worker/evaluation/hits_benchmark.py` | A net end stops at the net and comes down at its foot. The detector sees the shuttle on the floor and the pickup. The hits benchmark's old seeds give the same rallies as before. |
-| 6c | **How the rally ended, called.** The rally ends when the shuttle comes down, to the floor or into the net. When it is next seen, it has either gone on with the same flight (it went over), come back over the net (it was played), or neither (it stopped). A sighting is a missed hit only when a racket could have met the shuttle there, on the side it had crossed to. The end is in, out or net, each with its chance: net is the chance it did not get over, and in and out share the rest by where it landed. One is called when it is 95 % likely, as landings are now; otherwise the end is too close to call, with the two most likely. The winner has its own chance, since out and net both lose the rally for the hitter. Hits after the end are not the rally's. | `worker/shots.py`, `worker/evaluation/rally_end_benchmark.py` | Held-out simulation, standard and stressed: every end and winner called at 95 % is right at least 95 % of the time, for in, out and net alike. How often each is too close to call, by its distance from the line or the tape. |
+| 6c | **How the rally ended, called.** The rally ends when the shuttle comes down, to the floor or into the net. When it is next seen, it has either gone on with the same flight (it went over), come back over the net (it was played), or neither (it stopped). A sighting is a missed hit only when a racket could have met the shuttle there, on the side it had crossed to, or when, with a flight that surely got over the net still up or just down, the shuttle is seen off that flight or a hit is heard. The end is in, out or net, each with its chance: net is the chance it did not get over, and in and out share the rest by where it landed. One is called when it is 95 % likely, as landings are now; otherwise the end is too close to call, with the two most likely. The winner has its own chance, since out and net both lose the rally for the hitter. Hits after the end are not the rally's. | `worker/shots.py`, `worker/evaluation/rally_end_benchmark.py` | Held-out simulation, standard and stressed: every end and winner called at 95 % is right at least 95 % of the time, for in, out and net alike. How often each is too close to call, by its distance from the line or the tape. |
 | 6d | **Into the one command, and your rallies.** The summary gets the end with its chances and the winner. The overlay writes them when the shuttle comes down, and the diagram marks the landing or the net. Then your five clips are run again from their saved camera track, shuttle and poses. | `worker/analyse_rally.py` | Your five ends and winners. The hits table again, with the hits after the end left out. |
 | 6e | **Pressure at each hit.** For every shot, how hard the receiver had to work to reply: how far they had to go from where they stood at the hit to the next contact, less their reach; the time the flight gave them; the speed that needed; and how high they met it. Each comes with its uncertainty, from the players' standing covariance and the contact's. | `worker/pressure.py` | Exact on simulated players. The stated uncertainty covers the truth on simulated rallies 95 % of the time. |
 | 6f | **Why the rally was won.** Rules for you to agree. A shot that lands in is a winner when the receiver could not reach it in time. An error (out or net) is forced when its hitter was under pressure at that hit, and unforced when not. The rally turned at the first shot after which the loser was under pressure at every hit. Each comes with its chance, or too close to call. | `worker/rally_reasoning.py` | Your labels for the five rallies (below), scored blind: the app's answers are written down before yours are read. |
@@ -44,11 +44,80 @@ Each step is pushed on its own.
 
 `hittimes.txt` says how each rally ended but not why. One line per clip would do: for Clip 10, 7 and 6 (out, net, net), whether the error was forced or unforced, and for every clip the shot where the rally turned, if one did. Five rallies only test the rules on your own judgement; a coach's labels on more rallies are what the spec's gate asks for.
 
+## Results
+
+### 6c: how the rally ended, on held-out simulation
+
+`evaluation.rally_end_benchmark` ends the hits benchmark's rallies in turn in court, within 40 cm of a line, 0.3 to 1.2 m out, or into the net. In half of them the shuttle then lies where it came down and is sent back over the net. There were four rounds. In each, the rules were frozen and scored on seeds never looked at, in both worlds. Then every wrong call was traced and the rules changed. So only round 4 measures the rules as they stand; rounds 1 to 3 measure the rules their traces replaced. Each cell is right of called.
+
+| Round | Seeds | World | In | Out | Net | Winner | Winner too close | Last shot right |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 6000–6119 | Standard | 15 of 19 | 14 of 14 | 5 of 7 | 43 of 47 | 41 | 75 of 120 |
+| 1 | 6000–6119 | Stressed | 15 of 18 | 15 of 16 | 7 of 8 | 42 of 49 | 39 | 70 of 120 |
+| 2 | 7000–7119 | Standard | 18 of 22 | 20 of 20 | 4 of 5 | 45 of 49 | 29 | 80 of 120 |
+| 2 | 7000–7119 | Stressed | 15 of 17 | 8 of 8 | 4 of 5 | 27 of 31 | 30 | 69 of 120 |
+| 3 | 8000–8119 | Standard | 22 of 23 | 25 of 25 | 6 of 6 | 49 of 49 | 29 | 89 of 120 |
+| 3 | 8000–8119 | Stressed | 18 of 18 | 14 of 16 | 6 of 6 | 33 of 34 | 26 | 72 of 120 |
+| 4 | 9000–9239 | Standard | 39 of 41 | 35 of 35 | 9 of 9 | 80 of 81 | 60 | 158 of 240 |
+| 4 | 9000–9239 | Stressed | 26 of 27 | 29 of 31 | 6 of 6 | 60 of 63 | 41 | 136 of 240 |
+
+What each round's traces found:
+
+- **Round 1.** The shuttle sent back after the end was taken for the last shot. The last shot's following forgot a hit heard while it was out of sight. Some hits were heard but never seen: one rally's shuttle was sighted in 133 of 482 frames. Flights seen going on past the net were called net.
+- **Round 2.** The rule added for that last cause was itself wrong from behind the court, where a shuttle falling down the net looks like a flight going on past it: four wrong "in" calls. A sighting now counts as past the net only when it lies outside the net's outline in the image. The rest were a lone sent-back flight, a 6 ms "flight" at the floor, a 1.9 s flight that never reached the net, and hits between the last two shots that made no shot.
+- **Round 3.** A landing known only to tens of metres read as 99 % out, because the court is a small part of the floor. A landing with a spread over 3 m is no longer called. Two more were left alone: a last hit neither seen nor heard (the winner was still right), and two silent hits missed before a 3.6 s gap.
+- **Round 4.** Traced for this record, and nothing was changed, so three causes stand. A missed reply: in one standard rally (behind, 60 fps, silent) only three of seven hits were found, and a shot already played on was followed to the floor. In another, in both worlds (corner, 30 fps), the last reply was heard, but the little seen of its flight fitted moving away from the net, so it made no shot and the shot before it stood. Both were rallies into the net called in, and the second kept its winner only because that player won either way. A landing too sure: both wrong outs in the stressed world came from the side at 60 fps with a miscalibrated camera, on landings 1.5 and 1.9 m from the truth whose stated spread did not cover that (one was 34 cm in and called out at 0.999). The shuttle falling down the net taken for a shot: one stressed rally got the end right and the winner wrong, because the fall was given to the other player.
+
+Round 4 is the measure of the gate. "At least" is the 95 % Wilson lower bound.
+
+| Called | Standard | At least | Stressed | At least |
+| --- | --- | --- | --- | --- |
+| In | 39 of 41 (95.1 %) | 83.9 % | 26 of 27 (96.3 %) | 81.7 % |
+| Out | 35 of 35 (100 %) | 90.1 % | 29 of 31 (93.5 %) | 79.3 % |
+| Net | 9 of 9 (100 %) | 70.1 % | 6 of 6 (100 %) | 61.0 % |
+| Winner | 80 of 81 (98.8 %) | 93.3 % | 60 of 63 (95.2 %) | 86.9 % |
+
+**The gate is not shown to be met.** The standard world reaches 95 % on every line. The stressed world reaches it on in, net and the winner, and misses by one call on out. No lower bound reaches 95 % in either world, and few could: even a run with no wrong call needs about 73 calls of a kind to show it, and only the winner had that many.
+
+What the honesty costs, 240 rallies in each world:
+
+| True end | World | Rallies | Called right | Too close | Called wrong | No end seen |
+| --- | --- | --- | --- | --- | --- | --- |
+| In | Standard | 97 | 39 | 30 | 0 | 28 |
+| In | Stressed | 98 | 26 | 21 | 2 | 49 |
+| Out | Standard | 83 | 35 | 19 | 0 | 29 |
+| Out | Stressed | 82 | 29 | 13 | 0 | 40 |
+| Net | Standard | 60 | 9 | 7 | 2 | 42 |
+| Net | Stressed | 60 | 6 | 6 | 1 | 47 |
+
+And by how far the truth was from the line or the tape. Each cell is right, too close, wrong and no end seen, of the rallies at that distance:
+
+| True end | Distance | Standard | Stressed |
+| --- | --- | --- | --- |
+| In | under 10 cm | 1, 5, 0, 4 of 10 | 2, 4, 1, 4 of 11 |
+| In | 10–30 cm | 7, 12, 0, 4 of 23 | 4, 8, 0, 11 of 23 |
+| In | 30 cm–1 m | 11, 9, 0, 12 of 32 | 5, 5, 1, 19 of 30 |
+| In | over 1 m | 20, 4, 0, 8 of 32 | 15, 4, 0, 15 of 34 |
+| Out | under 10 cm | 0, 7, 0, 5 of 12 | 1, 3, 0, 7 of 11 |
+| Out | 10–30 cm | 2, 6, 0, 1 of 9 | 2, 6, 0, 1 of 9 |
+| Out | 30 cm–1 m | 29, 5, 0, 19 of 53 | 21, 4, 0, 28 of 53 |
+| Out | over 1 m | 4, 1, 0, 4 of 9 | 5, 0, 0, 4 of 9 |
+| Net | under 10 cm | 0, 1, 0, 1 of 2 | 0, 1, 0, 1 of 2 |
+| Net | 10–30 cm | 3, 1, 1, 18 of 23 | 2, 2, 0, 18 of 22 |
+| Net | 30 cm–1 m | 6, 5, 1, 23 of 35 | 4, 3, 1, 28 of 36 |
+
+- **Calls are few.** 85 of 240 rallies get an end called in the standard world, and 64 in the stressed one. Doubt goes towards no landing (see Decisions), and the price shows here: 99 and 136 rallies have no end seen.
+- **Net ends cost most.** The last shot was the true one on 20 of 60 net ends, against 44 to 48 of 60 for the other kinds (stressed, 19 against 32 to 46). Only 9 of 60 net ends were called, and 6 of 60 stressed.
+- **A lean is worth something, but it is not a call.** On the 56 ends left too close, the likelier end was the true one 43 times, where the stated chances averaged 0.735 (stressed, 29 of 40 at 0.74). The in-or-out leans do not favour either side: 15 of 34 leaned out, and 16 were out (stressed, 12 of 23, and 11).
+- **By view:** behind in 20 of 21, out 11 of 11, net 4 of 4; corner in 14 of 15, out 17 of 17, net 2 of 2; side in 5 of 5, out 7 of 7, net 3 of 3. **After the end:** rallies that went on past it got in 21 of 21, out 17 of 17, net 4 of 4; the others in 18 of 20, out 18 of 18, net 5 of 5. Both wrong ends had nothing after them.
+- **The side view is the weak one under stress:** in 4 of 4, out 4 of 6, net 2 of 2, winner 10 of 12. The stressed world's behind view is in 11 of 11, out 9 of 9, net 2 of 2, and its corner in 11 of 12, out 16 of 16, net 2 of 2.
+
 ## Decisions
 
 - **The end comes from the flight.** The players' reactions and the sound could add to it later; the flight is what every camera tier sees.
 - **The rally ends when the shuttle comes down.** What follows (the shuttle on the floor, a pickup, someone in white in the background) is not the rally's unless a racket could have met the shuttle there.
 - **Lines are in, and a shot that clips the tape and falls in the opponent's court is in.** A fitted flight cannot see the tape touch: such a shot comes out with a clearance near zero and an end too close to call, unless it is seen to land.
+- **A missed reply is worse than a false one.** A false reply costs a call: the end reads as not seen. A missed reply makes a wrong call. So doubt goes towards no landing: none is called on a last shot that may be the shuttle sent back, on a flight that does not explain its sightings, or on a landing that could be almost anywhere. The price is how many ends are called at all.
 - **The same honesty as Phases 3 and 5.** An end the measurements cannot settle is too close to call. The far baseline from a low corner camera is measured worst, which is where clips 8 and 9 landed.
 - **The rules in 6f are written down, not learnt.** Five rallies cannot teach them. A learned value of each position is Phase 7.
 

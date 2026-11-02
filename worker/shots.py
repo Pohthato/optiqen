@@ -6,7 +6,8 @@ racket, how high it went, how high it crossed the net and by how much it cleared
 flew, and, for the shot that ends a rally, where it landed and whether that was in. Every number
 carries a standard deviation: the flight fit's covariance, the shuttle's drag, when exactly it
 was hit and the court calibration's own error. A landing too close to a line for its uncertainty
-is "too close to call" rather than a guess.
+is "too close to call" rather than a guess. The rally's end is in, out or into the net, each with
+its chance, and the winner has its own (rally_end): out and net both lose the rally for the hitter.
 
 The rules are the BWF's: lines are in; a rally shot must clear the net and land in the
 opponent's half of the singles or doubles court; a serve must land in the service court
@@ -18,6 +19,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, replace
 
+import cv2
 import numpy as np
 
 from geometry.court_model import (
@@ -47,12 +49,24 @@ SHOWN_EVERY = 10  # the path a shot reports, for drawing: every 20 ms
 MAX_FLIGHT_S = 3.0  # no shot stays up longer
 RALLY_GAP_S = MAX_FLIGHT_S + 0.5  # a next hit this much later is the next rally's
 LANDED_BEFORE_NEXT_MS = 100.0  # a flight on the floor this long before the next hit had landed
+OFF_FLIGHT_JITTERS = 8.0  # a sighting this many jitters from a flight is not on it
+OFF_LANDING_JITTERS = 20.0  # one this many from where a flight came down is not the shuttle lying there
+OFF_FLIGHT_SIGHTINGS = 3  # so many of them, with the flight still up: the shuttle was elsewhere
+MIN_BACK_M_S = 1.0  # a reply leaves back towards the net at least this fast, however soft
+SHORT_OF_NET_M = 3.0  # no shot comes down this far short of the net: it is the end of another
+SEEN_PAST_NET_M = 1.5  # a flight still seen this far beyond the net got over it: the net stops what it meets
+NET_MARGIN_M = 0.3  # how far outside the net's outline, in the image, a sighting may still be on the net
+TO_THE_NET_S = 1.0  # no shot takes longer to reach the net
+MIN_FLIGHT_MS = 100.0  # no shot comes down sooner
+LYING_MS = 800.0  # a shuttle that came down lies at least this long before anyone picks it up
+HITS_AFTER_THE_END = 2  # the most a rally's end leaves behind (the shuttle falling, picked up, sent back)
 STATE_STEP_S = 0.001
 BACKWARD_LIMIT_S = 0.02  # drag run backwards blows up; never trace a flight back further than this
 DIFFERENCE_STEP = 1e-3  # central-difference step on the flight's position (m) and velocity (m/s)
 ONE_FLIGHT_RMS = 2.0  # pieces are one flight when fitting them together misses by at most this much more
 ONE_FLIGHT_SHARE = 0.8  # and still explains this share of every piece's detections
 EXPLAINED_RMS = 3.0  # a flight missing its detections by more than this many noise units is not one flight: its landing is not called
+LOST_LANDING_M = 3.0  # nor is one known no better than this: a spread wider than the court makes anything look out
 MIN_LAUNCH_M_S = 3.5  # even a soft net shot leaves the racket faster than this
 # The court calibration's own error, which the flight fit does not see: the camera-tracking
 # gate's budget (median floor error under 5 cm) until labelled real clips measure it; for speeds,
@@ -104,6 +118,34 @@ class ShotFacts:
     # Of the contact and the velocity together (6 x 6): the fit's, the calibration's, the drag's
     # and the hit time's errors, so draws from it are whole flights that agree with each other.
     launch_covariance: tuple[tuple[float, ...], ...] = ()
+    seen_over: bool = False  # seen well beyond the net, so it got over whatever its clearance says
+
+
+@dataclass(frozen=True)
+class RallyEnd:
+    time_ms: float  # when the last shot came down
+    p: dict[str, float]  # the chance it came down "in", "out", or in the "net"
+    call: str  # the one of those that is CALL_CONFIDENCE sure, or "too close to call"
+    winner: str  # "near" | "far" | "too close to call"
+    p_hitter_won: float  # the chance it was in
+
+
+def rally_end(shots: list[ShotFacts]) -> RallyEnd | None:
+    """How the rally ended, from its last shot (rally_shots ends the rally where the shuttle came
+    down), and who won: the hitter when it was in, the other player when it was out or in the
+    net, so the winner can be sure when the end is not, unless it is unsure which half the shot
+    came from. None when the end was not seen."""
+    if not shots or shots[-1].landing is None:
+        return None
+    shot, landing = shots[-1], shots[-1].landing
+    p = {"in": landing.p_in, "out": max(landing.p_over_net - landing.p_in, 0.0), "net": 1.0 - landing.p_over_net}
+    likeliest = max(p, key=p.get)
+    other = "far" if shot.hitter == "near" else "near"
+    winner = shot.hitter if p["in"] >= CALL_CONFIDENCE else other if p["in"] <= 1.0 - CALL_CONFIDENCE else "too close to call"
+    far_half = _normal_cdf((shot.contact[1] - NET_Y_M) / max(shot.contact_sigma[1], 1e-6))
+    if max(far_half, 1.0 - far_half) < CALL_CONFIDENCE:
+        winner = "too close to call"
+    return RallyEnd(landing.time_ms, p, likeliest if p[likeliest] >= CALL_CONFIDENCE else "too close to call", winner, landing.p_in)
 
 
 def net_height_m(x: float) -> float:
@@ -157,6 +199,17 @@ def call_landing(point, covariance, area) -> tuple[str, float]:
     return _verdict(p_in), p_in
 
 
+def _may_be_on_the_net(camera, pixel) -> bool:
+    """Whether what is seen at this pixel may be on the net, it being within the net's outline in
+    the image: from behind the court a shuttle falling down the net looks like a flight going on
+    beyond it."""
+    left, right, top = POST_X_M[0] - NET_MARGIN_M, POST_X_M[1] + NET_MARGIN_M, NET_POST_HEIGHT_M + NET_MARGIN_M
+    outline = camera.project(np.array([[left, NET_Y_M, -NET_MARGIN_M], [right, NET_Y_M, -NET_MARGIN_M], [right, NET_Y_M, top], [left, NET_Y_M, top]]))
+    if not np.all(np.isfinite(outline)):
+        return True
+    return cv2.pointPolygonTest(outline.astype(np.float32), (float(pixel[0]), float(pixel[1])), False) >= 0
+
+
 def _normal_cdf(z: float) -> float:
     return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
 
@@ -175,9 +228,18 @@ def _judged(facts: ShotFacts, court: str) -> ShotFacts:
         p_area += (1 - right) * _p_inside(landing.point, landing.covariance, landing_area(court, facts.hitter, CENTRE_X_M - 1.0))
     else:
         p_area = _p_inside(landing.point, landing.covariance, landing_area(court, facts.hitter))
-    over = 1.0
-    if facts.net is not None:
+    if facts.seen_over:
+        over = 1.0
+    elif facts.net is not None:
         over = _normal_cdf(facts.net.clearance_m.value / max(facts.net.clearance_m.sigma, 1e-6))
+    else:
+        # As fitted, it came down before the net. To have got over instead, it would have crossed
+        # the net's line above the tape, so landed beyond it by at least as far as it travels
+        # while falling the tape's height.
+        side = 1.0 if facts.hitter == "near" else -1.0
+        (_, _, y1, z1), (_, _, y2, z2) = facts.path[-2:]
+        reach = NET_CENTRE_HEIGHT_M * abs(y2 - y1) / max(z1 - z2, 1e-6)
+        over = _normal_cdf((side * (landing.point[1] - NET_Y_M) - reach) / max(math.sqrt(landing.covariance[1][1]), 1e-6))
     p_in = p_area * over
     return replace(facts, landing=replace(landing, call=_verdict(p_in), p_in=p_in, p_over_net=over))
 
@@ -369,20 +431,25 @@ def rally_shots(
 ) -> list[ShotFacts]:
     """Every shot of a rally (hits.find_hits's analysis of these detections): each hit with its
     flight (every piece seen until the next hit), the flights refitted together so neighbours
-    meet at their contact point, then played again at the next hit or, for a rally's last shot
-    (before a serve, or nothing for longer than any flight), followed to the floor.
+    meet at their contact point, then played again at the next hit a racket could have made, or
+    at a reply seen with that hit missed, or else followed to the floor. The rally ends at the
+    shot that came down (_last_of_rally), so what follows it is left out: the shuttle on the
+    floor, picked up or sent back.
     `terminal_velocity` is the shuttle's, with its standard deviation, when known (from a whole
     session's rallies, say); otherwise it is measured from this rally's own flights."""
     times = np.asarray(times_ms, dtype=float)
     jitter = jitter_px if jitter_px is not None else max(float(analysis.noise_px), 2.0)
     hits = sorted(analysis.hits, key=lambda h: h.time_ms)
     fitted = [k for k, piece in enumerate(analysis.flights) if piece.fit is not None]
+    flown = [any(hit.frame in analysis.flights[k].indices for k in fitted) for hit in hits]
+    # Hits with nothing seen of their flight, and the sounds that were made no hit: what they end depends on when they came.
+    heard_ms = sorted([hit.time_ms for hit, seen_flying in zip(hits, flown) if not seen_flying] + [s - (analysis.audio_offset_ms or 0.0) for s in analysis.rejected_sounds])
     shot_flights = []  # per shot: (hit index, piece numbers, fit, detections)
     for n, hit in enumerate(hits):
-        first = next((k for k in fitted if hit.frame in analysis.flights[k].indices), None)
-        if first is None:
-            continue  # nothing seen of this shot's flight
-        until = hits[n + 1].frame if n + 1 < len(hits) else None
+        if not flown[n]:
+            continue
+        first = next(k for k in fitted if hit.frame in analysis.flights[k].indices)
+        until = next((hits[m].frame for m in range(n + 1, len(hits)) if flown[m]), None)
         members = [k for k in fitted if k >= first and (until is None or analysis.flights[k].indices[0] < until)]
         fit, indices, used = _one_flight([analysis.flights[k] for k in members], times, track, cameras)
         if hit.time_ms < fit.start_ms - 1.0:
@@ -412,44 +479,198 @@ def rally_shots(
     shifted_seen = [Seen(s.times_ms, s.pixels, s.cameras, f) for s, f in zip(seen, middle.flights)]
     other = fit_rally(at_terminal_velocity(shifted_seen, drag + drag_sigma, jitter), middle.links, jitter, terminal=drag + drag_sigma)
     meeting_of = {j + 1: middle.meetings[j] for j, _ in middle.links if j in middle.meetings}  # shot j + 1 starts at that meeting
-    shots = []
+
+    def facts_of(j: int, fit: FlightFit, shifted: FlightFit, hit_ms: float, timing_sigma: float, hitter: str, serve: bool, ends_ms: float | None) -> ShotFacts:
+        facts = flight_facts(fit, hit_ms, hitter, court, ends_ms, serve=serve)
+        facts = _with_drag(facts, flight_facts(shifted, hit_ms, hitter, court, ends_ms, serve=serve), court)
+        facts = _with_timing(facts, fit, timing_sigma, court)
+        if facts.landing is not None and _not_to_be_called(facts.landing, fit.rms_px, jitter):
+            facts = replace(facts, landing=None)
+        last = shot_flights[j][3][-1]
+        past_net = (float(fit.position_at(float(times[last]))[1]) - NET_Y_M) * (1.0 if hitter == "near" else -1.0)
+        seen_over = past_net >= SEEN_PAST_NET_M and not _may_be_on_the_net(cameras[last], track[last])
+        return _judged(replace(facts, terminal_velocity=Estimate(float(drag), float(drag_sigma)), terminal_flights=drag_flights, seen_over=seen_over), court)
+
+    def replied(j: int, fit: FlightFit, hit_ms: float, hitter: str, before: int | None = None) -> float | None:
+        """When, after shot j's own flight and before frame `before` (the next hit's), the shuttle
+        is first seen played back in a hit that was missed; None when it is not, within the rally."""
+        for k in fitted:
+            if k <= shot_flights[j][1][-1]:
+                continue
+            first = analysis.flights[k].indices[0]
+            seen_ms = float(times[first])
+            if (before is not None and first >= before) or seen_ms - hit_ms > RALLY_GAP_S * 1000.0:
+                break
+            if _played_again(fit, hit_ms, hitter, analysis.flights[k].fit, seen_ms):
+                return seen_ms
+        return None
+
+    def left_flight(j: int, fit: FlightFit, until_ms: float) -> float | None:
+        """When, with shot j's flight still up or just down, the shuttle is first found
+        elsewhere: at a sound or a hit after its last sighting that was no shot by the look of
+        its flight, or in several sightings of what was seen after it, off the flight or moving
+        before anyone could have picked it up; None when it never is."""
+        last_seen_ms = float(times[shot_flights[j][3][-1]])
+        for time_ms in doubtful_ms:
+            if last_seen_ms < time_ms < until_ms:
+                return time_ms
+        for piece in analysis.flights[shot_flights[j][1][-1] + 1 :]:
+            off = [
+                i for i in piece.indices
+                if times[i] < until_ms + LYING_MS and cameras[i] is not None and track[i] is not None
+                and np.linalg.norm(cameras[i].project(fit.positions_at(np.minimum(times[i : i + 1], until_ms)))[0] - track[i])
+                > (OFF_LANDING_JITTERS if times[i] >= until_ms else OFF_FLIGHT_JITTERS) * jitter
+            ]
+            if len(off) >= OFF_FLIGHT_SIGHTINGS:
+                return float(times[off[0]])
+        return None
+
+    def followed(
+        j: int, fit: FlightFit, shifted: FlightFit, hit_ms: float, timing_sigma: float, hitter: str, serve: bool, ends_ms: float | None, answered: bool = False
+    ) -> ShotFacts:
+        """A shot's facts, to where it was played or came down. A flight that surely got over the
+        net but was seen elsewhere (left_flight) did not come down where it says; one that may
+        have met the net is judged by its clearance, since the shuttle then falls down the net.
+        When the other side hit next, after this flight was down (`answered`), what was seen off
+        it was no missed hit: that hit would have been answered by this side."""
+        facts = facts_of(j, fit, shifted, hit_ms, timing_sigma, hitter, serve, ends_ms)
+        if facts.landing is None or facts.landing.p_over_net < CALL_CONFIDENCE or answered:
+            return facts
+        off_ms = left_flight(j, fit, facts.landing.time_ms)
+        return facts if off_ms is None else facts_of(j, fit, shifted, hit_ms, timing_sigma, hitter, serve, min(off_ms, facts.landing.time_ms))
+
+    racket = []  # the hits a racket could have made: only these end a flight for sure
+    doubtful_ms = list(heard_ms)  # with the other hits that have a flight: what they end depends on the flight (left_flight)
     for j, ((n, _, _, _), fit, shifted) in enumerate(zip(shot_flights, middle.flights, other.flights)):
-        hit = hits[n]
-        hit_ms, timing_sigma = meeting_of.get(j, (hit.time_ms, 0.0))
-        following = hits[n + 1] if n + 1 < len(hits) else None
-        ends_ms = None
-        if following is not None and not following.evidence.endswith("serve") and following.time_ms - hit_ms <= RALLY_GAP_S * 1000.0:
-            ends_ms = meeting_of.get(j + 1, (following.time_ms, 0.0))[0]
-        elif following is None:
-            # No hit follows, but if the shuttle is seen flying again within the rally it was played
-            # again (a hit that was missed): it ends there, unless it reached the floor first.
-            last_piece = shot_flights[j][1][-1]
-            later = [times[analysis.flights[k].indices[0]] for k in fitted if k > last_piece]
-            if later and later[0] - hit_ms <= RALLY_GAP_S * 1000.0:
-                ends_ms = float(later[0])
+        hit_ms, timing_sigma = meeting_of.get(j, (hits[n].time_ms, 0.0))
         contact = fit.position_at(max(hit_ms, fit.start_ms))
         if not _plausible_contact(contact, _spread(fit, max(hit_ms, fit.start_ms))):
             continue  # no racket can be there: this flight is not what it seems (a missed hit inside it)
         hitter = "near" if contact[1] < NET_Y_M else "far"
-        serve = hit.evidence.endswith("serve")
-        facts = flight_facts(fit, hit_ms, hitter, court, ends_ms, serve=serve)
-        facts = _with_drag(facts, flight_facts(shifted, hit_ms, hitter, court, ends_ms, serve=serve), court)
-        facts = _with_timing(facts, fit, timing_sigma, court)
-        if facts.landing is not None and fit.rms_px > EXPLAINED_RMS * jitter:
-            facts = replace(facts, landing=None)  # one flight does not explain what was seen: no call on it
-        if not _a_shot(facts):
-            if shots and j == len(shot_flights) - 1:
-                shots[-1] = replace(shots[-1], landing=None)  # the rally's end was not seen as it was: no call
-            continue
-        shots.append(replace(facts, terminal_velocity=Estimate(float(drag), float(drag_sigma)), terminal_flights=drag_flights))
-    return shots
+        if _a_shot(flight_facts(fit, hit_ms, hitter, court)):
+            racket.append((j, n, fit, shifted, hit_ms, timing_sigma, hitter))
+
+    doubtful_ms.extend(hits[n].time_ms for n, _, _, _ in shot_flights if n not in {entry[1] for entry in racket})
+    doubtful_ms.sort()
+
+    shots, made = [], []  # made: what each shot's facts were worked out from
+    for i, (j, n, fit, shifted, hit_ms, timing_sigma, hitter) in enumerate(racket):
+        following = racket[i + 1] if i + 1 < len(racket) else None
+        soon = following is not None and following[4] - hit_ms <= RALLY_GAP_S * 1000.0
+        # Any hit soon after ends the flight, one that looks like a serve too: a flight still up
+        # at that hit was played, and one on the floor by then keeps its landing. So does a hit
+        # heard after it was last seen, with nothing seen of what that hit sent off.
+        last_seen_ms = float(times[shot_flights[j][3][-1]])
+        ending = [
+            replied(j, fit, hit_ms, hitter, None if following is None else hits[following[1]].frame),
+            next((t for t in heard_ms if last_seen_ms < t <= hit_ms + RALLY_GAP_S * 1000.0), None),
+            following[4] if soon else None,
+        ]
+        ends_ms = min((t for t in ending if t is not None), default=None)
+        still_up = bool(shots) and shots[-1].landing is None and hit_ms - shots[-1].hit_ms <= RALLY_GAP_S * 1000.0
+        serve = hits[n].evidence.endswith("serve") and not still_up
+        shots.append(followed(j, fit, shifted, hit_ms, timing_sigma, hitter, serve, ends_ms, soon and following[6] != hitter))
+        made.append((j, fit, shifted, hit_ms, timing_sigma, hitter, serve))
+    hits_ms = [hit.time_ms for hit in hits]
+    end = _last_of_rally(shots, hits_ms)
+    if end is None:
+        return shots
+    if shots[end].landing is None:
+        # Nothing after it was a reply (a flight that is no shot, or one from beyond a net it
+        # never crossed): it is followed on to where it came down, unless it was played back.
+        j, fit, shifted, hit_ms, timing_sigma, hitter, serve = made[end]
+        shots[end] = followed(j, fit, shifted, hit_ms, timing_sigma, hitter, serve, replied(j, fit, hit_ms, hitter))
+    # Before the end the shuttle was played on, so none of those shots landed; nor did the last
+    # one found when the rally went on without any more shots being made out, or when it may be
+    # the shuttle sent back, which says nothing of the rally.
+    return [
+        replace(shot, landing=None) if i < end or _went_on(shot, hits_ms) or _may_be_sent_back(shots, i, hits_ms) else shot
+        for i, shot in enumerate(shots[: end + 1])
+    ]
+
+
+def _not_to_be_called(landing: Landing, rms_px: float, jitter: float) -> bool:
+    """Whether a landing says too little for a call: one flight does not explain what was seen,
+    or it could be almost anywhere."""
+    return rms_px > EXPLAINED_RMS * jitter or max(landing.covariance[0][0], landing.covariance[1][1]) > LOST_LANDING_M**2
+
+
+def _may_be_sent_back(shots: list[ShotFacts], i: int, hits_ms: list[float]) -> bool:
+    """Whether shot i may be the shuttle sent back after an end that was not seen: it is no serve
+    and nothing ties it to the shot before, there being none, or that one being from the same
+    half (a hit, or the end, was missed), or hits that made no shot lying between them."""
+    if shots[i].serve:
+        return False
+    if i == 0 or shots[i - 1].hitter == shots[i].hitter:
+        return True
+    return any(shots[i - 1].hit_ms + LANDED_BEFORE_NEXT_MS < t < shots[i].hit_ms - LANDED_BEFORE_NEXT_MS for t in hits_ms)
+
+
+def _went_on(shot: ShotFacts, hits_ms: list[float]) -> bool:
+    """Whether hits kept coming after this shot, one soon after another, more of them than a
+    rally's end leaves behind."""
+    last_ms, count = shot.hit_ms + LANDED_BEFORE_NEXT_MS, 0
+    for time_ms in hits_ms:
+        if time_ms > last_ms and time_ms - last_ms > RALLY_GAP_S * 1000.0:
+            break
+        if time_ms > last_ms:
+            last_ms, count = time_ms, count + 1
+    return count > HITS_AFTER_THE_END
+
+
+def _last_of_rally(shots: list[ShotFacts], hits_ms: list[float] = ()) -> int | None:
+    """The rally's last shot: the first that came down, unless it got over the net and its own
+    hitter played again soon after (the other player's hit in between was missed), or the hits
+    went on; or the first that the next could not have replied to, because it never reached the
+    net before the next was hit, from the other side or, later than any shot takes to reach it,
+    from its own (the shuttle stayed on this side), or because the next came too long after;
+    otherwise the last one."""
+    for i, shot in enumerate(shots):
+        after = shots[i + 1] if i + 1 < len(shots) else None
+        if shot.landing is not None:
+            played_on = (
+                after is not None and not after.serve and after.hitter == shot.hitter
+                and after.hit_ms - shot.hit_ms <= RALLY_GAP_S * 1000.0 and shot.landing.p_over_net > 1.0 - CALL_CONFIDENCE
+            )
+            if not played_on and not _went_on(shot, hits_ms):
+                return i
+        elif after is not None:
+            gap_ms = after.hit_ms - shot.hit_ms
+            if (shot.net is None and (after.hitter != shot.hitter or gap_ms > TO_THE_NET_S * 1000.0)) or gap_ms > RALLY_GAP_S * 1000.0:
+                return i
+    return len(shots) - 1 if shots else None
+
+
+def _played_again(fit: FlightFit, hit_ms: float, hitter: str, seen: FlightFit | None, seen_ms: float) -> bool:
+    """Whether a flight first seen at `seen_ms` can be this shot's shuttle played back by the
+    other player: this flight had crossed the net by then, and that one starts beyond it, where a
+    racket can be, leaving back towards the hitter faster than a soft net shot. The shuttle lying
+    on the floor, a player carrying it, or someone in white behind the court is none of these."""
+    if seen is None:
+        return False
+    side = 1.0 if hitter == "near" else -1.0  # towards the receiver
+    flown = fit.positions_at(np.linspace(hit_ms, seen_ms, 60))
+    at = seen.position_at(seen_ms)
+    leaving = (seen.position_at(seen_ms + 20.0) - at) / 0.02
+    return bool(
+        np.any(side * (flown[:, 1] - NET_Y_M) > 0)
+        and side * (at[1] - NET_Y_M) > 0
+        and _plausible_contact(at, _spread(seen, seen_ms))
+        and side * leaving[1] <= -MIN_BACK_M_S
+        and np.linalg.norm(leaving) >= MIN_LAUNCH_M_S
+    )
 
 
 def _a_shot(facts: ShotFacts) -> bool:
     """Whether a racket could have sent the shuttle off like this: towards the net (every shot
-    must cross it) and faster than a soft net shot. A split in the middle of a flight, or a white
-    object drifting near the floor, is neither."""
+    must cross it) and faster than a soft net shot, staying up long enough, and, when it never
+    reached the net, coming down near it and soon. A split in the middle of a flight, a white
+    object drifting near the floor, or the shuttle meeting the floor is none of these."""
     if facts.speed_m_s.value < MIN_LAUNCH_M_S or len(facts.path) < 2:
+        return False
+    if facts.landing is not None and facts.flight_ms < MIN_FLIGHT_MS:
+        return False
+    if facts.net is None and facts.landing is not None and (abs(facts.landing.point[1] - NET_Y_M) > SHORT_OF_NET_M or facts.flight_ms > TO_THE_NET_S * 1000.0):
         return False
     (_, _, y0, _), (_, _, y1, _) = facts.path[:2]
     return (y1 - y0) * (NET_Y_M - facts.contact[1]) > 0
