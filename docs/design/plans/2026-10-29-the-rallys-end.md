@@ -112,6 +112,34 @@ And by how far the truth was from the line or the tape. Each cell is right, too 
 - **By view:** behind in 20 of 21, out 11 of 11, net 4 of 4; corner in 14 of 15, out 17 of 17, net 2 of 2; side in 5 of 5, out 7 of 7, net 3 of 3. **After the end:** rallies that went on past it got in 21 of 21, out 17 of 17, net 4 of 4; the others in 18 of 20, out 18 of 18, net 5 of 5. Both wrong ends had nothing after them.
 - **The side view is the weak one under stress:** in 4 of 4, out 4 of 6, net 2 of 2, winner 10 of 12. The stressed world's behind view is in 11 of 11, out 9 of 9, net 2 of 2, and its corner in 11 of 12, out 16 of 16, net 2 of 2.
 
+### 6d: your rallies
+
+The five clips through the one command, from their saved camera track, shuttle and poses, scored with `evaluation.hand_labels`. The rules were frozen before this run. Clips 6 to 10 had been looked at while they were written, so these five are not held out.
+
+| Clip | Your end | The app | Winner |
+| --- | --- | --- | --- |
+| 9 | smash, in | too close to call (0.47 in, 0.53 out) | too close to call |
+| 8 | clear, in | too close to call (0.42 in, 0.58 out) | too close to call |
+| 10 | push, out long | out (1.00), right | far, right |
+| 7 | drop, into the net | net (1.00), right | near, right |
+| 6 | cut, into the net | too close to call (0.71 in, 0.29 net) | too close to call |
+
+- **The last shot is your last hit on all five.** Two ends are called, both right, and no winner is called wrong: this part of the gate is met.
+- **All three leans are the wrong way.** None was called, but if the stated chances were fair, three wrong leans would happen about 6 % of the time (0.47 × 0.42 × 0.29). Clips 8 and 9 landed on the far baseline from the low corner camera, the worst-measured line. Three rallies cannot say more than that, and the leans on simulated rallies show no such thing.
+
+The hits table again, with the hits after the end left out:
+
+| Clip | Labelled | Found | Matched | Extra | Timing error, median / max | Hitter right |
+| --- | --- | --- | --- | --- | --- | --- |
+| 9 | 8 | 9 | 8 | 1 | 20 / 37 ms | 8 of 8 |
+| 8 | 14 | 14 | 14 | 0 | 23 / 93 ms | 13 of 13 |
+| 10 | 20 | 19 | 18 | 1 | 26 / 207 ms | 14 of 15 |
+| 7 | 16 | 16 | 16 | 0 | 19 / 38 ms | 16 of 16 |
+| 6 | 16 | 18 | 16 | 2 | 31 / 73 ms | 15 of 15 |
+| All | 74 | 76 | 72 | 4 | 19–31 ms (medians) | 66 of 67 |
+
+Precision rises from 90 % to 95 %, and recall stays at 97 %. The four hits gone are the ones on clips 6 and 7 after the shuttle met the net. The four left are flights split in two, as in the players plan.
+
 ## Decisions
 
 - **The end comes from the flight.** The players' reactions and the sound could add to it later; the flight is what every camera tier sees.

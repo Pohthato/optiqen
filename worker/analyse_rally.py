@@ -13,9 +13,12 @@ backhand, and from a jump or not (shot_names.py).
 existing --track, --shuttle or --poses file is used as it is; otherwise the camera track, the
 shuttle detections and everyone's poses are computed and written next to --out. Without the pose
 model the rally is analysed without the players, and the summary says why. The overlay draws
-each fitted flight into the video with its hit and name, the players' fitted bodies and, for the
-rally's last shot, where it landed and the call; the diagram is the court from above with every
-shot's path and name, where both players stood at each hit, and the landing's uncertainty. The
+each fitted flight into the video with its hit and name, the players' fitted bodies and the
+rally's end once the shuttle comes down: in, out or into the net and who won, where it came down
+or met the net; the diagram is the court from above with every shot's path and name, where both
+players stood at each hit, and the end with the landing's uncertainty. The summary gives the end
+with its chances, and the hits are the rally's own: those after the shot that ended it are left
+out (the shuttle on the floor, picked up or sent back). The
 shuttle's drag (terminal velocity) is measured from the rally's own long flights unless given:
 measured once over a whole session's rallies it is surer, and close line calls sharpen with it.
 """
@@ -24,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import cv2
@@ -35,18 +39,18 @@ import track_camera
 from body import BodyFacts, rally_body_facts, standing_at, standing_reach
 from find_hits import hear, hits_document, load_detections, rounded
 from geometry.camera import Camera
-from geometry.court_model import COURT_LENGTH_M, DOUBLES_MARGIN_M, SINGLES_WIDTH_M, court_lines, net_tape_lines
+from geometry.court_model import COURT_LENGTH_M, DOUBLES_MARGIN_M, NET_Y_M, SINGLES_WIDTH_M, court_lines, net_tape_lines
 from geometry.skeleton import BONES, Body
 from hits import find_hits
 from lift_players import fit_players
 from players import HALVES
 from shot_names import Launch, Model, ShotName, name_shot, racket_arms
-from shots import ShotFacts, rally_shots
+from shots import RallyEnd, ShotFacts, rally_end, rally_shots
 from track_players import players_document
 from video import VideoFile
 
 HITTER_COLOURS = {"near": (255, 160, 40), "far": (40, 200, 255)}  # BGR
-CALL_COLOURS = {"in": (60, 200, 60), "out": (60, 60, 230), "too close to call": (0, 200, 230)}
+CALL_COLOURS = {"in": (60, 200, 60), "out": (60, 60, 230), "net": (220, 90, 200), "too close to call": (0, 200, 230)}
 TRAIL_MS = 600.0  # how much of a flight the overlay shows behind the shuttle
 DIAGRAM_PX_PER_M = 60
 DIAGRAM_MARGIN_M = 1.5
@@ -103,9 +107,36 @@ def shot_entry(number: int, shot: ShotFacts) -> dict:
             "timeMs": round(shot.landing.time_ms, 1),
             "call": shot.landing.call,
             "pIn": round(shot.landing.p_in, 3),
+            "pOverNet": round(shot.landing.p_over_net, 3),
         },
         "path": [rounded(point, 3) for point in shot.path],
     }
+
+
+def end_entry(shots: list[ShotFacts], end: RallyEnd | None) -> dict | None:
+    """How the rally ended, with its last shot: the chance of in, out and into the net, the call,
+    and who won (None when it was not seen to come down)."""
+    if end is None:
+        return None
+    return {
+        "shot": len(shots), "hitter": shots[-1].hitter, "timeMs": round(end.time_ms, 1),
+        "p": {kind: round(p, 3) for kind, p in end.p.items()}, "call": end.call,
+        "winner": end.winner, "pHitterWon": round(end.p_hitter_won, 3),
+    }
+
+
+def end_mark(shot: ShotFacts, end: RallyEnd) -> tuple[tuple[float, float, float], float]:
+    """Where and when the rally's end is marked: where the last shot met the net when it was
+    called into the net, otherwise where and when it came down."""
+    if end.call == "net" and shot.net is not None:
+        side = 1.0 if shot.hitter == "near" else -1.0
+        at_ms = next((point[0] for point in shot.path if side * (point[2] - NET_Y_M) >= 0.0), end.time_ms)
+        return (shot.net.x_m, NET_Y_M, shot.net.height_m.value), at_ms
+    return (*shot.landing.point, 0.0), end.time_ms
+
+
+def end_words(end: RallyEnd) -> tuple[str, str]:
+    return end.call, "winner too close to call" if end.winner == "too close to call" else f"{end.winner} won"
 
 
 def body_entry(facts: BodyFacts | None) -> dict | None:
@@ -165,10 +196,13 @@ def _draw_body(frame: np.ndarray, camera: Camera, body: Body, colour: tuple[int,
             cv2.line(frame, tuple(int(v) for v in pixels[a]), tuple(int(v) for v in pixels[b]), colour, 2, cv2.LINE_AA)
 
 
-def write_overlay(video: VideoFile, cameras, shots: list[ShotFacts], path: Path, bodies: Bodies | None = None, names: list[ShotName] | None = None) -> None:
+def write_overlay(
+    video: VideoFile, cameras, shots: list[ShotFacts], path: Path, bodies: Bodies | None = None, names: list[ShotName] | None = None, end: RallyEnd | None = None
+) -> None:
     """The video with the players' fitted bodies, each shot's fitted flight drawn behind the
-    shuttle, its hit marked with its name and speed, and the landing and call once the rally's
-    last shot comes down."""
+    shuttle, its hit marked with its name and speed, and the rally's end and winner once the last
+    shot comes down."""
+    mark = end_mark(shots[-1], end) if end is not None else None
     writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), video.fps or 30.0, video.size)
     if not writer.isOpened():
         raise OSError(f"cannot write {path}")
@@ -193,21 +227,25 @@ def write_overlay(video: VideoFile, cameras, shots: list[ShotFacts], path: Path,
                     name = names[number - 1].said if names else ("serve" if shot.serve else "")
                     label = f"{number} {name} {shot.speed_m_s.value * 3.6:.0f} km/h".replace("  ", " ")
                     cv2.putText(frame, label, (x + 12, y - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
-                landed = _pixels(camera, [[*shot.landing.point, 0.0]]) if shot.landing is not None else []
-                if len(landed) and time_ms >= shot.landing.time_ms:
-                    x, y = (int(v) for v in landed[0])
-                    colour = CALL_COLOURS[shot.landing.call]
-                    cv2.drawMarker(frame, (x, y), colour, cv2.MARKER_CROSS, 24, 3, cv2.LINE_AA)
-                    cv2.putText(frame, shot.landing.call.upper(), (x + 14, y + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.9, colour, 2, cv2.LINE_AA)
+            marked = _pixels(camera, [mark[0]]) if mark is not None and time_ms >= mark[1] else []
+            if len(marked):
+                x, y = (int(v) for v in marked[0])
+                colour = CALL_COLOURS[end.call]
+                cv2.drawMarker(frame, (x, y), colour, cv2.MARKER_CROSS, 24, 3, cv2.LINE_AA)
+                call, won = end_words(end)
+                cv2.putText(frame, call.upper(), (x + 14, y + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.9, colour, 2, cv2.LINE_AA)
+                cv2.putText(frame, won, (x + 14, y + 34), cv2.FONT_HERSHEY_SIMPLEX, 0.7, colour, 2, cv2.LINE_AA)
         writer.write(frame)
     writer.release()
 
 
-def draw_diagram(shots: list[ShotFacts], court: str, stood: list[Stood] | None = None, names: list[ShotName] | None = None) -> np.ndarray:
+def draw_diagram(
+    shots: list[ShotFacts], court: str, stood: list[Stood] | None = None, names: list[ShotName] | None = None, end: RallyEnd | None = None
+) -> np.ndarray:
     """The court from above (near baseline at the bottom): each shot's path in its hitter's
     colour, numbered at its contact, where both players stood at the hit (a ring with its 95 %
-    region; the hitter's joined to the contact), and the landing with its 95 % region and the
-    call."""
+    region; the hitter's joined to the contact), and the rally's end with the winner: at the net
+    when it went into the net, otherwise at the landing with its 95 % region."""
     left, right = -DOUBLES_MARGIN_M - DIAGRAM_MARGIN_M, SINGLES_WIDTH_M + DOUBLES_MARGIN_M + DIAGRAM_MARGIN_M
     bottom, top = -DIAGRAM_MARGIN_M, COURT_LENGTH_M + DIAGRAM_MARGIN_M
     width, height = int((right - left) * DIAGRAM_PX_PER_M), int((top - bottom) * DIAGRAM_PX_PER_M)
@@ -216,10 +254,10 @@ def draw_diagram(shots: list[ShotFacts], court: str, stood: list[Stood] | None =
     def px(x: float, y: float) -> tuple[int, int]:
         return int(round((x - left) * DIAGRAM_PX_PER_M)), int(round((top - y) * DIAGRAM_PX_PER_M))
 
-    for _, start, end in court_lines():
-        cv2.line(image, px(start[0], start[1]), px(end[0], end[1]), (235, 235, 235), 2, cv2.LINE_AA)
-    for _, start, end in net_tape_lines():
-        cv2.line(image, px(start[0], start[1]), px(end[0], end[1]), (200, 200, 200), 4, cv2.LINE_AA)
+    for _, start, stop in court_lines():
+        cv2.line(image, px(start[0], start[1]), px(stop[0], stop[1]), (235, 235, 235), 2, cv2.LINE_AA)
+    for _, start, stop in net_tape_lines():
+        cv2.line(image, px(start[0], start[1]), px(stop[0], stop[1]), (200, 200, 200), 4, cv2.LINE_AA)
     def region(centre: tuple[int, int], covariance, colour: tuple[int, int, int], thickness: int) -> None:
         values, vectors = np.linalg.eigh(np.asarray(covariance))
         axes = tuple(max(2, min(10_000, int(round(ELLIPSE_SCALE * np.sqrt(max(v, 0.0)) * DIAGRAM_PX_PER_M)))) for v in values)
@@ -245,12 +283,15 @@ def draw_diagram(shots: list[ShotFacts], court: str, stood: list[Stood] | None =
         (text_width, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
         x = at[0] + 9 if at[0] + 9 + text_width <= width else at[0] - 9 - text_width  # kept inside the image
         cv2.putText(image, label, (x, at[1] - 9), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
-        if shot.landing is not None:
-            colour = CALL_COLOURS[shot.landing.call]
-            centre = px(*shot.landing.point)
-            region(centre, shot.landing.covariance, colour, 2)
-            cv2.drawMarker(image, centre, colour, cv2.MARKER_CROSS, 16, 2, cv2.LINE_AA)
-            cv2.putText(image, shot.landing.call, (centre[0] + 12, centre[1] + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, colour, 2, cv2.LINE_AA)
+    if end is not None:
+        colour = CALL_COLOURS[end.call]
+        point, _ = end_mark(shots[-1], end)
+        centre = px(point[0], point[1])
+        if end.call != "net":
+            region(centre, shots[-1].landing.covariance, colour, 2)
+        cv2.drawMarker(image, centre, colour, cv2.MARKER_CROSS, 16, 2, cv2.LINE_AA)
+        for line, text in enumerate(end_words(end)):
+            cv2.putText(image, text, (centre[0] + 12, centre[1] + 5 + 22 * line), cv2.FONT_HERSHEY_SIMPLEX, 0.6, colour, 2, cv2.LINE_AA)
     return image
 
 
@@ -304,6 +345,13 @@ def main(argv: list[str] | None = None) -> int:
     analysis = find_hits(track, times_ms, cameras, onsets) if tracked else None
     drag = (args.terminal_velocity, args.terminal_sigma if args.terminal_sigma is not None else 0.05) if args.terminal_velocity is not None else None
     shots = rally_shots(analysis, track, times_ms, cameras, court=args.court, terminal_velocity=drag) if analysis is not None else []
+    end = rally_end(shots)
+    after_end = 0
+    if end is not None:
+        # The shot that ended the rally is its last hit's; what is found after it is not play.
+        last = min(range(len(analysis.hits)), key=lambda i: abs(analysis.hits[i].time_ms - shots[-1].hit_ms))
+        after_end = len(analysis.hits) - last - 1
+        analysis = replace(analysis, hits=analysis.hits[: last + 1])
     bodies, players_error = find_players(args.video, track_path, poses_path, args.poses is None, args.pose_model, cameras, times_ms) if tracked else (None, "no camera")
     if players_error:
         print(f"no players: {players_error}", file=sys.stderr)
@@ -314,10 +362,10 @@ def main(argv: list[str] | None = None) -> int:
     names = [name_shot(Launch.of(shot), shot.serve, model, rng, fact, arms[shot.hitter]) for shot, fact in zip(shots, facts)]
 
     result = hits_document(args.video, shuttle_doc, analysis, onsets, sound_error, times_ms)
-    calls = [shot.landing.call for shot in shots if shot.landing is not None]
     result["court"] = args.court
+    result["summary"]["hitsAfterTheEnd"] = after_end
     result["summary"]["shots"] = len(shots)
-    result["summary"]["calls"] = {call: calls.count(call) for call in sorted(set(calls))}
+    result["summary"]["end"] = end_entry(shots, end)
     called = [name.call for name in names]
     result["summary"]["names"] = {call: called.count(call) for call in sorted(set(called))}
     result["summary"]["terminalVelocity"] = None
@@ -341,13 +389,13 @@ def main(argv: list[str] | None = None) -> int:
     result["sources"] = {"track": Path(track_path).name, "shuttle": Path(shuttle_path).name, "poses": Path(poses_path).name if bodies is not None else None}
     args.out.write_text(json.dumps(_clean(result), allow_nan=False), encoding="utf-8")
     if args.diagram:
-        cv2.imwrite(str(args.diagram), draw_diagram(shots, args.court, stood if bodies is not None else None, names))
+        cv2.imwrite(str(args.diagram), draw_diagram(shots, args.court, stood if bodies is not None else None, names, end))
     if args.overlay:
         video = VideoFile(args.video)
         if not video.opened:
             return _fail(f"cannot read {args.video} to draw the overlay")
         try:
-            write_overlay(video, cameras, shots, args.overlay, bodies, names)
+            write_overlay(video, cameras, shots, args.overlay, bodies, names, end)
         except OSError as error:
             return _fail(str(error))
     print(json.dumps(result["summary"]))

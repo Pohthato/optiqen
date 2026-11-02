@@ -119,17 +119,20 @@ class ScoreTests(unittest.TestCase):
         found = analysis([1170, 1820, 7260], [(1170, "far", "serve"), (1820, "near", "net"), (7260, "near", "push")])
         ends = summarise(*match_clip(self.hits, found))["ends"]
         # The push at 7.26 s went out, so the far player won; the analysis's last shot is that hit,
-        # but it was not followed to the floor.
+        # but it was not seen to come down.
         self.assertEqual((ends["labelled"], ends["lastShot"], ends["called"], ends["winnerCalled"]), (1, 1, 0, 0))
         rally = ends["rallies"][0]
         self.assertEqual((rally["end"], rally["winner"], rally["said"]["call"], rally["said"]["winner"]), ("out", "far", None, None))
-        for call, p_in, right in (("out", 0.01, 1), ("in", 0.99, 0), ("too close to call", 0.5, None)):
-            found["shots"][-1]["landing"] = {"call": call, "pIn": p_in}
+        for call, won, right, won_right in (
+            ("out", "far", 1, 1), ("net", "far", 0, 1), ("in", "near", 0, 0), ("too close to call", "far", None, 1), ("too close to call", "too close to call", None, None),
+        ):
+            found["summary"] = {"end": {"shot": 3, "hitter": "near", "call": call, "p": {"in": 0.0, "out": 0.5, "net": 0.5}, "winner": won}}
             ends = summarise(*match_clip(self.hits, found))["ends"]
-            called = right is not None
-            self.assertEqual((ends["called"], ends["right"], ends["winnerCalled"], ends["winnerRight"]), (int(called), right or 0, int(called), right or 0))
+            self.assertEqual((ends["called"], ends["right"]), (int(right is not None), right or 0))
+            self.assertEqual((ends["winnerCalled"], ends["winnerRight"]), (int(won_right is not None), won_right or 0))
         # A later shot ends the analysis's rally: it is not the labelled last hit.
-        found["shots"].append({"shot": 4, "hitMs": 9000, "hitter": "far", "landing": {"call": "in", "pIn": 0.97}})
+        found["shots"].append({"shot": 4, "hitMs": 9000, "hitter": "far"})
+        found["summary"] = {"end": {"shot": 4, "hitter": "far", "call": "in", "p": {"in": 0.97, "out": 0.03, "net": 0.0}, "winner": "far"}}
         ends = summarise(*match_clip(self.hits, found))["ends"]
         self.assertEqual((ends["lastShot"], ends["called"], ends["right"], ends["winnerCalled"], ends["winnerRight"]), (0, 1, 0, 1, 1))
         self.assertIsNone(summarise(*match_clip(read_labels(LABELS)["Clip 4"], found))["ends"])

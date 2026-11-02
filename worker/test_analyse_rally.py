@@ -17,7 +17,8 @@ from shot_names import Launch
 from simulation.people import model_pose, playing, skeleton
 from test_find_hits import shuttle_doc, track_doc
 
-SIM = simulate(Scenario(seed=22, jitter_px=1.0, false_per_s=0.0, neighbour_per_s=0.3, final_near_line=True))
+# The rally ends in the near half; the shuttle lies there, then is sent back over the net.
+SIM = simulate(Scenario(seed=22, jitter_px=1.0, false_per_s=0.0, neighbour_per_s=0.3, final_near_line=True, afterwards=True))
 
 
 def poses_doc(sim, seed=3) -> dict:
@@ -93,6 +94,18 @@ class AnalyseRallyTests(unittest.TestCase):
         self.assertIn("long flights", drag["from"])
         self.assertAlmostEqual(drag["value"], 6.7, delta=0.5)
         self.assertEqual(self.result["summary"]["shots"], len(shots))
+
+    def test_the_rally_s_end_and_winner_and_none_of_what_follows(self):
+        shots, summary = self.result["shots"], self.result["summary"]
+        end = summary["end"]
+        self.assertEqual((end["shot"], end["hitter"]), (len(shots), shots[-1]["hitter"]))
+        self.assertAlmostEqual(sum(end["p"].values()), 1.0, delta=0.01)
+        self.assertIn(end["call"], (SIM.clip.rally.end, "too close to call"))
+        self.assertIn(end["winner"], (SIM.clip.rally.winner, "too close to call"))
+        self.assertLessEqual(len(shots), len(SIM.clip.rally.contacts))
+        contacts = [event["timeMs"] for event in self.result["events"] if event["type"] == "contact"]
+        self.assertEqual(summary["hits"], len(contacts))
+        self.assertLess(max(contacts), shots[-1]["hitMs"] + 50.0)
 
     def test_every_shot_with_the_hitter_s_body_and_where_both_players_stood(self):
         shots = self.result["shots"]

@@ -136,17 +136,17 @@ def _sureness(shot: dict[str, Any] | None) -> float | None:
 
 
 def said_end(analysis: dict[str, Any]) -> dict[str, Any] | None:
-    """How the analysis ended the rally: with its last shot, as that shot's landing was called
-    (None when it was not followed to the floor), and the winner the call gives."""
+    """How the analysis ended the rally (its summary's end): with its last shot, in, out, into the
+    net or too close to call (None when it was not seen to come down), with the chance of each,
+    and the winner (None when that was too close to call)."""
     shots = analysis.get("shots") or []
     if not shots:
         return None
-    last = shots[-1]
-    landing = last.get("landing")
-    call = None if landing is None else landing["call"]
+    last, end = shots[-1], (analysis.get("summary") or {}).get("end")
     return {
-        "shot": last["shot"], "hitMs": last["hitMs"], "hitter": last["hitter"], "call": call,
-        "pIn": None if landing is None else landing["pIn"], "winner": winner(last["hitter"], call if call in ("in", "out") else None),
+        "shot": last["shot"], "hitMs": last["hitMs"], "hitter": last["hitter"],
+        "call": None if end is None else end["call"], "p": None if end is None else end["p"],
+        "winner": None if end is None or end["winner"] not in ("near", "far") else end["winner"],
     }
 
 
@@ -235,7 +235,7 @@ def _details(rows: list[dict]) -> dict[str, Any]:
 
 def _ends(rows: list[dict]) -> dict[str, Any] | None:
     """The rallies' ends against the labels: whether the analysis's last shot was the labelled
-    last hit, how often it called the end (in or out) and was right, and the same for the winner."""
+    last hit, how often it called the end (in, out or net) and was right, and the same for the winner."""
     ended = [row for row in rows if row["end"] is not None]
     if not ended:
         return None
@@ -246,7 +246,7 @@ def _ends(rows: list[dict]) -> dict[str, Any] | None:
             "timeMs": row["timeMs"], "hitter": row["hitter"], "name": row["name"], "end": row["end"], "winner": winner(row["hitter"], row["end"]),
             "lastShot": row["shot"] is not None and row["shot"] == said.get("shot"), "said": row["saidEnd"],
         })
-    called = [rally for rally in rallies if (rally["said"] or {}).get("call") in ("in", "out")]
+    called = [rally for rally in rallies if (rally["said"] or {}).get("call") in ("in", "out", "net")]
     won = [rally for rally in rallies if (rally["said"] or {}).get("winner") is not None]
     return {
         "labelled": len(rallies), "lastShot": sum(rally["lastShot"] for rally in rallies),
@@ -312,9 +312,9 @@ def _line(title: str, report: dict[str, Any]) -> str:
         if said is None:
             text += "nothing (no shots)"
             continue
-        text += said["call"] or "no landing"
-        if said["pIn"] is not None:
-            text += f" ({said['pIn']:.2f} in)"
+        text += said["call"] or "no end seen"
+        if said["p"] is not None:
+            text += " (" + ", ".join(f"{said['p'][kind]:.2f} {kind}" for kind in ("in", "out", "net")) + f"; {said['winner'] or 'winner too close to call'})"
         text += f" at shot {said['shot']} ({said['hitMs'] / 1000:.2f} s)" + ("" if rally["lastShot"] else ", not the labelled last hit")
     for row in report["missed"]:
         text += f"\n  missed {row['timeMs'] / 1000:6.2f} s {row['hitter']:4s} {row['name']}"
