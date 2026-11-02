@@ -128,6 +128,7 @@ class RallyEnd:
     call: str  # the one of those that is CALL_CONFIDENCE sure, or "too close to call"
     winner: str  # "near" | "far" | "too close to call"
     p_hitter_won: float  # the chance it was in
+    p_half: float  # the chance the last shot was hit from the half it is given to
 
 
 def rally_end(shots: list[ShotFacts]) -> RallyEnd | None:
@@ -143,9 +144,10 @@ def rally_end(shots: list[ShotFacts]) -> RallyEnd | None:
     other = "far" if shot.hitter == "near" else "near"
     winner = shot.hitter if p["in"] >= CALL_CONFIDENCE else other if p["in"] <= 1.0 - CALL_CONFIDENCE else "too close to call"
     far_half = _normal_cdf((shot.contact[1] - NET_Y_M) / max(shot.contact_sigma[1], 1e-6))
-    if max(far_half, 1.0 - far_half) < CALL_CONFIDENCE:
+    p_half = far_half if shot.hitter == "far" else 1.0 - far_half
+    if p_half < CALL_CONFIDENCE:
         winner = "too close to call"
-    return RallyEnd(landing.time_ms, p, likeliest if p[likeliest] >= CALL_CONFIDENCE else "too close to call", winner, landing.p_in)
+    return RallyEnd(landing.time_ms, p, likeliest if p[likeliest] >= CALL_CONFIDENCE else "too close to call", winner, landing.p_in, p_half)
 
 
 def net_height_m(x: float) -> float:

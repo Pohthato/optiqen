@@ -5,7 +5,7 @@ from dataclasses import replace
 import numpy as np
 
 from evaluation.pressure_benchmark import FACTS, score
-from pressure import HIT_TIME_SIGMA_MS, rally_pressure, work
+from pressure import HIT_TIME_SIGMA_MS, REACT_MS, TOP_M_S, rally_pressure, work
 from shots import Estimate, Landing, ShotFacts
 
 REACH = Estimate(1.3, 0.02)
@@ -25,6 +25,8 @@ class WorkTests(unittest.TestCase):
         self.assertAlmostEqual(done.go_m.sigma, 0.0)
         self.assertEqual((done.time_ms.value, done.time_ms.sigma), (800.0, HIT_TIME_SIGMA_MS))
         self.assertAlmostEqual(done.speed_m_s.value, 5.0)
+        self.assertAlmostEqual(done.spare_ms.value, 800.0 - REACT_MS - 4.0 / TOP_M_S * 1000.0)
+        self.assertAlmostEqual(done.spare_ms.sigma, HIT_TIME_SIGMA_MS, delta=1.0)
         self.assertEqual(done.height_m, Estimate(1.5, 0.1))
 
     def test_nothing_to_go_within_reach(self):
@@ -37,6 +39,7 @@ class WorkTests(unittest.TestCase):
             done = work((np.array([0.0, 0.0]), stood), (5.0, 0.0), target, Estimate(1.0, reach), 1000.0, rng=np.random.default_rng(1))
             self.assertAlmostEqual(done.go_m.sigma, sigma, delta=0.015)
             self.assertAlmostEqual(done.speed_m_s.sigma, sigma, delta=0.03)
+            self.assertAlmostEqual(done.spare_ms.sigma, np.hypot(sigma / TOP_M_S * 1000.0, HIT_TIME_SIGMA_MS), delta=6.0)
 
 
 class RallyPressureTests(unittest.TestCase):
@@ -79,7 +82,9 @@ class BenchmarkTests(unittest.TestCase):
         for name in FACTS:
             errors = np.array(result["facts"][name])
             self.assertGreater(len(errors), 2)
-            self.assertLess(np.median(np.abs(errors[:, 0])), 0.25, name)
+            self.assertLess(np.median(np.abs(errors[:, 0])), 75.0 if name == "spare_ms" else 0.25, name)
+        self.assertEqual(len(result["pressed"]), len(result["facts"]["go_m"]))
+        self.assertTrue(all(0.0 <= p <= 1.0 for p, _ in result["pressed"]))
 
 
 if __name__ == "__main__":

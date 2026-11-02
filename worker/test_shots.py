@@ -173,6 +173,8 @@ class RallyEndTests(unittest.TestCase):
         inside = self.landed(p0, solve_launch(p0, [2.5, 11.0, 0.0], 1.2))
         unsure = rally_end([replace(inside, contact_sigma=(0.1, 3.0, 0.1))])
         self.assertEqual((unsure.call, unsure.winner), ("in", "too close to call"))
+        self.assertTrue(0.5 <= unsure.p_half < 0.95)
+        self.assertGreater(rally_end([inside]).p_half, 0.999)
 
     def test_a_sighting_may_be_on_the_net_only_when_its_ray_passes_through_it(self):
         behind = Camera.look_at((3.05, -6.0, 3.0), (3.05, 6.7, 1.0), 1500.0, (1920, 1080))

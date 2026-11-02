@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 
 from analyse_rally import find_players, main
+from pressure import REACT_MS, TOP_M_S
 from evaluation.hits_benchmark import SIZE, Scenario, simulate
 from geometry.skeleton import JOINTS
 from shot_names import Launch
@@ -152,7 +153,17 @@ class AnalyseRallyTests(unittest.TestCase):
             self.assertAlmostEqual(work["timeMs"]["value"], after["hitMs"] - shot["hitMs"], delta=0.2)
             self.assertEqual(work["heightM"]["value"], round(after["contact"][2], 3))
             self.assertGreaterEqual(work["goM"]["value"], 0.0)
+            self.assertAlmostEqual(work["spareMs"]["value"], work["timeMs"]["value"] - REACT_MS - work["goM"]["value"] / TOP_M_S * 1000.0, delta=0.5)
         self.assertTrue(any(shot["pressure"]["goM"]["sigma"] > 0.0 for shot, _ in answered))
+
+    def test_how_the_rally_was_won_and_where_it_turned(self):
+        shots, reasons = self.result["shots"], self.result["summary"]["reasons"]
+        self.assertAlmostEqual(sum(reasons["p"].values()), 1.0, delta=0.01)
+        self.assertIn(reasons["call"], (*reasons["p"], "too close to call"))
+        turn = reasons["turn"]
+        self.assertEqual(len(turn["pAt"]), len(shots))
+        self.assertAlmostEqual(sum(turn["pAt"]) + turn["pNoTurn"], 1.0, delta=0.01)
+        self.assertTrue(turn["call"] in ("no turn", "too close to call") or 1 <= turn["call"] <= len(shots))
 
     def test_without_the_pose_model_or_with_poses_of_other_frames_there_are_no_players(self):
         cameras, times_ms = [None] * 3, [0.0, 33.3, 66.7]

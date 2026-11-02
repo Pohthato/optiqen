@@ -18,10 +18,11 @@ each fitted flight into the video with its hit and name, the players' fitted bod
 rally's end once the shuttle comes down: in, out or into the net and who won, where it came down
 or met the net; the diagram is the court from above with every shot's path and name, where both
 players stood at each hit, and the end with the landing's uncertainty. The summary gives the end
-with its chances, and the hits are the rally's own: those after the shot that ended it are left
-out (the shuttle on the floor, picked up or sent back). The
-shuttle's drag (terminal velocity) is measured from the rally's own long flights unless given:
-measured once over a whole session's rallies it is surer, and close line calls sharpen with it.
+with its chances, how the rally was won and where it turned (rally_reasoning.py), and the hits
+are the rally's own: those after the shot that ended it are left out (the shuttle on the floor,
+picked up or sent back). The shuttle's drag (terminal velocity) is measured from the rally's own
+long flights unless given: measured once over a whole session's rallies it is surer, and close
+line calls sharpen with it.
 """
 from __future__ import annotations
 
@@ -46,6 +47,7 @@ from hits import find_hits
 from lift_players import fit_players
 from players import HALVES
 from pressure import Pressure, rally_pressure
+from rally_reasoning import Reasons, rally_reasons
 from shot_names import Launch, Model, ShotName, name_shot, racket_arms
 from shots import RallyEnd, ShotFacts, rally_end, rally_shots
 from track_players import players_document
@@ -173,7 +175,22 @@ def pressure_entry(pressure: Pressure | None) -> dict | None:
         "goM": _estimate(pressure.go_m),
         "timeMs": _estimate(pressure.time_ms),
         "speedMS": _estimate(pressure.speed_m_s),
+        "spareMs": _estimate(pressure.spare_ms),
         "heightM": None if pressure.height_m is None else _estimate(pressure.height_m),
+    }
+
+
+def reasons_entry(reasons: Reasons | None) -> dict | None:
+    """How the rally was won and the chance it turned at each shot, by shot number (None when its
+    end was not seen)."""
+    if reasons is None:
+        return None
+    return {
+        "p": {how: round(p, 3) for how, p in reasons.p.items()}, "call": reasons.call,
+        "turn": {
+            "call": reasons.turn + 1 if isinstance(reasons.turn, int) else reasons.turn,
+            "pAt": [round(p, 3) for p in reasons.p_turn], "pNoTurn": round(reasons.p_no_turn, 3),
+        },
     }
 
 
@@ -382,6 +399,7 @@ def main(argv: list[str] | None = None) -> int:
     result["summary"]["hitsAfterTheEnd"] = after_end
     result["summary"]["shots"] = len(shots)
     result["summary"]["end"] = end_entry(shots, end)
+    result["summary"]["reasons"] = reasons_entry(rally_reasons(shots, end, pressures))
     called = [name.call for name in names]
     result["summary"]["names"] = {call: called.count(call) for call in sorted(set(called))}
     result["summary"]["terminalVelocity"] = None

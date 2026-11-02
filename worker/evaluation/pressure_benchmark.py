@@ -8,7 +8,8 @@ the player answered gets its pressure (pressure.work), with the contact point as
 analysis gives it: the true one off by CONTACT_SIGMA_M on each axis, the hit times off by
 HIT_TIME_SIGMA_MS, and said to be. The truth is the same on the true body, contact and times.
 Per fact: the median and 90th percentile error, and how often the error is within twice the
-stated uncertainty.
+stated uncertainty. And whether the receiver was under pressure (rally_reasoning): how many hits
+were called so at CALL_CONFIDENCE, how many of those were right, and how the rest lean.
 
     python -m evaluation.pressure_benchmark --seeds 3 --first-seed 3000 --workers 12 --out pressure.json
 """
@@ -27,10 +28,11 @@ from evaluation.body_benchmark import CONTACT_SIGMA_M, _errors, fitted_player
 from evaluation.hits_benchmark import VIEWS
 from geometry.skeleton import Body
 from pressure import HIT_TIME_SIGMA_MS, work
-from shots import Estimate
+from rally_reasoning import PRESSED_SPARE_MS, p_under
+from shots import CALL_CONFIDENCE, Estimate
 from simulation.people import playing
 
-FACTS = ("go_m", "speed_m_s", "height_m")
+FACTS = ("go_m", "speed_m_s", "spare_ms", "height_m")
 
 
 def score(job: tuple[str, str, float, int]) -> dict:
@@ -39,7 +41,7 @@ def score(job: tuple[str, str, float, int]) -> dict:
     reach, true_reach = arm_reach(bodies), arm_reach([Body(t, np.zeros(17), 0.0) for t in truth])
     noise = np.random.default_rng([seed, list(VIEWS).index(view), side == "far", int(fps), 1])
     contacts = sorted(rally.contacts, key=lambda c: c.time)
-    out = {"view": view, "side": side, "fps": fps, "seed": seed, "reach": [reach.value - true_reach.value, reach.sigma], "facts": {name: [] for name in FACTS}}
+    out = {"view": view, "side": side, "fps": fps, "seed": seed, "reach": [reach.value - true_reach.value, reach.sigma], "facts": {name: [] for name in FACTS}, "pressed": []}
     for before, after in zip(contacts, contacts[1:]):
         if after.hitter != side or before.hitter == side or not times[0] < before.time * 1000.0 < times[-1]:
             continue
@@ -57,13 +59,26 @@ def score(job: tuple[str, str, float, int]) -> dict:
         for name in FACTS:
             got, want = getattr(said, name), getattr(true, name)
             out["facts"][name].append([got.value - want.value, got.sigma])
+        out["pressed"].append([p_under(said.spare_ms, PRESSED_SPARE_MS), bool(true.spare_ms.value < PRESSED_SPARE_MS)])
     return out
+
+
+def _calls(pairs: list) -> dict:
+    """Under pressure or not, called at CALL_CONFIDENCE, against the truth."""
+    if not pairs:
+        return {"n": 0}
+    p, truth = np.array([pair[0] for pair in pairs]), np.array([pair[1] for pair in pairs], bool)
+    called, right = (p >= CALL_CONFIDENCE) | (p <= 1.0 - CALL_CONFIDENCE), (p >= 0.5) == truth
+    return {"n": len(p), "underPressure": int(truth.sum()), "called": int(called.sum()), "right": int((called & right).sum()), "tooCloseLeansRight": int((~called & right).sum())}
 
 
 def summarise(results: list[dict]) -> dict:
     groups = {"all": results} | {view: [r for r in results if r["view"] == view] for view in VIEWS}
     return {
-        key: {**{name: _errors([pair for r in group for pair in r["facts"][name]]) for name in FACTS}, "armReachM": _errors([r["reach"] for r in group])}
+        key: {
+            **{name: _errors([pair for r in group for pair in r["facts"][name]]) for name in FACTS}, "armReachM": _errors([r["reach"] for r in group]),
+            "pressed": _calls([pair for r in group for pair in r["pressed"]]),
+        }
         for key, group in groups.items() if group
     }
 
