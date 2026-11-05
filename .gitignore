@@ -50,6 +50,7 @@ weights/
 *.webm
 sample_videos/
 worker/Clips/
+worker/ShuttleSet/
 media/
 uploads/
 

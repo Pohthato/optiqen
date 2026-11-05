@@ -17,7 +17,7 @@ ShuttleSet (Wang et al., KDD 2023) holds 44 professional singles matches from 20
 
 - **Positions are pixels in the broadcast image.** Each video comes with its four court corners, so they map to the floor in metres. There are no heights.
 - **The licence is MIT.** The data is in `github.com/wywyWang/CoachAI-Projects`, whose licence is MIT (copyright Wei-Yao Wang, 2022). The dataset's README asks for the paper to be cited and sets no terms of its own. MIT allows commercial use as long as the notice is kept.
-- **It can test who wins, not why.** In the two games looked at so far, every rally that ended with the shuttle landing in is marked a winner, whether or not the receiver could have got there, and no error is marked forced or unforced.
+- **It can test who wins, and little of why.** A shot that came down in is marked either a winner or misjudged by the receiver, which is let in (47 of the 1,189 kept). No error is marked forced or unforced.
 
 ## Steps
 
@@ -25,15 +25,36 @@ Each step is pushed on its own.
 
 | Step | What | Files | Acceptance |
 | --- | --- | --- | --- |
-| 7a | **ShuttleSet in the app's court.** Read every game into rallies: the hitter, the time (from the frame and the video's frame rate), the shot's name among the app's eight or the serve, both players' positions and the contact on the floor in metres, the end and the winner. The mapping of the 18 types to the app's names is written down here. Each position gets a covariance from a few pixels of clicking error carried through that video's court corners, so the far end is less sure. Rallies with an unknown shot or a missing position are set aside and counted. The test matches are chosen here, before any model is fitted: one match in four at random, and, as the stressed test, every match of two players, so it sees players never learnt from. | `worker/evaluation/shuttleset.py` | Every rally's winner agrees with the score after it. Landings marked out lie outside the singles lines, and landings in lie inside, within their uncertainty, 95 % of the time; this also settles whether the corners are the singles or the doubles court. The counts kept and set aside. |
-| 7b | **The rules on professionals.** The 6f time to spare at every hit, from ShuttleSet's positions and times, with a reach of 1.4 ± 0.1 m (the app finds 1.37 to 1.39 m on your clips). The rules' value: at each hit, how pressed the hitter was by the shot they are answering, made into a chance of winning the rally by one curve fitted on the training matches. | `worker/evaluation/value_benchmark.py` | How often a pressed hitter goes on to lose, with its interval. On the rallies that ended landing in, how many the 6f rule calls a winner rather than let in: professionals let few in, so many let-in calls would say the 250 ms start or the 3.5 m/s is wrong for them. |
+| 7a | **ShuttleSet in the app's court.** Read every game into rallies: the hitter, the time (from the frame and the video's frame rate), the shot's name among the app's eight or the serve, both players' positions and the contact on the floor in metres, the end and the winner. The mapping of the 18 types to the app's names is written down here. Each position gets a covariance from a few pixels of clicking error carried through that video's court corners, so the far end is less sure. A serve ShuttleSet does not name was not labelled, so its rally starts at the return. Rallies with another unknown shot or a missing position are set aside and counted. The test matches are chosen here, before any model is fitted: as the stressed test, every match of one man and one woman drawn at random among those with two to five matches, so it sees players never learnt from; and one in four of the other matches. | `worker/evaluation/shuttleset.py` | Every rally's winner agrees with the score after it. Landings marked out lie outside the singles lines, and landings in lie inside, within their uncertainty, 95 % of the time; this also settles whether the corners are the singles or the doubles court. The counts kept and set aside. |
+| 7b | **The rules on professionals.** The 6f time to spare at every hit, from ShuttleSet's positions and times, with a reach of 1.4 ± 0.1 m (the app finds 1.37 to 1.39 m on your clips). The rules' value: at each hit, how pressed the hitter was by the shot they are answering, made into a chance of winning the rally by one curve fitted on the training matches. | `worker/evaluation/value_benchmark.py` | How often a pressed hitter goes on to lose, with its interval. On the rallies that ended landing in, the 6f rule's winner or let in against ShuttleSet's (47 let in of 1,189). Many let-in calls on winners would say the 250 ms start or the 3.5 m/s is wrong for professionals. |
 | 7c | **The learned value.** At each hit, the chance its hitter wins the rally, from what the app also measures: where both players stood, where the hitter met the shuttle, the time the shot before gave them and their time to spare, the names of the shot before and the shot being hit (as their chances), and the same for the hit before. The hitter is always put on the same half. A logistic model on these facts and their products, as in 5c, and something bigger only if it does better on folds of the training matches. Nothing in it sees where the shot being hit comes down, so a rally's end cannot leak in. Its uncertainty comes from refits on resampled training matches and from draws of its inputs within their covariance. | `worker/rally_value.py`, `worker/rally_value.json`, `worker/evaluation/value_benchmark.py` | On the held-out matches and the held-out players, it tells who wins better than the rules (log loss), with the difference's 95 % interval, resampled by match, clear of zero. Its chances are calibrated, in tenths. Both again with the held-out positions as uncertain as the app's on your clips. |
 | 7d | **Into the one command, and your rallies.** Each shot gets its `value`: each player's chance of winning the rally from that hit, with its interval. The turn is the first hit from which the eventual winner's chance stayed above even, with its chance, or too close to call; when that is the first hit, there was no turn. Your five clips are run again from their saved analyses. | `worker/analyse_rally.py` | Your five rallies' values and turns, pushed before your 6f labels are read, and scored on them by 6f's rule. |
 
-## What 7a needs from you
+## Results
 
-- **The go-ahead to download ShuttleSet:** the `ShuttleSet` folder of `github.com/wywyWang/CoachAI-Projects` (the whole repository is 37 MB, and only that folder is needed). It would sit in a git-ignored folder, as your clips do, and never be committed. The MIT notice and the paper's citation go in the docs beside the model learnt from it.
-- **Whether a value learnt from professionals is one you want.** See the first decision.
+### 7a: ShuttleSet on the court
+
+You gave the go-ahead on 2026-11-04, and agreed to a value learnt from professionals. ShuttleSet is in `worker/ShuttleSet/` (git-ignored, 4.3 MB), taken from the repository's commit `45517f7` (2026-07-17) with its README and MIT licence. `python -m evaluation.shuttleset ShuttleSet` reads it and prints the checks below.
+
+**The corners are the doubles court's.** Mapped so, where the last shot came down agrees with how ShuttleSet says each rally ended:
+
+| End | Rallies | Agree, within twice their uncertainty |
+| --- | --- | --- |
+| Winner: came down in | 1,142 | 1,142 (99.7–100 %) |
+| Let in: misjudged, came down in | 47 | 47 (92.4–100 %) |
+| Out | 997 | 987, 99.0 % (98.2–99.5) |
+| Into the net: on the hitter's side, or at the net | 806 | 777, 96.4 % (94.9–97.5) |
+| Not over the net: the same | 354 | 314, 88.7 % (85.0–91.6) |
+
+- **Let in and out sit at the lines.** The median let in came down 14 cm inside a line, and the median out 20 cm beyond one.
+- **Every winner agrees with the score.** On all 3,314 rallies whose score before them is known, the winner's score went up by one and the other's did not.
+- **The 40 "not over" ends on the receiver's side are left as they are.** Nothing that follows uses where a net end came down.
+- **Players were clicked above their feet.** As read, servers stood 3.00 m from the net in the near half and 3.27 m in the far, and receivers 3.78 and 4.10 m. Moving each click on a player 3.42 px down the image puts the servers at 3.11 m in both halves (fitted), and the receivers at 3.88 and 3.93 m (not fitted, so a check). The shuttle's clicks are not moved.
+- **A click 3 px out either way** is then 9 cm on the near half and 15 cm on the far, at the median. That is assumed, not measured.
+- **Frame rates:** 25 fps for 19 videos, 30 for 24 and 29.97 for one.
+- **Kept and set aside.** 3,346 of the 3,683 rallies are kept, with 33,408 hits. Set aside: 175 with no end, 128 with a shot after the serve not named, 19 whose winner is not the one the end gives, 11 missing a position and 4 faults. In the rallies with an end, 1,073 serves are not named, nearly all without positions, and those rallies start at the return.
+- **Names** in the app's terms: net 7,306, lift 5,346, smash 4,513, block 3,435, drop 3,296, push 2,808, clear 2,755, serve 2,382 and drive 1,567. The rush, a hit down from the net, is called a smash, since the app has no name for it.
+- **The test matches, fixed before any model.** The stressed test is every match of SHI Yuqi and Pornpawee Chochuwong (5 matches, 311 rallies). The held-out test is 10 of the other 39 matches (853 rallies). The 29 left (2,182 rallies, 22,165 hits) are all a model may learn from.
 
 ## Proposed gate (for you to agree)
 
@@ -46,6 +67,7 @@ Each step is pushed on its own.
 - **Learnt from professionals.** What a top player wins from a position is not what you or your opponent would. The value says what a position is worth at the top level. A value for club players needs club rallies with their winners; your labelled rallies could later move it, as your 66 shots moved the names in 5e.
 - **Only what both ShuttleSet and the app measure.** Positions on the floor, times and names. Not heights, flights in 3D or bodies, which ShuttleSet lacks.
 - **The test matches are chosen before any model is fitted, and used once,** as held-out seeds are.
+- **Held-out players have two to five matches.** The first draw, among all players, took Viktor Axelsen, whose 11 matches with the random quarter would have left 24 of the 44 to learn from. The rule was changed before any model was fitted or any outcome looked at.
 - **The rules stay.** The value adds a chance and a turn. It does not replace how 6f says a rally was won, which ShuttleSet cannot test.
 - **Nothing sees the future.** The value at a hit uses only what is known when the shot is hit.
 
