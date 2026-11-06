@@ -112,7 +112,22 @@ With positions as uncertain as the app's on your clips, both are reported with n
 
 A pass would say the value's chances can be trusted, not that it can say where a rally turned. On the training hits its chances run from 0.44 to 0.58, so it is never sure who will win.
 
-## Proposed gate (for you to agree)
+**On the test matches, opened once** with `python -m evaluation.value_benchmark ShuttleSet test`, after `8f394ca` was pushed. Log loss in nats a hit:
+
+| Matches | Hits | The value | The rules | The value's lift | Calibration intercept | Calibration slope |
+| --- | --- | --- | --- | --- | --- | --- |
+| Held out (10) | 8,582 | 0.6911 | 0.6930 | 0.0019 (0.0006 to 0.0034) | −0.00 (−0.02 to 0.02) | 1.01 (0.66 to 1.40) |
+| Held-out players (5) | 2,661 | 0.6929 | 0.6928 | −0.0001 (−0.0057 to 0.0046) | −0.02 (−0.06 to 0.03) | 0.54 (−0.92 to 1.83) |
+
+- **The gate is not met.** On the held-out matches the value tells who wins a little better than the rules, and its chances are calibrated: hits it gave 0.48 at the mean were won 47.9 % of the time, and hits it gave 0.54 were won 53.3 % (51.1 to 56.2). On the matches of the two players it never learnt from, it does no better than the rules, and the slope's interval is too wide to say whether its chances mean anything there.
+- **With positions as uncertain as on your clips, nothing changes.** The value does not use positions, and the rules' value stays at 0.6930 and 0.6928.
+- **The let-in rule fixed in 7b holds.** On the held-out matches it called 255 winners winner and none let in, and left 43 winners and 8 let-ins too close to call. That is 0.079 nats a rally, against 0.128 for the training matches' let-in rate. On the held-out players' matches it called 92 winners winner, none wrongly, and left 21 too close to call: 0.066 against 0.077.
+
+**What this means for 7d.** As far as the app can measure it, a position is worth nearly the same everywhere at the top level. The chance of winning stays between 0.44 and 0.58, so no hit can be called the turn, and the value did not carry over to new players. Put into the app as planned, it would give each shot a number that is too close to call on almost every shot. 7d waits on your decision.
+
+## The gate
+
+Fixed in 7c before the test matches were opened, from what was proposed here:
 
 - **Held-out matches and held-out players:** the learned value tells who wins the rally better than the rules, the difference's 95 % interval clear of zero, and its chances are calibrated.
 - **With positions as uncertain as on your clips:** reported, with no bar, since that is what the app will see.
