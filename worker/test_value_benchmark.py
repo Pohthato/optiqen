@@ -1,11 +1,17 @@
 # worker/test_value_benchmark.py
 import unittest
+from dataclasses import replace
+from unittest import mock
 
 import numpy as np
 
+import evaluation.value_benchmark as value_benchmark
 from evaluation.shuttleset import Hit, Match, Rally, Spot
-from evaluation.value_benchmark import answered_pressed, by_match_rate, fit_curve, fit_let_in, flight_times, rally_pressures, rules
+from evaluation.value_benchmark import (
+    answered_pressed, blurred, by_match_mean, by_match_rate, fit_curve, fit_let_in, flight_times, learn, rally_ats, rally_pressures, rules,
+)
 from rally_reasoning import left_by_professionals, p_under
+from rally_value import fact_rows, named
 
 SURE = np.eye(2) * 1e-4
 
@@ -119,6 +125,57 @@ class RulesTests(unittest.TestCase):
         self.assertEqual(report["flightTimesMs"]["drop"], {"atNone": 0, "perMetre": 300, "spread": 0})
         self.assertEqual(sum(report["winnerOrLetIn"]["asFirstWritten"].values()), 2)
         self.assertEqual(sum(report["winnerOrLetIn"]["learnt"]["eachMatchLeftOut"].values()), 2)
+
+
+class ValueTests(unittest.TestCase):
+    def test_what_was_known_at_each_hit_is_never_where_that_shot_went(self):
+        hits = [hit("A", 0, "serve", (2.6, 3.0), (2.6, 10.0), (2.6, 10.5)), hit("B", 900, "lift", (2.6, 10.5), (2.6, 3.0), (2.6, 1.5)), hit("A", 2300, "smash", (2.6, 1.5), (2.6, 10.5), (4.0, 9.0))]
+        first = rally(hits)
+        ats = rally_ats(first, rally_pressures(first, 25.0, FLIGHTS, np.random.default_rng(0)))
+        np.testing.assert_allclose(ats[2].contact[0], [2.6, 1.5])
+        self.assertEqual(ats[2].gap_ms, 1400.0)
+        np.testing.assert_allclose(ats[2].before, named("lift"))
+        self.assertIsNone(ats[0].before)
+        moved = rally([*hits[:-1], replace(hits[-1], goes_to=spot(0.5, 12.5))])
+        again = rally_ats(moved, rally_pressures(moved, 25.0, FLIGHTS, np.random.default_rng(0)))
+        for i in range(3):
+            np.testing.assert_array_equal(fact_rows(ats[i], ats[i - 1] if i else None), fact_rows(again[i], again[i - 1] if i else None))
+
+    def test_positions_as_unsure_as_on_the_users_clips(self):
+        match = Match("m", ("A", "B"), 25.0, [rally([hit("A", 0, "serve", (2.6, 3.0), (2.6, 10.0), (2.6, 10.5))])])
+        once = blurred(match, np.random.default_rng(0)).rallies[0].hits[0]
+        np.testing.assert_allclose(once.hitter_at.covariance - SURE, np.eye(2) * 0.13**2)
+        np.testing.assert_allclose(once.receiver_at.covariance - SURE, np.eye(2) * 0.25**2)
+        np.testing.assert_allclose(once.goes_to.covariance - SURE, np.diag([0.25**2, 0.45**2]))
+        moved = np.array([blurred(match, np.random.default_rng(k)).rallies[0].hits[0].hitter_at.point for k in range(2000)])
+        np.testing.assert_allclose(moved.std(axis=0), [0.13, 0.13], atol=0.01)
+        self.assertEqual(match.rallies[0].hits[0].hitter_at.covariance[0, 0], SURE[0, 0])
+
+    def test_a_mean_over_hits_with_its_interval_by_match(self):
+        mean = by_match_mean(np.array([1.0, 1.0, 0.0, 0.0]), np.array(["a", "a", "b", "b"]), np.random.default_rng(0))
+        self.assertEqual(mean["mean"], 0.5)
+        self.assertEqual(mean["interval"], [0.0, 1.0])
+
+    def test_learnt_on_folds_of_matches_and_refitted(self):
+        rng = np.random.default_rng(3)
+        matches = []
+        for k in range(6):
+            rallies = []
+            for _ in range(30):
+                deep = 10.0 + rng.random()
+                serve = hit("A", 0, "serve", (2.6, 3.0), (2.6, 10.0), (2.6, deep))
+                reply = hit("B", 900, "lift", (2.6, deep), (2.6, 3.0), (2.6, 1.5))
+                if rng.random() < 0.5:
+                    rallies.append(rally([serve, reply, hit("A", 2300, "smash", (2.6, 1.5), (2.6, 10.5), (4.0, 9.0))]))
+                else:
+                    rallies.append(rally([serve, reply, hit("A", 2300, "drop", (2.6, 1.5), (2.6, 10.5), (2.6, 4.0))], "net"))
+            matches.append(Match(f"m{k}", ("A", "B"), 25.0, rallies))
+        with mock.patch.object(value_benchmark, "L2S", (1e-3,)), mock.patch.object(value_benchmark, "REFITS", 3):
+            model, report = learn(matches, [match.video for match in matches])
+        self.assertEqual(model.weights.shape[0], 4)
+        self.assertLess(report["foldsLogLoss"]["names, l2 0.001"], report["foldsLogLoss"]["rules"])
+        smash = rally_ats(next(r for r in matches[0].rallies if r.hits[-1].name == "smash"), [None, None, None])[2]
+        self.assertGreater(model.chances(fact_rows(smash, None)).mean(), 0.6)
 
 
 if __name__ == "__main__":

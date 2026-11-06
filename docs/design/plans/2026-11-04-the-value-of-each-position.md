@@ -84,6 +84,34 @@ Of the 674 called, 668 agree (99.1 %). It scores 0.125 nats a rally against 0.19
 - **Errors**, which ShuttleSet does not mark forced or unforced: 268 are called forced, 668 unforced and 476 too close to call.
 - **Flight times.** Answered shots spread around their name's line by 124 ms (net shots) to 306 ms (lifts).
 
+### 7c: the learned value
+
+This runs on the 29 training matches only. The model was pushed before the test matches were opened. `python -m evaluation.value_benchmark ShuttleSet learn` chooses it, fits it and writes `worker/rally_value.json`.
+
+**Professional rallies are close to a coin toss at every hit.** Of the 22,165 training hits, the hitter went on to win 49 %. A player hitting a smash won 58 %, and one hitting any other shot 45 to 51 %. Where the receiver stood moves that by 2 points at most, and so does where the hitter met the shuttle. What decides a rally is whether the next shot ends it, and nothing known at the hit shows that: the last hitter won 35 % of the time and the one before them 65 %, and the swing is as large five hits from the end.
+
+Each model on five folds of the training matches, each fold told by a model fitted on the other four, in nats a hit (even odds is 0.6930):
+
+| Model | Weights | Best l2 | Log loss |
+| --- | --- | --- | --- |
+| The rules (7b's curve) | 2 | | 0.6930 |
+| Names: the shot being hit, the shot before and the one before that | 29 | 0.1 | 0.6908 |
+| Names and their products | 435 | 1 | 0.6910 |
+| All the facts | 47 | 0.1 | 0.6909 |
+| All the facts and their products, as in 5c | 1,128 | 1 | 0.6916 |
+
+- **The names alone are kept.** Nothing bigger was tried, since the products did no better. On the folds the names tell who wins 0.0022 nats a hit better than the rules (0.0013 to 0.0032, resampled by match).
+- **Positions do not enter it,** so the value is as sure on your clips as on ShuttleSet's. Its interval comes from 20 refits on the training matches drawn with replacement.
+
+**The gate, fixed before the test matches were opened.** On the held-out matches, and apart on the held-out players' matches:
+
+- the value tells who wins better than the rules, the 95 % interval of the difference, resampled by match, above zero;
+- its chances are calibrated: refitting the share won on their log odds, the intercept's 95 % interval holds 0 and the slope's holds 1. The tenths are shown.
+
+With positions as uncertain as the app's on your clips, both are reported with no bar. That moves each player by 0.13 m in the near half and 0.25 m in the far, and where the shuttle was met by 0.14 m across and 0.16 m along in the near half and 0.25 m and 0.45 m in the far: the medians on your five clips. The let-in rule fixed in 7b is scored on the same matches.
+
+A pass would say the value's chances can be trusted, not that it can say where a rally turned. On the training hits its chances run from 0.44 to 0.58, so it is never sure who will win.
+
 ## Proposed gate (for you to agree)
 
 - **Held-out matches and held-out players:** the learned value tells who wins the rally better than the rules, the difference's 95 % interval clear of zero, and its chances are calibrated.
