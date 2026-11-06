@@ -13,6 +13,11 @@ The rules' value: at each hit, the chance its hitter goes on to win the rally, f
 that the shot they answered left them under pressure (rally_reasoning.p_under; never on a serve,
 even odds when not known), through one logistic curve fitted on the training matches.
 
+Winner or let in, as the rules were first written: a winner when the receiver had no time to get
+to it. As learnt here (`fit_let_in`, rally_reasoning.LET_IN): let in with the chance the receiver
+could get there times the chance a professional left such a shot, by how far inside the lines it
+came down and its name. It is scored leaving each training match out of its own fit.
+
 Only the training matches are used here; the test matches are for the learned value, once.
 Rates come with 95 % intervals from resampling whole matches.
 
@@ -28,11 +33,13 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from scipy.optimize import minimize
 
 from evaluation.shuttleset import Match, Rally, held_out, read
+from geometry.court_model import NET_Y_M
 from pressure import Pressure, contradicts, work
-from rally_reasoning import PRESSED_SPARE_MS, p_under
-from shots import CALL_CONFIDENCE, Estimate
+from rally_reasoning import PRESSED_SPARE_MS, inside_by, left_by_professionals, p_under
+from shots import CALL_CONFIDENCE, Estimate, landing_area
 
 REACH = Estimate(1.4, 0.1)  # the app finds 1.37 to 1.39 m on the user's clips
 FRAME_SIGMA = 1.0  # a hit's frame, picked by hand
@@ -107,6 +114,20 @@ def fit_curve(x: np.ndarray, won: np.ndarray, steps: int = 50) -> tuple[float, f
     return float(coef[0]), float(coef[1])
 
 
+def fit_let_in(unreached: np.ndarray, inside: np.ndarray, high: np.ndarray, push: np.ndarray, let_in: np.ndarray) -> tuple[float, ...]:
+    """rally_reasoning.LET_IN by maximum likelihood: a shot that came down in was let in with the
+    chance (1 - unreached) * left_by_professionals(inside, high, push)."""
+    def loss(weights: np.ndarray) -> float:
+        p = np.clip((1.0 - unreached) * left_by_professionals(inside, high, push, weights), 1e-9, 1 - 1e-9)
+        return float(-np.sum(let_in * np.log(p) + (1 - let_in) * np.log(1 - p)))
+
+    return tuple(round(float(w), 2) for w in minimize(loss, np.zeros(4), method="BFGS").x)
+
+
+def _said(p_let_in: float) -> str:
+    return "let in" if p_let_in >= CALL_CONFIDENCE else "winner" if p_let_in <= 1 - CALL_CONFIDENCE else "too close to call"
+
+
 def log_loss(p: np.ndarray, won: np.ndarray) -> float:
     p = np.clip(p, 1e-12, 1 - 1e-12)
     return float(-np.mean(won * np.log(p) + (1 - won) * np.log(1 - p)))
@@ -129,8 +150,9 @@ def rules(matches: list[Match], train: list[str]) -> dict[str, Any]:
     learn = [match for match in matches if match.video in set(train)]
     flights = flight_times([rally for match in learn for rally in match.rallies])
     rows = []  # match, chance the hitter was under pressure, whether they won
+    landed = []  # match, chance the receiver could not get there, inside the lines, clear or lift, push, let in
     answered: dict[str, Counter] = defaultdict(Counter)
-    landed, errors = Counter(), Counter()
+    first_written, errors = Counter(), Counter()
     for match in learn:
         for rally in match.rallies:
             pressures = rally_pressures(rally, match.fps, flights, rng)
@@ -146,9 +168,13 @@ def rules(matches: list[Match], train: list[str]) -> dict[str, Any]:
             pressed = answered_pressed(rally, pressures)
             rows += [(match.video, x, hit.hitter == rally.winner) for x, hit in zip(pressed, rally.hits)]
             if rally.end == "in" and pressures[-1] is not None:
+                last = rally.hits[-1]
                 unreached = p_under(pressures[-1].spare_ms, 0.0)
-                said = "winner" if unreached >= CALL_CONFIDENCE else "let in" if unreached <= 1 - CALL_CONFIDENCE else "too close to call"
-                landed[(rally.how, said)] += 1
+                first_written[(rally.how, _said(1.0 - unreached))] += 1
+                half = "near" if last.hitter_at.point[1] < NET_Y_M else "far"
+                area = landing_area("singles", half, float(last.hitter_at.point[0]) if last.name == "serve" else None)
+                inside = float(inside_by(last.goes_to.point, area)[0])
+                landed.append((match.video, unreached, inside, last.name in ("clear", "lift"), last.name == "push", rally.how == "let in"))
             elif rally.end != "in":
                 forced = pressed[-1]
                 errors["forced" if forced >= CALL_CONFIDENCE else "unforced" if forced <= 1 - CALL_CONFIDENCE else "too close to call"] += 1
@@ -156,6 +182,15 @@ def rules(matches: list[Match], train: list[str]) -> dict[str, Any]:
     videos, x, won = np.array([r[0] for r in rows]), np.array([r[1] for r in rows]), np.array([r[2] for r in rows], float)
     a, b = fit_curve(x, won)
     curve = 1.0 / (1.0 + np.exp(-(a + b * x)))
+
+    where, *features, let_in = (np.array(column, dtype=float if k else object) for k, column in enumerate(zip(*landed)))
+    left_out = np.zeros(len(let_in))
+    for video in train:
+        out = where == video
+        if out.any():
+            weights = fit_let_in(*(f[~out] for f in features), let_in[~out])
+            left_out[out] = (1.0 - features[0][out]) * left_by_professionals(*(f[out] for f in features[1:]), weights)
+    learnt = Counter(("let in" if let else "winner", _said(p)) for p, let in zip(left_out, let_in))
 
     def lost(mask: np.ndarray) -> dict[str, Any]:
         return by_match_rate({video: (int((~won[mask & (videos == video)].astype(bool)).sum()), int((mask & (videos == video)).sum())) for video in train}, rng)
@@ -176,7 +211,15 @@ def rules(matches: list[Match], train: list[str]) -> dict[str, Any]:
             "tooCloseToCall": lost((x > 1 - CALL_CONFIDENCE) & (x < CALL_CONFIDENCE)),
         },
         "curve": {"a": round(a, 4), "b": round(b, 4), "logLoss": round(log_loss(curve, won), 4), "logLossAtTheRate": round(log_loss(np.full_like(won, won.mean()), won), 4)},
-        "winnerOrLetIn": {f"{how}, said {said}": count for (how, said), count in sorted(landed.items())},
+        "winnerOrLetIn": {
+            "asFirstWritten": {f"{how}, said {said}": count for (how, said), count in sorted(first_written.items())},
+            "learnt": {
+                "weights": fit_let_in(*features, let_in),
+                "eachMatchLeftOut": {f"{how}, said {said}": count for (how, said), count in sorted(learnt.items())},
+                "logLoss": round(log_loss(left_out, let_in), 4),
+                "logLossAtTheRate": round(log_loss(np.full_like(let_in, let_in.mean()), let_in), 4),
+            },
+        },
         "errors": dict(errors),
     }
 

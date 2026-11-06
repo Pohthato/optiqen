@@ -4,8 +4,8 @@ import unittest
 import numpy as np
 
 from evaluation.shuttleset import Hit, Match, Rally, Spot
-from evaluation.value_benchmark import answered_pressed, by_match_rate, fit_curve, flight_times, rally_pressures, rules
-from rally_reasoning import p_under
+from evaluation.value_benchmark import answered_pressed, by_match_rate, fit_curve, fit_let_in, flight_times, rally_pressures, rules
+from rally_reasoning import left_by_professionals, p_under
 
 SURE = np.eye(2) * 1e-4
 
@@ -84,6 +84,17 @@ class CurveTests(unittest.TestCase):
         self.assertAlmostEqual(a, 0.3, delta=0.08)
         self.assertAlmostEqual(b, -1.2, delta=0.12)
 
+    def test_how_often_professionals_let_shots_in_comes_back(self):
+        rng = np.random.default_rng(2)
+        n = 40000
+        unreached, inside = rng.random(n) * 0.5, rng.uniform(0.01, 2.5, n)
+        high, push = (rng.random(n) < 0.2).astype(float), np.zeros(n)
+        push[high == 0] = (rng.random(int((high == 0).sum())) < 0.1)
+        want = (-3.0, -0.5, 2.0, 1.0)
+        let_in = (rng.random(n) < (1 - unreached) * left_by_professionals(inside, high, push, want)).astype(float)
+        got = fit_let_in(unreached, inside, high, push, let_in)
+        np.testing.assert_allclose(got, want, atol=0.25)
+
     def test_a_rate_pooled_over_matches_with_its_interval(self):
         rate = by_match_rate({"a": (5, 10), "b": (15, 30), "c": (0, 0)}, np.random.default_rng(0))
         self.assertEqual((rate["k"], rate["n"], rate["share"]), (20, 40, 0.5))
@@ -106,7 +117,8 @@ class RulesTests(unittest.TestCase):
         self.assertEqual((report["matches"], report["rallies"]), (1, 2))
         self.assertEqual(report["answered"]["hits"], 4)
         self.assertEqual(report["flightTimesMs"]["drop"], {"atNone": 0, "perMetre": 300, "spread": 0})
-        self.assertEqual(sum(report["winnerOrLetIn"].values()), 2)
+        self.assertEqual(sum(report["winnerOrLetIn"]["asFirstWritten"].values()), 2)
+        self.assertEqual(sum(report["winnerOrLetIn"]["learnt"]["eachMatchLeftOut"].values()), 2)
 
 
 if __name__ == "__main__":

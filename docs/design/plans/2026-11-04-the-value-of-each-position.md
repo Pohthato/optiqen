@@ -71,6 +71,16 @@ This runs on the 29 training matches (2,182 rallies) only. The test matches were
 
 Of the 289 called, 106 agree (37 %). The rule calls a shot a winner only when the receiver had no time to get there. Most professional winners left them time to get there but not to play the shot. Smash winners came down in about half a second, leaving the receiver 85 ms to spare at the median after a 250 ms start, and drops and net shots did the same. The let-ins, mostly clears, lifts and pushes misjudged at the back, are called rightly. The flight to the floor is taken as short, which favours a winner, so true flight times would call even more winners let in.
 
+**The fix, learnt from the training matches.** A shot that came down in is let in with the chance that the receiver could get there, times the chance a professional left such a shot. The second is learnt by how far inside the lines it came down and whether it was a clear or a lift, a push or another shot (`rally_reasoning.LET_IN`). The let-ins were mostly clears and lifts on or near a line: of 38 let in, 25 were clears or lifts, 26 came down within 20 cm of a line, and no drop or net shot was let in. Leaving each training match out of its own fit:
+
+| ShuttleSet says | Called winner | Called let in | Too close to call |
+| --- | --- | --- | --- |
+| Winner | 668 | 0 | 64 |
+| Let in | 6 | 0 | 32 |
+
+Of the 674 called, 668 agree (99.1 %). It scores 0.125 nats a rally against 0.197 for the let-in rate alone. It never calls a shot let in: a professional left only about three in four even of the clears on a line that they could get to. Without the chance of getting there, by line and name alone, it scores 0.125 too, so the time to spare adds little. The test matches will score it once, with 7c.
+
+- **It is learnt from professionals.** Club players may leave more shots they could get to. Your labels will say.
 - **Errors**, which ShuttleSet does not mark forced or unforced: 268 are called forced, 668 unforced and 476 too close to call.
 - **Flight times.** Answered shots spread around their name's line by 124 ms (net shots) to 306 ms (lifts).
 
