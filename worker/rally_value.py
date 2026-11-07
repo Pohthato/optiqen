@@ -8,6 +8,11 @@ their time to spare, and the chances of the names of the shot before and of the 
 And the same at the hit before. Never where the shot being hit went, so a rally's end cannot leak
 in. The court is turned so that the hitter is always on the near half.
 
+Where the rally turned, by the value (`turn`): at the first hit from which the winner's chance
+stayed above even. It did not turn when that is the first hit, or when the winner was not ahead
+at the last one. Its chance is the share of the fits that put it there, weighted by the chance
+each player won.
+
 A logistic model on these facts, or on them and their pairwise products (as shot_names), each
 fact held to the range it was learnt on and a fact not known taken at its mean. Which facts, and
 whether their products, is chosen on folds of the training matches. The weights are
@@ -19,13 +24,15 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 from scipy.optimize import minimize
 
 from geometry.court_model import COURT_LENGTH_M, NET_Y_M, SINGLES_WIDTH_M
+from pressure import Pressure
 from shot_names import NAMES as SHOT_NAMES
-from shots import Estimate
+from shots import CALL_CONFIDENCE, Estimate, ShotFacts
 
 NAMES = ("serve", *SHOT_NAMES)
 CONTINUOUS = ("hitterX", "hitterY", "receiverX", "receiverY", "contactX", "contactY", "gapS", "spareS")
@@ -39,12 +46,13 @@ Place = tuple[np.ndarray, np.ndarray]  # a point on the floor (x, y) and its cov
 
 @dataclass(frozen=True)
 class At:
-    """What is known at a hit. `gap_ms` is the time since the shot before and `spare_ms` the time
-    that shot left the hitter to spare, each None when not known; `before` and `name` are the
-    chances of each of NAMES for the shot before (None when not known) and the one being hit."""
+    """What is known at a hit. Where a player stood is None when not seen. `gap_ms` is the time
+    since the shot before and `spare_ms` the time that shot left the hitter to spare, each None
+    when not known; `before` and `name` are the chances of each of NAMES for the shot before (None
+    when not known) and the one being hit."""
 
-    hitter: Place
-    receiver: Place
+    hitter: Place | None
+    receiver: Place | None
     contact: Place
     gap_ms: float | None
     spare_ms: Estimate | None
@@ -63,7 +71,7 @@ def fact_rows(now: At, then: At | None, rng: np.random.Generator | None = None, 
     """FACTS at a hit, as measured (no `rng`), or in `draws` draws within their uncertainty. A fact
     not known is NaN."""
     rows = np.full((draws, len(FACTS)), np.nan)
-    far = float(now.hitter[0][1]) > NET_Y_M
+    far = float((now.hitter or now.contact)[0][1]) > NET_Y_M
     rows[:, FACTS.index("then")] = then is not None
     for prefix, at in (("", now), ("then ", then)):
         column = {fact: FACTS.index(prefix + fact) for fact in _ONE_HIT}
@@ -73,6 +81,8 @@ def fact_rows(now: At, then: At | None, rng: np.random.Generator | None = None, 
             rows[:, names] = 0.0
             continue
         for who in ("hitter", "receiver", "contact"):
+            if getattr(at, who) is None:
+                continue
             xy = _drawn(getattr(at, who), rng, draws)
             if far:
                 xy = np.array([SINGLES_WIDTH_M, COURT_LENGTH_M]) - xy
@@ -150,9 +160,50 @@ def fit(model: Model, rows: np.ndarray, won: np.ndarray, l2: float, start: np.nd
     return minimize(loss, begin, jac=True, method="L-BFGS-B", options={"maxiter": 5000}).x
 
 
+def chances_at(model: Model, now: At, then: At | None, rng: np.random.Generator, draws: int = DRAWS) -> np.ndarray:
+    """The chance the hitter wins the rally, by draws of the facts and fits: (draws, fits)."""
+    return model.chances(fact_rows(now, then, rng, draws))
+
+
 def chance(model: Model, now: At, then: At | None, rng: np.random.Generator, draws: int = DRAWS) -> tuple[float, float, float]:
     """The chance the hitter wins the rally, and its 95 % interval over the refits and draws of the
     facts."""
-    p = model.chances(fact_rows(now, then, rng, draws))
+    p = chances_at(model, now, then, rng, draws)
     low, high = np.percentile(p, [2.5, 97.5])
     return float(p.mean()), float(low), float(high)
+
+
+def shot_ats(shots: Sequence[ShotFacts], stood: Sequence[dict | None], pressures: Sequence[Pressure | None], names: Sequence[dict[str, float]]) -> list[At]:
+    """What the app knew at each of a rally's shots: where each half's player stood
+    (body.standing_at, or None), each shot's pressure on its receiver (pressure.rally_pressure)
+    and its chance of each name (shot_names.ShotName.p)."""
+    ats = []
+    for i, shot in enumerate(shots):
+        other = "far" if shot.hitter == "near" else "near"
+        at = stood[i] or {}
+        before = shots[i - 1] if i else None
+        ats.append(At(
+            at.get(shot.hitter), at.get(other), (np.array(shot.contact[:2]), np.diag(np.square(shot.contact_sigma[:2]))),
+            None if before is None else shot.hit_ms - before.hit_ms,
+            None if before is None or pressures[i - 1] is None else pressures[i - 1].spare_ms,
+            None if before is None else np.array([names[i - 1].get(name, 0.0) for name in NAMES]),
+            np.array([names[i].get(name, 0.0) for name in NAMES]),
+        ))
+    return ats
+
+
+def turn(by_fit: np.ndarray, hitters: Sequence[str], won: dict[str, float], sure: bool = True) -> tuple[list[float], float, int | str]:
+    """The chance the rally turned at each hit and that it did not, from each hit's chance for its
+    hitter by fit (hits, fits) and the chance each player won the rally; and the call: the index of
+    the hit, "no turn", or "too close to call" when neither is CALL_CONFIDENCE sure or the winner's
+    half is not (`sure`)."""
+    p_at, p_no_turn = np.zeros(len(hitters)), 0.0
+    for winner, p_won in won.items():
+        ahead = np.where((np.asarray(hitters) == winner)[:, None], by_fit, 1.0 - by_fit) > 0.5
+        stays = np.flip(np.cumprod(np.flip(ahead, axis=0), axis=0), axis=0).astype(bool)
+        first = np.where(stays.any(axis=0), stays.argmax(axis=0), 0)  # 0: ahead from the first hit, or never at the end
+        p_at += p_won * np.array([np.mean(first == k) if k else 0.0 for k in range(len(hitters))])
+        p_no_turn += p_won * float(np.mean(first == 0))
+    at = int(np.argmax(p_at))
+    call, p_call = ("no turn", p_no_turn) if p_no_turn >= p_at[at] else (at, float(p_at[at]))
+    return p_at.tolist(), p_no_turn, call if sure and p_call >= CALL_CONFIDENCE else "too close to call"

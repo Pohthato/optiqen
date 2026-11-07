@@ -2,8 +2,8 @@
 """A rally video understood in one command: the camera of every frame, the shuttle in every frame,
 the hits, each flight in 3D, the two players' bodies in 3D, and every shot's facts with the
 hitter's body at the hit and the shot's name: its family, cross or straight, forehand or
-backhand, and from a jump or not (shot_names.py), and how hard it made the receiver work
-(pressure.py).
+backhand, and from a jump or not (shot_names.py), how hard it made the receiver work
+(pressure.py), and each player's chance of winning the rally from that hit (rally_value.py).
 
     python analyse_rally.py clip.mp4 --golden clip.json --out clip.analysis.json
         [--court singles|doubles] [--overlay clip.analysis.mp4] [--diagram clip.court.png]
@@ -18,7 +18,8 @@ each fitted flight into the video with its hit and name, the players' fitted bod
 rally's end once the shuttle comes down: in, out or into the net and who won, where it came down
 or met the net; the diagram is the court from above with every shot's path and name, where both
 players stood at each hit, and the end with the landing's uncertainty. The summary gives the end
-with its chances, how the rally was won and where it turned (rally_reasoning.py), and the hits
+with its chances, how the rally was won and where it turned (rally_reasoning.py), where it turned
+by the value (rally_value.py), and the hits
 are the rally's own: those after the shot that ended it are left out (the shuttle on the floor,
 picked up or sent back). The shuttle's drag (terminal velocity) is measured from the rally's own
 long flights unless given: measured once over a whole session's rallies it is surer, and close
@@ -37,6 +38,7 @@ import numpy as np
 
 import detect_poses
 import detect_shuttle
+import rally_value
 import track_camera
 from body import BodyFacts, arm_reach, rally_body_facts, standing_at, standing_reach
 from find_hits import hear, hits_document, load_detections, rounded
@@ -49,7 +51,7 @@ from players import HALVES
 from pressure import Pressure, rally_pressure
 from rally_reasoning import Reasons, rally_reasons
 from shot_names import Launch, Model, ShotName, name_shot, racket_arms
-from shots import RallyEnd, ShotFacts, rally_end, rally_shots
+from shots import CALL_CONFIDENCE, RallyEnd, ShotFacts, rally_end, rally_shots
 from track_players import players_document
 from video import VideoFile
 
@@ -192,6 +194,28 @@ def reasons_entry(reasons: Reasons | None) -> dict | None:
             "pAt": [round(p, 3) for p in reasons.p_turn], "pNoTurn": round(reasons.p_no_turn, 3),
         },
     }
+
+
+def value_entry(shot: ShotFacts, p: np.ndarray) -> dict:
+    """Each player's chance of winning the rally from this hit, with its 95 % interval, from the
+    value's chances for the hitter (rally_value.chances_at)."""
+    mean, (low, high) = float(p.mean()), np.percentile(p, [2.5, 97.5])
+    other = "far" if shot.hitter == "near" else "near"
+    return {
+        shot.hitter: {"p": round(mean, 3), "interval": [round(float(low), 3), round(float(high), 3)]},
+        other: {"p": round(1.0 - mean, 3), "interval": [round(1.0 - float(high), 3), round(1.0 - float(low), 3)]},
+    }
+
+
+def value_turn_entry(shots: list[ShotFacts], end: RallyEnd | None, values: list[np.ndarray]) -> dict | None:
+    """Where the rally turned by the value, by shot number (None when its end was not seen)."""
+    if end is None:
+        return None
+    last = shots[-1].hitter
+    won = {last: end.p_hitter_won, "far" if last == "near" else "near": 1.0 - end.p_hitter_won}
+    by_fit = np.array([p.mean(axis=0) for p in values])
+    p_at, p_no_turn, call = rally_value.turn(by_fit, [shot.hitter for shot in shots], won, end.p_half >= CALL_CONFIDENCE)
+    return {"call": call + 1 if isinstance(call, int) else call, "pAt": [round(p, 3) for p in p_at], "pNoTurn": round(p_no_turn, 3)}
 
 
 def stood_entry(stood: Stood) -> dict:
@@ -393,6 +417,9 @@ def main(argv: list[str] | None = None) -> int:
     model, rng = Model.load(), np.random.default_rng(0)
     arms = racket_arms(facts)
     names = [name_shot(Launch.of(shot), shot.serve, model, rng, fact, arms[shot.hitter]) for shot, fact in zip(shots, facts)]
+    ats = rally_value.shot_ats(shots, stood, pressures, [name.p for name in names])
+    value_model = rally_value.Model.load()
+    values = [rally_value.chances_at(value_model, now, ats[i - 1] if i else None, rng) for i, now in enumerate(ats)]
 
     result = hits_document(args.video, shuttle_doc, analysis, onsets, sound_error, times_ms)
     result["court"] = args.court
@@ -400,6 +427,7 @@ def main(argv: list[str] | None = None) -> int:
     result["summary"]["shots"] = len(shots)
     result["summary"]["end"] = end_entry(shots, end)
     result["summary"]["reasons"] = reasons_entry(rally_reasons(shots, end, pressures, [name.p for name in names], args.court))
+    result["summary"]["valueTurn"] = value_turn_entry(shots, end, values)
     called = [name.call for name in names]
     result["summary"]["names"] = {call: called.count(call) for call in sorted(set(called))}
     result["summary"]["terminalVelocity"] = None
@@ -418,8 +446,11 @@ def main(argv: list[str] | None = None) -> int:
     }
     result["summary"]["playersError"] = players_error
     result["shots"] = [
-        {**shot_entry(number, shot), "name": name.entry(), "body": body_entry(fact), "players": None if at is None else stood_entry(at), "pressure": pressure_entry(on_them)}
-        for number, (shot, name, fact, at, on_them) in enumerate(zip(shots, names, facts, stood, pressures), start=1)
+        {
+            **shot_entry(number, shot), "name": name.entry(), "body": body_entry(fact), "players": None if at is None else stood_entry(at),
+            "pressure": pressure_entry(on_them), "value": value_entry(shot, p),
+        }
+        for number, (shot, name, fact, at, on_them, p) in enumerate(zip(shots, names, facts, stood, pressures, values), start=1)
     ]
     result["sources"] = {"track": Path(track_path).name, "shuttle": Path(shuttle_path).name, "poses": Path(poses_path).name if bodies is not None else None}
     args.out.write_text(json.dumps(_clean(result), allow_nan=False), encoding="utf-8")

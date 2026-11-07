@@ -125,6 +125,24 @@ A pass would say the value's chances can be trusted, not that it can say where a
 
 **What this means for 7d.** As far as the app can measure it, a position is worth nearly the same everywhere at the top level. The chance of winning stays between 0.44 and 0.58, so no hit can be called the turn, and the value did not carry over to new players. Put into the app as planned, it would give each shot a number that is too close to call on almost every shot. 7d waits on your decision.
 
+### 7d: into the one command, and your rallies
+
+You chose on 2026-11-06 to put the value in the app anyway. Each shot in `analyse_rally.py`'s result now has its `value`: each player's chance of winning the rally from that hit, with its 95 % interval over the 21 fits. The summary's `valueTurn` says where the rally turned by the value: at the first hit from which the winner's chance stayed above even, over the fits, weighted by the chance each player won. It did not turn when that is the first hit, or when the winner was not ahead at the last. As in 6f, a call is made at 95 %, and none when it is unsure which half the last shot came from.
+
+Your five rallies, run again from their saved camera track, shuttle and poses. Their ends and how each was won are as in 6f. These answers were pushed before any of your labels was read:
+
+| Clip | Your end | The hitter's chance, lowest to highest | Where it turned, by the value | By the 6f rules |
+| --- | --- | --- | --- | --- |
+| 9 | smash, in | 0.475 to 0.542 | too close to call (0.53 no turn) | too close to call (0.59 no turn) |
+| 8 | clear, in | 0.460 to 0.553 | too close to call (0.58 at shot 13, the last, at 14.15 s) | too close to call (0.71 no turn) |
+| 10 | push, out long | 0.466 to 0.541 | no turn (0.95) | no turn (1.00) |
+| 7 | drop, into the net | 0.464 to 0.572 | too close to call (0.52 at shot 16, the last, at 16.10 s; 0.48 at shot 14) | no turn (1.00) |
+| 6 | cut, into the net | 0.468 to 0.551 | too close to call (0.71 no turn) | no turn (0.98) |
+
+- **No shot moves either player far from even.** Every chance on your clips lies between 0.46 and 0.57, and only a smash takes its hitter above 0.53.
+- **Where the value leans to a turn, it is at or near the last shot.** The winner's chance goes above even whenever the loser plays anything but a smash, so the shot that ended the rally is often where it "turned". That says more about the value than about the rally.
+- **Your labels score these turns by 6f's rule,** with `score6f.py`, beside the 6f rules' answers.
+
 ## The gate
 
 Fixed in 7c before the test matches were opened, from what was proposed here:

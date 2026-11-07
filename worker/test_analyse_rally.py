@@ -165,6 +165,20 @@ class AnalyseRallyTests(unittest.TestCase):
         self.assertAlmostEqual(sum(turn["pAt"]) + turn["pNoTurn"], 1.0, delta=0.01)
         self.assertTrue(turn["call"] in ("no turn", "too close to call") or 1 <= turn["call"] <= len(shots))
 
+    def test_each_players_chance_of_winning_from_each_hit_and_where_it_turned_by_it(self):
+        shots = self.result["shots"]
+        for shot in shots:
+            value = shot["value"]
+            self.assertAlmostEqual(value["near"]["p"] + value["far"]["p"], 1.0, delta=0.002)
+            for half in ("near", "far"):
+                low, high = value[half]["interval"]
+                self.assertTrue(0.0 < low <= value[half]["p"] <= high < 1.0)
+        turn = self.result["summary"]["valueTurn"]
+        self.assertEqual(len(turn["pAt"]), len(shots))
+        self.assertEqual(turn["pAt"][0], 0.0)
+        self.assertAlmostEqual(sum(turn["pAt"]) + turn["pNoTurn"], 1.0, delta=0.01)
+        self.assertTrue(turn["call"] in ("no turn", "too close to call") or 2 <= turn["call"] <= len(shots))
+
     def test_without_the_pose_model_or_with_poses_of_other_frames_there_are_no_players(self):
         cameras, times_ms = [None] * 3, [0.0, 33.3, 66.7]
         bodies, why = find_players(self.video, self.root / "clip.track.json", self.root / "none.poses.json", True, self.root / "missing.task", cameras, times_ms)
