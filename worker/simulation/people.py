@@ -23,6 +23,7 @@ STANDING = np.array([
     (-0.07, 0.01, 0.29), (0.07, 0.01, 0.29),  # knees
     (-0.06, 0.00, 0.04), (0.06, 0.00, 0.04),  # ankles
 ])
+SOLE_M = 0.03  # everyone wears shoes: a court shoe's sole lifts the body this much
 
 
 @dataclass(frozen=True)
@@ -40,7 +41,7 @@ def skeleton(position: tuple[float, float], facing: float, stature: float = 1.75
     forward = np.array([np.cos(facing), np.sin(facing), 0.0])
     right = np.array([forward[1], -forward[0], 0.0])
     up = np.array([0.0, 0.0, 1.0])
-    base = np.array([position[0], position[1], raised])
+    base = np.array([position[0], position[1], raised + SOLE_M])
     return base + stature * (STANDING[:, :1] * right + STANDING[:, 1:2] * forward + STANDING[:, 2:3] * up)
 
 
@@ -125,7 +126,7 @@ def body(
     right, forward = np.cos(turn) * right + np.sin(turn) * forward, np.cos(turn) * forward - np.sin(turn) * right  # the shoulders' own
     shoulders = [neck - seg["shoulder_half"] * right, neck + seg["shoulder_half"] * right]
     leg = seg["thigh"] + seg["shank"]
-    ankles = [_reach(hip, np.asarray(foot) + seg["ankle"] * up, leg) for hip, foot in zip(hips, feet)]
+    ankles = [_reach(hip, np.asarray(foot) + (seg["ankle"] + SOLE_M) * up, leg) for hip, foot in zip(hips, feet)]
     knees = [_bend(hip, ankle, seg["thigh"], seg["shank"], forward) for hip, ankle in zip(hips, ankles)]
     arm = seg["upper_arm"] + seg["forearm"]
     wrists = [_reach(shoulder, np.asarray(hand), arm) for shoulder, hand in zip(shoulders, hands)]
@@ -159,7 +160,7 @@ def _stance(contact, side: str, stature: float = 1.75) -> np.ndarray:
     rng = _style(contact, side)
     stretch = rng.uniform(0.85, 1.0) if z > 1.8 else rng.uniform(0.6, 0.95)
     reach = RACKET_M + stretch * (SEGMENTS["upper_arm"] + SEGMENTS["forearm"]) * stature
-    shoulder = 0.79 * stature + (0.3 if z > 2.7 else 0.0) - (0.13 * stature if z < 1.0 else 0.0)
+    shoulder = 0.79 * stature + SOLE_M + (0.3 if z > 2.7 else 0.0) - (0.13 * stature if z < 1.0 else 0.0)
     across = float(np.sqrt(max(reach**2 - (z - shoulder) ** 2, 0.04)))
     away = np.array([-0.3, -(0.95 if z < 1.0 else (0.3 if z > 1.8 else 0.55))]) * _sign(side)
     shoulder_at = np.array([x, y]) + across * away / np.linalg.norm(away)
@@ -260,7 +261,7 @@ def playing(rally, side: str, time: float, stature: float = 1.75) -> np.ndarray:
     forward = np.array([np.cos(facing), np.sin(facing), 0.0])
     right = np.array([forward[1], -forward[0], 0.0])
     up = np.array([0.0, 0.0, 1.0])
-    hip_height = 0.50 * stature
+    hip_height = 0.50 * stature + SOLE_M
     # Stepping: the feet take turns, the pelvis lower the faster the player goes.
     pace = min(float(np.linalg.norm(_centre(rally, side, time + 0.05) - centre)) / 0.05 / 3.0, 1.0)
     feet = [_foot(rally, side, time, 0, stature), _foot(rally, side, time, 1, stature)]

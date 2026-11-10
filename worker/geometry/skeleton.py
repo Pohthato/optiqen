@@ -55,7 +55,10 @@ STARTING = {
     "flank": float(np.hypot(0.29, 0.13 - 0.09)), "diagonal": float(np.hypot(0.29, 0.13 + 0.09)),
     "neck": float(np.sqrt(0.13**2 + 0.05**2 + 0.12**2)),
 }
-ANKLE_HEIGHT_M = 0.07
+# An ankle's height above the floor with the foot down, in a court shoe: about 0.07 m barefoot
+# (0.039 of stature, Drillis and Contini) and a sole's 0.03 m more. MediaPipe put the ankle 0.10 m
+# up on the real clips (by its own heel and toe points: 0.096 near, 0.110 far).
+ANKLE_HEIGHT_M = 0.10
 BONE_SIGMA_M = 0.02
 FLOOR_SIGMA_M = 0.01  # no foot below the floor
 DOWN_SIGMA_M = 0.02  # and each on it, unless the rest says otherwise (a step, a jump)

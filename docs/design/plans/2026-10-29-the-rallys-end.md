@@ -229,6 +229,17 @@ The fix: a jump now costs its push-off and its rise. The push-off is 0.2 s on th
 - **These five rallies prompted the fix, so they do not test it.** The push-off is counted in full even when the player ran to the shot, though part of it is then the last step's.
 - **The far player's positions on Clip 7 are off too, and that is not fixed here.** At all seven of their hits the contact is beyond their reach and lean from where the app put their hips: 2.7 m apart at the median, against 1.5 m and 1.8 m on Clips 9 and 6. The camera sees the far half nearly edge on.
 
+**The far player was nearly where the app put them. The shuttle's depth at their hits is what is off.** Two things were checked against the frames of Clip 7.
+
+The first was the ankle. The fit took it to be 0.07 m above the floor, a bare foot's height. MediaPipe's own heel and toe points put it 0.10 m up on these clips (median 0.096 m on the near player, 0.110 m on the far one), which is where an ankle sits in a court shoe. From this low corner camera, 3 cm of height is 0.1 to 0.4 m of depth. So the fit now takes a shod ankle at 0.10 m, and the player tracker uses the same height in place of its own 0.08 m. The simulator's people now wear shoes with 0.03 m soles, so the fit and the synthetic world still agree.
+
+The second was the contact. At the far player's hits the hit times are right to the frame, and in the image the shuttle sits at their racket. The fitted contact lies on the same line of sight but 2 to 3 m nearer the camera. At 14.55 s on Clip 7 it is 10.0 m from the near baseline, while the player's feet are on the back lines at 12.9 m. The player's position is right and the shuttle's depth is wrong. A far flight's depth rests on how the shuttle sags and slows, which this camera sees nearly edge on.
+
+- **The players moved 0.1 to 0.4 m towards the camera.** The far player's median distance from hips to their own contact went from 2.14 m to 2.09 m (Clip 7: 2.73 m to 2.45 m). 15 of 27 far hits are still beyond reach and lean, against 5 of 29 near ones. The near player's median went from 1.26 m to 1.36 m.
+- **On your labels:** Clip 7 is still too close to call and now leans unforced (forced 0.46, was 0.56). The turn leans no turn (0.54, was 0.44, with the push at 0.23, was 0.28). No other call changed. The change rests on the heel and toe measurement, not on these five rallies.
+- **The benchmarks were not rerun.** Their people now stand 3 cm taller, and the fit expects it.
+- **Not fixed here: the far contacts.** The hitter's feet fix their depth far better than the flight does. Holding each contact within reach of its hitter would fix it, but that changes the flight fit, which every later step uses.
+
 ## Decisions
 
 - **The end comes from the flight.** The players' reactions and the sound could add to it later; the flight is what every camera tier sees.

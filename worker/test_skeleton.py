@@ -9,7 +9,7 @@ import geometry.skeleton as sk
 from evaluation.hits_benchmark import FOCAL_PX, SIZE, VIEWS
 from geometry.camera import Camera
 from simulation.camera_path import stable_handheld
-from simulation.people import SEGMENTS, model_pose, playing
+from simulation.people import SEGMENTS, SOLE_M, model_pose, playing
 from simulation.rally import random_rally
 
 IDX = list(sk.JOINTS)
@@ -206,7 +206,7 @@ class SimulatedPlayerTests(unittest.TestCase):
         for side in ("near", "far"):
             bodies = np.array([playing(rally, side, t) for t in times])
             for ankle in (15, 16):
-                down = bodies[:, ankle, 2] < SEGMENTS["ankle"] * 1.75 + 0.005
+                down = bodies[:, ankle, 2] < SEGMENTS["ankle"] * 1.75 + SOLE_M + 0.005
                 moving = np.linalg.norm(np.diff(bodies[:, ankle, :2], axis=0), axis=1) * 60
                 self.assertLess(np.percentile(moving[down[1:] & down[:-1]], 99), 0.1)
                 self.assertGreater(bodies[:, ankle, 2].max(), 0.15)  # it steps

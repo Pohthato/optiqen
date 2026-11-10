@@ -32,7 +32,7 @@ from simulation.people import model_pose, playing
 from simulation.rally import random_rally
 
 SECONDS = 5.0
-AIRBORNE_M = 0.12  # both ankles this high: off the floor
+AIRBORNE_M = 0.15  # both ankles this high: off the floor
 # A joint's stated sigma combines its x, y and z spreads. If the spreads are right, its error is
 # within 2 sigma at least as often as a chi-square with one degree of freedom is within 4 (all
 # the spread along one axis, as along a line of sight) and at most as often as one with three is

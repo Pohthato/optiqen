@@ -20,8 +20,8 @@ import numpy as np
 
 from geometry.camera import Camera
 from geometry.court_model import COURT_LENGTH_M, DOUBLES_MARGIN_M, NET_Y_M, SINGLES_WIDTH_M
+from geometry.skeleton import ANKLE_HEIGHT_M
 
-ANKLE_HEIGHT_M = 0.08  # an ankle joint's height above the floor when the foot is down
 MIN_JOINT_SCORE = 0.3
 CHASE_SIDE_M = 1.0  # room beside the doubles sideline a player may be in
 CHASE_BACK_M = 2.5  # and behind the baseline
