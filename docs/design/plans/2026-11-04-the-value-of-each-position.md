@@ -142,6 +142,7 @@ Your five rallies, run again from their saved camera track, shuttle and poses. T
 - **No shot moves either player far from even.** Every chance on your clips lies between 0.46 and 0.57, and only a smash takes its hitter above 0.53.
 - **Where the value leans to a turn, it is at or near the last shot.** The winner's chance goes above even whenever the loser plays anything but a smash, so the shot that ended the rally is often where it "turned". That says more about the value than about the rally.
 - **Your labels score these turns by 6f's rule,** with `score6f.py`, beside the 6f rules' answers.
+- **Your labels mark one turn,** Clip 7 at the near player's push at 15.28 s (see the 6f plan). The value left it too close to call and leant to the last shot at 16.10 s, which is the wrong way. Your notes mark no turn on the other four rallies.
 
 ## The gate
 

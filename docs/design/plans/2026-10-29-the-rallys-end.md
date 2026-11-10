@@ -202,6 +202,23 @@ Your five rallies, with the rules as pushed:
 
 - **Only winner and let in changed.** Your labels score forced or unforced and the turn, which are as before. Clip 8's clear came down near the baseline, the kind of clear professionals leave, so it is let in at about even odds if it was in. Clip 9's smash and Clip 6's cut are now winners if they were in.
 
+**Your labels** came on 2026-11-09, after all three sets of answers were pushed: your notes in `hittimes.txt`, written into `worker/Clips/reasons.txt`. Clip 8's let in and the unforced errors on Clips 10 and 6 are in your words. Three labels are read from your notes. Clip 9 is a winner ("sent it cross court away from the player"). Clip 7 was forced ("had to jump up to reach"), and it turned at the near player's push at 15.28 s ("things resettle and the near player pushes"); you confirmed this reading of Clip 7. Your notes mark no other turn. The scoring script was written before any label was read.
+
+Each cell is the app's chance of your answer against the other answer for that kind of end (winner or let in for a shot that was in, forced or unforced for an error). It is called at 0.95.
+
+| Clip | Your label | As first committed | After the pressure fix | After the winner fix (in the app) |
+| --- | --- | --- | --- | --- |
+| 9 | winner | 0.68, too close to call | 0.31, too close to call | 0.99, right |
+| 8 | let in | 1.00, right | 1.00, right | 0.49, too close to call |
+| 10 | unforced | 0.95, right | 1.00, right | 1.00, right |
+| 7 | forced | 0.00, wrong | 0.00, wrong | 0.00, wrong |
+| 6 | unforced (slightly forced) | 1.00, right | 1.00, right | 1.00, right |
+
+- **Forced or unforced:** called on all three errors in every version, right on two. Clip 7 is wrong at full confidence.
+- **Winner or let in** moved with the winner fix: it got Clip 9 right and left Clip 8 at even odds, leaning the wrong way.
+- **The turn:** your one turn, Clip 7 at 15.28 s, was called no turn in every version, which is wrong.
+- **Five rallies set no level of agreement.** Any later fix that these clips prompt is checked on new labelled rallies, not on these.
+
 ## Decisions
 
 - **The end comes from the flight.** The players' reactions and the sound could add to it later; the flight is what every camera tier sees.
