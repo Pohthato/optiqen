@@ -219,6 +219,16 @@ Each cell is the app's chance of your answer against the other answer for that k
 - **The turn:** your one turn, Clip 7 at 15.28 s, was called no turn in every version, which is wrong.
 - **Five rallies set no level of agreement.** Any later fix that these clips prompt is checked on new labelled rallies, not on these.
 
+**Clip 7 was a jump, and the time to spare left jumps out. Fixed after reading the labels.** The far player met the near player's push at 2.87 m, 0.27 m above their standing reach, with their feet 0.29 m off the floor; the frame at 16.10 s shows the jump. The time to spare counted only the way along the floor. From where the far player stood at the push, the contact was within their reach, so the push left them 0.59 s to spare and the error was unforced at 1.00.
+
+The fix: a jump now costs its push-off and its rise. The push-off is 0.2 s on the floor before take-off. Professionals' jump smashes take about 0.22 s, and a quick rebound under 0.2 s (Rambely and Wan Abas, ISBS 2008). The rise goes up to how high the lower foot was off the floor, at a take-off speed anywhere between one that just gets there and a professional's jump smash (its centre of mass rose 0.54 m in the same study). A foot less than 0.15 m off the floor, the shot names' line for a jump, is no jump.
+
+- **Clip 7's push now leaves 0.24 s to spare** (± 0.04 s). The error is too close to call at 0.56 forced. The turn is too close to call too: 0.44 no turn, 0.28 at the push.
+- **Three other hits got some chance of a jump** (22 % to 41 %), from feet whose height is uncertain, and so less time to spare with a wider spread. The only answer this moved is how Clip 9 would have been won had its smash been an error: forced 0.20 where it was 0.00. Its turn, which your notes do not mark, is still too close to call (0.38 no turn, was 0.59).
+- **Nothing else changed.** The pressure benchmark and the ShuttleSet runs (7b, 7c) see no feet, so they are as before. The value uses only the shots' names. Nothing measures what a jump costs yet.
+- **These five rallies prompted the fix, so they do not test it.** The push-off is counted in full even when the player ran to the shot, though part of it is then the last step's.
+- **The far player's positions on Clip 7 are off too, and that is not fixed here.** At all seven of their hits the contact is beyond their reach and lean from where the app put their hips: 2.7 m apart at the median, against 1.5 m and 1.8 m on Clips 9 and 6. The camera sees the far half nearly edge on.
+
 ## Decisions
 
 - **The end comes from the flight.** The players' reactions and the sound could add to it later; the flight is what every camera tier sees.
@@ -229,6 +239,7 @@ Each cell is the app's chance of your answer against the other answer for that k
 - **The rules in 6f are written down, not learnt.** Five rallies cannot teach them. A learned value of each position is Phase 7.
 - **Time to get to a shot is not enough to call it let in.** Professionals' winners mostly leave the receiver that time, and not the time to play the shot.
 - **Measurements that contradict each other say nothing.** A hit whose contact is out of the receiver's reach from where they stood when they met it has no pressure, rather than one from whichever of the two is wrong.
+- **A jump the player chose costs as much time as one they needed.** The rules cannot tell the two apart. A jump smash off a high lift still has time to spare.
 
 ## Proposed gate (for you to agree)
 

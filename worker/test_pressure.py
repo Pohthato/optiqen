@@ -5,7 +5,8 @@ from dataclasses import replace
 import numpy as np
 
 from evaluation.pressure_benchmark import FACTS, score
-from pressure import HIT_TIME_SIGMA_MS, LEAN_M, REACT_MS, TOP_M_S, contradicts, rally_pressure, work
+from geometry.shuttle_physics import GRAVITY
+from pressure import HIT_TIME_SIGMA_MS, JUMP_SMASH_M, LEAN_M, PUSH_OFF_MS, REACT_MS, TOP_M_S, contradicts, jump_ms, rally_pressure, work
 from shots import Estimate, Landing, ShotFacts
 
 REACH = Estimate(1.3, 0.02)
@@ -41,6 +42,23 @@ class WorkTests(unittest.TestCase):
             self.assertAlmostEqual(done.speed_m_s.sigma, sigma, delta=0.03)
             self.assertAlmostEqual(done.spare_ms.sigma, np.hypot(sigma / TOP_M_S * 1000.0, HIT_TIME_SIGMA_MS), delta=6.0)
 
+    def test_a_jump_takes_its_push_off_and_its_rise(self):
+        draws = jump_ms(Estimate(0.3, 0.0))
+        topped_out = (2.0 * 0.3 / GRAVITY) ** 0.5 * 1000.0  # a jump that just got there
+        hardest = (2.0 / GRAVITY) ** 0.5 * (JUMP_SMASH_M**0.5 - (JUMP_SMASH_M - 0.3) ** 0.5) * 1000.0  # a jump smash's, still rising
+        self.assertTrue(np.all((draws >= PUSH_OFF_MS + hardest - 1e-6) & (draws <= PUSH_OFF_MS + topped_out + 1e-6)))
+        self.assertAlmostEqual(draws.max(), PUSH_OFF_MS + topped_out, delta=5.0)
+        self.assertAlmostEqual(draws.min(), PUSH_OFF_MS + hardest, delta=5.0)
+        np.testing.assert_array_equal(jump_ms(Estimate(0.05, 0.01)), 0.0)  # on tiptoe
+        np.testing.assert_array_equal(jump_ms(None), 0.0)
+
+    def test_met_in_a_jump_leaves_less_to_spare(self):
+        stood = (np.array([0.0, 0.0]), CERTAIN)
+        floor = work(stood, (0.6, 0.8), CERTAIN, Estimate(1.3, 0.0), 800.0)
+        jumped = work(stood, (0.6, 0.8), CERTAIN, Estimate(1.3, 0.0), 800.0, off_floor=Estimate(0.3, 0.02))
+        self.assertAlmostEqual(floor.spare_ms.value - jumped.spare_ms.value, float(np.mean(jump_ms(Estimate(0.3, 0.02)))))
+        self.assertGreater(jumped.spare_ms.sigma, 2 * floor.spare_ms.sigma)  # how hard they jumped is not known
+
 
 class RallyPressureTests(unittest.TestCase):
     def setUp(self):
@@ -58,6 +76,11 @@ class RallyPressureTests(unittest.TestCase):
         self.assertAlmostEqual(second.go_m.value, 2.5 - 1.3)
         self.assertAlmostEqual(second.speed_m_s.value, 1.0)
         self.assertIsNone(last)  # nothing followed it
+
+    def test_the_reply_met_in_a_jump(self):
+        shots = [shot(0.0, "near"), shot(1000.0, "far", (3.0, 11.0, 2.9))]
+        floor, jumped = (rally_pressure(shots, [self.stood] * 2, self.reaches, off_floor)[0] for off_floor in (None, [None, Estimate(0.3, 0.02)]))
+        self.assertAlmostEqual(floor.spare_ms.value - jumped.spare_ms.value, float(np.mean(jump_ms(Estimate(0.3, 0.02)))))
 
     def test_a_shot_that_came_down_is_measured_to_where_it_landed(self):
         landing = Landing((3.0, 6.0), ((0.01, 0.0), (0.0, 0.01)), 1500.0, "in", 0.99, 0.99)
