@@ -240,6 +240,30 @@ The second was the contact. At the far player's hits the hit times are right to 
 - **The benchmarks were not rerun.** Their people now stand 3 cm taller, and the fit expects it.
 - **Not fixed here: the far contacts.** The hitter's feet fix their depth far better than the flight does. Holding each contact within reach of its hitter would fix it, but that changes the flight fit, which every later step uses.
 
+**Each contact is now held within reach of its hitter, and a far flight's depth comes from the hitter's feet.** The rally fit is told where each hitter stood at the hit: the body fit's hips over the floor, with their spread. It is also told how far their racket reaches at a stretch: arm and racket, and 0.5 m of lean. A contact beyond that reach costs what a gap at a hand-over costs, and one within it costs nothing. A hitter the contact's line of sight never passes within reach of is someone else, such as the other player. A hitter the flight cannot reach without missing its own sightings is let go, as a wrong hand-over is. Sightings in the first 70 ms after a hit count for less. On the clips' near flights they miss 2.4 times as much as later ones, because the racket and the body surround the shuttle there.
+
+That alone moved few far contacts, and the flight model is why. Of the 19 far flights whose own fit started beyond reach, 7 could start at the hitter at no cost to their sightings after the first 100 ms. The other 12 missed those sightings by 0.3 to 1.7 px more, unless the flight's own time ran a few per cent faster than the clip's. Over all 22 far flights, the clock that let each start at its hitter was 1.06 in the middle, and 7 % from the clip's (root mean square). A shuttle coming at a low camera barely moves in the image, so its depth rests on how fast it seems to fall. The cause is not known. It is not drag (terminal velocities of 5 to 10 m/s were tried), not a rolling shutter (Clip 7's far shuttle crossed only 15 rows of the image in a whole flight), and not repeated frames (Clip 7's frames are evenly timed at 30 fps).
+
+So a flight now gets its own clock when its contact stays more than two standard deviations beyond its hitter's reach with the reach pulling it in, or when its hitter cannot be met any other way. The flight that handed the shuttle over at that contact gets one too. Each clock is free to 7 % either way. Freeing every flight's clock was tried first. On the benchmark it doubled the contact and landing errors and made a wrong call, because where the model is right a free clock only adds slack.
+
+- **On the five clips, every far contact is now within 0.44 m of its hitter's reach.** Before, 15 of 27 were beyond it, 7 of them by 0.9 to 3.6 m. The far player's hips are themselves known to about 0.25 m. Clip 7's far hit at 14.55 s is now 2.1 m from the hitter's hips, where it was 3.3 m. Its depth was stated to 0.19 m and is now stated to 0.83 m. Its speed went from 18 ± 1 to 24 ± 5 m/s.
+- **One far shot went.** On Clip 10 at 21.02 s the contact was 3 m behind the far baseline. It is no longer a shot. The rally's end is the same.
+- **On your labels, nothing changed.** The calls made on forced or unforced still agree on Clips 10 and 6. Clip 7 is still too close to call, at 0.43 forced (was 0.46). Clip 6's last shot now leans into the net (0.90, was 0.29), which fits your unforced error better, but it is still too close to call.
+- **The shots benchmark sees no loss.** It is the stressed world on held-out seeds 13000 to 13059, with each hitter's hips placed as the body fit places them (0.02 m off per metre from the camera). Its flights follow the flight model exactly, so it cannot show the far depth getting better, only that nothing else got worse. The launch speed is the exception. Its median error went from 0.67 to 0.76 m/s, because the first sightings, which carry it, now count for less.
+
+| Held-out, stressed (seeds 13000–13059) | Before | Reach only | Every clock free | Clock on evidence (in the app) |
+| --- | --- | --- | --- | --- |
+| Contact point, median / p90 | 0.21 / 0.81 m | 0.20 / 0.80 m | 0.46 / 1.26 m | 0.20 / 0.80 m |
+| Contact, far hitter, median | not measured | 0.22 m | 0.49 m | 0.22 m |
+| Contact inside its 95 % region, near / far | not measured | 91 / 97 % | 95 / 97 % | 91 / 97 % |
+| Launch speed, median | 0.67 m/s | 0.76 m/s | 1.25 m/s | 0.76 m/s |
+| Landing error, median / p90 | 16 / 37 cm | 15 / 36 cm | 40 / 91 cm | 15 / 34 cm |
+| Calls made, right | 14 of 14 | 13 of 13 | 4 of 5 | 12 of 12 |
+| Too close to call | 26 of 40 | 26 of 39 | 33 of 38 | 26 of 38 |
+
+- **The near contacts' stated uncertainty is too tight.** Their 95 % region holds the truth 91 % of the time. This is the first time it was measured.
+- **The 7 % comes from the same five clips.** Near flights may need a clock too, but nothing shows it, since their hitters' reach is already met. The cause of the far flights' clock is still to be found. A cause found at the camera or the detections would replace the clock.
+
 ## Decisions
 
 - **The end comes from the flight.** The players' reactions and the sound could add to it later; the flight is what every camera tier sees.
@@ -250,6 +274,7 @@ The second was the contact. At the far player's hits the hit times are right to 
 - **The rules in 6f are written down, not learnt.** Five rallies cannot teach them. A learned value of each position is Phase 7.
 - **Time to get to a shot is not enough to call it let in.** Professionals' winners mostly leave the receiver that time, and not the time to play the shot.
 - **Measurements that contradict each other say nothing.** A hit whose contact is out of the receiver's reach from where they stood when they met it has no pressure, rather than one from whichever of the two is wrong.
+- **The flight model gives way only where it is shown wrong.** A far flight's own clock is freed only when its contact cannot be brought within its hitter's reach. Freed everywhere, it loosened what the model already got right.
 - **A jump the player chose costs as much time as one they needed.** The rules cannot tell the two apart. A jump smash off a high lift still has time to spare.
 
 ## Proposed gate (for you to agree)

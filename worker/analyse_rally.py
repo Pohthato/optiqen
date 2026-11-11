@@ -44,11 +44,12 @@ from body import BodyFacts, arm_reach, rally_body_facts, standing_at, standing_r
 from find_hits import hear, hits_document, load_detections, rounded
 from geometry.camera import Camera
 from geometry.court_model import COURT_LENGTH_M, DOUBLES_MARGIN_M, NET_Y_M, SINGLES_WIDTH_M, court_lines, net_tape_lines
+from geometry.rally_fit import Reach
 from geometry.skeleton import BONES, Body
 from hits import find_hits
 from lift_players import fit_players
 from players import HALVES
-from pressure import Pressure, rally_pressure
+from pressure import LEAN_M, Pressure, rally_pressure
 from rally_reasoning import Reasons, rally_reasons
 from shot_names import Launch, Model, ShotName, name_shot, racket_arms
 from shots import CALL_CONFIDENCE, RallyEnd, ShotFacts, rally_end, rally_shots
@@ -398,8 +399,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"no sound used: {sound_error}", file=sys.stderr)
     tracked = any(camera is not None for camera in cameras)
     analysis = find_hits(track, times_ms, cameras, onsets) if tracked else None
+    bodies, players_error = find_players(args.video, track_path, poses_path, args.poses is None, args.pose_model, cameras, times_ms) if tracked else (None, "no camera")
+    if players_error:
+        print(f"no players: {players_error}", file=sys.stderr)
+    reaches = {half: arm_reach(bodies[half]) for half in HALVES if any(body is not None for body in bodies[half])} if bodies is not None else {}
+
+    def reach_of(half: str, time_ms: float) -> Reach | None:
+        """Where a half's player stood at a moment, and how far from there their racket reaches at a stretch."""
+        where = standing_at(bodies[half], times_ms, time_ms) if half in reaches else None
+        return None if where is None else Reach(time_ms, where[0], where[1], reaches[half].value + LEAN_M, reaches[half].sigma)
+
     drag = (args.terminal_velocity, args.terminal_sigma if args.terminal_sigma is not None else 0.05) if args.terminal_velocity is not None else None
-    shots = rally_shots(analysis, track, times_ms, cameras, court=args.court, terminal_velocity=drag) if analysis is not None else []
+    shots = rally_shots(analysis, track, times_ms, cameras, court=args.court, terminal_velocity=drag, reach_of=reach_of if reaches else None) if analysis is not None else []
     end = rally_end(shots)
     after_end = 0
     if end is not None:
@@ -407,12 +418,8 @@ def main(argv: list[str] | None = None) -> int:
         last = min(range(len(analysis.hits)), key=lambda i: abs(analysis.hits[i].time_ms - shots[-1].hit_ms))
         after_end = len(analysis.hits) - last - 1
         analysis = replace(analysis, hits=analysis.hits[: last + 1])
-    bodies, players_error = find_players(args.video, track_path, poses_path, args.poses is None, args.pose_model, cameras, times_ms) if tracked else (None, "no camera")
-    if players_error:
-        print(f"no players: {players_error}", file=sys.stderr)
     facts = rally_body_facts(shots, bodies, times_ms) if bodies is not None else [None] * len(shots)
     stood = [{half: standing_at(bodies[half], times_ms, shot.hit_ms) for half in HALVES} if bodies is not None else None for shot in shots]
-    reaches = {half: arm_reach(bodies[half]) for half in HALVES if any(body is not None for body in bodies[half])} if bodies is not None else {}
     pressures = rally_pressure(shots, stood, reaches, [None if fact is None else fact.off_floor_m for fact in facts])
     model, rng = Model.load(), np.random.default_rng(0)
     arms = racket_arms(facts)

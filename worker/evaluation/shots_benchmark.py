@@ -5,8 +5,14 @@ The hits benchmark's scenarios (every view at 30 and 60 fps, with sound and with
 dropout, false detections, neighbouring courts), with each rally's last shot aimed within 40 cm
 of a boundary line, in or out. Per scenario the hits are found (hits.find_hits), the flights
 refitted together and each shot's facts taken (shots.rally_shots). Shots matched to a true hit
-(within ±33 ms) are compared on contact point, launch speed, apex and net clearance; the rally's
-last shot on its landing and call, and on whether the stated uncertainty covers the truth.
+(within ±33 ms) are compared on contact point (by the hitter's half, and whether its stated
+uncertainty covers it), launch speed, apex and net clearance; the rally's last shot on its
+landing and call, and on whether the stated uncertainty covers the truth.
+
+With --players each contact is held within reach of its hitter (shots.rally_shots's reach_of):
+where the simulated player stood, off by what the body fit says of the real clips' players (a
+spread of STOOD_PER_M for each metre from the camera: 0.1 m near, 0.25 m far), and the
+simulated body's reach at a stretch.
 
     python -m evaluation.shots_benchmark --scenarios 60 --workers 12 --out shots.json
 """
@@ -25,11 +31,15 @@ from scipy.stats import chi2
 
 from evaluation.hits_benchmark import TOLERANCE_MS, simulate, standard_scenarios
 from geometry.court_model import NET_Y_M
+from geometry.rally_fit import Reach
 from geometry.shuttle_physics import simulate as fly
 from hits import find_hits
+from pressure import LEAN_M
 from shots import landing_area, net_height_m, rally_shots
+from simulation.people import RACKET_M, SEGMENTS, playing
 
 COVERAGE = 0.95
+STOOD_PER_M = 0.02
 
 
 def _truth(rally) -> list[dict[str, Any]]:
@@ -53,7 +63,25 @@ def _truth(rally) -> list[dict[str, Any]]:
     return out
 
 
-def score_scenario(scenario, session_error: float | None = None, court: str = "singles") -> dict[str, Any]:
+def _reach_of(sim, seed: int):
+    """Each half's simulated player's reach at a moment, as the body fit would give it."""
+    rng = np.random.default_rng(seed)
+    times = np.asarray(sim.times_ms, dtype=float)
+    radius = (SEGMENTS["shoulder_half"] + SEGMENTS["upper_arm"] + SEGMENTS["forearm"]) * 1.75 + RACKET_M + LEAN_M
+
+    def reach_of(half: str, time_ms: float) -> Reach | None:
+        camera = sim.cameras[int(np.argmin(np.abs(times - time_ms)))]
+        if camera is None:
+            return None
+        body = playing(sim.clip.rally, half, time_ms / 1000.0)
+        stood = (body[11, :2] + body[12, :2]) / 2
+        sigma = STOOD_PER_M * float(np.linalg.norm(stood - np.asarray(camera.centre)[:2]))
+        return Reach(time_ms, stood + rng.normal(0.0, sigma, 2), np.eye(2) * sigma**2, radius, 0.02)
+
+    return reach_of
+
+
+def score_scenario(scenario, session_error: float | None = None, court: str = "singles", players: bool = False) -> dict[str, Any]:
     """One scenario scored. With `session_error`, the shuttle's drag is given as a session of many
     rallies would measure it (emulated: the true terminal velocity off by that relative error,
     drawn per scenario, with that standard deviation). Without it each rally measures its own.
@@ -65,7 +93,8 @@ def score_scenario(scenario, session_error: float | None = None, court: str = "s
     if session_error is not None:
         true_drag = sim.clip.rally.terminal_velocity
         drag = (true_drag * (1 + np.random.default_rng(scenario.seed + 31).normal(0.0, session_error)), true_drag * session_error)
-    shots = rally_shots(analysis, sim.track, sim.times_ms, sim.cameras, court=court, terminal_velocity=drag)
+    reach_of = _reach_of(sim, scenario.seed + 43) if players else None
+    shots = rally_shots(analysis, sim.track, sim.times_ms, sim.cameras, court=court, terminal_velocity=drag, reach_of=reach_of)
     truth = _truth(sim.clip.rally)
     pairs = sorted((abs(s.hit_ms - t["timeMs"]), a, b) for a, s in enumerate(shots) for b, t in enumerate(truth) if abs(s.hit_ms - t["timeMs"]) <= TOLERANCE_MS)
     matched, used_s, used_t = [], set(), set()
@@ -75,9 +104,11 @@ def score_scenario(scenario, session_error: float | None = None, court: str = "s
             matched.append((shots[a], truth[b], b))
     rows = []
     for shot, true, _ in matched:
+        miss = (np.asarray(shot.contact) - true["contact"]) / np.maximum(np.asarray(shot.contact_sigma), 1e-9)
         rows.append({
-            "kind": true["kind"],
+            "kind": true["kind"], "half": true["hitter"],
             "contactErrorM": float(np.linalg.norm(np.asarray(shot.contact) - true["contact"])),
+            "contactCovered": bool(float(miss @ miss) <= chi2.ppf(COVERAGE, 3)),
             "hitterRight": shot.hitter == true["hitter"],
             "speedErrorMS": abs(shot.speed_m_s.value - true["speed"]),
             "apexErrorM": abs(shot.apex_m.value - true["apex"]),
@@ -126,6 +157,10 @@ def summarise(results: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "shotsMatched": f"{len(rows)} of {sum(r['truthShots'] for r in results)}",
         "contactErrorM": stats([r["contactErrorM"] for r in rows]),
+        "contactErrorNearM": stats([r["contactErrorM"] for r in rows if r["half"] == "near"]),
+        "contactErrorFarM": stats([r["contactErrorM"] for r in rows if r["half"] == "far"]),
+        "contactCoverageNear": round(float(np.mean([r["contactCovered"] for r in rows if r["half"] == "near"])), 3) if rows else None,
+        "contactCoverageFar": round(float(np.mean([r["contactCovered"] for r in rows if r["half"] == "far"])), 3) if rows else None,
         "hitterRight": round(float(np.mean([r["hitterRight"] for r in rows])), 3) if rows else None,
         "speedErrorMS": stats([r["speedErrorMS"] for r in rows]),
         "apexErrorM": stats([r["apexErrorM"] for r in rows]),
@@ -143,12 +178,12 @@ def summarise(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def run(scenarios, workers: int = 1, session_error: float | None = None, court: str = "singles") -> dict[str, Any]:
+def run(scenarios, workers: int = 1, session_error: float | None = None, court: str = "singles", players: bool = False) -> dict[str, Any]:
     if workers > 1:
         with ProcessPoolExecutor(workers) as pool:
-            results = list(pool.map(score_scenario, scenarios, [session_error] * len(scenarios), [court] * len(scenarios)))
+            results = list(pool.map(score_scenario, scenarios, [session_error] * len(scenarios), [court] * len(scenarios), [players] * len(scenarios)))
     else:
-        results = [score_scenario(s, session_error, court) for s in scenarios]
+        results = [score_scenario(s, session_error, court, players) for s in scenarios]
     by = {"all": summarise(results)}
     for view in sorted({r["view"] for r in results}):
         by[f"view={view}"] = summarise([r for r in results if r["view"] == view])
@@ -165,10 +200,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stress", action="store_true", help="a world that differs from the method's models (see hits_benchmark.simulate)")
     parser.add_argument("--session-drag", type=float, metavar="ERROR", help="emulate a drag measured over a session: the truth to this relative error (0.01)")
     parser.add_argument("--court", choices=("singles", "doubles"), default="singles", help="the boundaries calls are made and judged against")
+    parser.add_argument("--players", action="store_true", help="hold each contact within reach of its hitter, as the body fit would place them")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
     scenarios = [replace(s, final_near_line=True, stress=args.stress) for s in standard_scenarios(args.scenarios, args.first_seed)]
-    report = run(scenarios, workers=args.workers, session_error=args.session_drag, court=args.court)
+    report = run(scenarios, workers=args.workers, session_error=args.session_drag, court=args.court, players=args.players)
     text = json.dumps(report, indent=2, allow_nan=False)
     if args.out:
         args.out.write_text(text, encoding="utf-8")

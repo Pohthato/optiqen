@@ -36,17 +36,21 @@ WARM_OK_SIGMAS = 2.5  # a warm start whose median miss is within this many jitte
 
 
 def simulate_batch(
-    p0: np.ndarray, v0: np.ndarray, times_s: np.ndarray, terminal_velocity: float = FEATHER_TERMINAL_VELOCITY, step_s: float = STEP_S
+    p0: np.ndarray, v0: np.ndarray, times_s: np.ndarray, terminal_velocity: float = FEATHER_TERMINAL_VELOCITY, step_s: float = STEP_S,
+    gravity: float | np.ndarray = GRAVITY,
 ) -> np.ndarray:
     """Positions (B, T, 3) of B launches at sorted, non-negative times (T,): RK4 in fixed steps,
-    each launch stepped together, landing exactly on the requested times."""
+    each launch stepped together, landing exactly on the requested times. `gravity` may differ
+    per launch (FlightFit.clock)."""
     p = np.array(p0, dtype=np.float64).reshape(-1, 3)
     v = np.array(v0, dtype=np.float64).reshape(-1, 3)
     k = GRAVITY / terminal_velocity**2
-    g = np.array([0.0, 0.0, -GRAVITY])
+    pull = np.broadcast_to(np.asarray(gravity, dtype=np.float64), (len(p),))
 
     def acceleration(vel: np.ndarray) -> np.ndarray:
-        return g - k * np.sqrt(np.einsum("ij,ij->i", vel, vel))[:, None] * vel
+        a = -k * np.sqrt(np.einsum("ij,ij->i", vel, vel))[:, None] * vel
+        a[:, 2] -= pull
+        return a
 
     out = np.empty((len(p), len(times_s), 3))
     t = 0.0
@@ -68,7 +72,8 @@ def simulate_batch(
 
 
 def simulate_grid(
-    p0: np.ndarray, v0: np.ndarray, times_s: np.ndarray, terminal_velocity: float = FEATHER_TERMINAL_VELOCITY, step_s: float = FIT_STEP_S
+    p0: np.ndarray, v0: np.ndarray, times_s: np.ndarray, terminal_velocity: float = FEATHER_TERMINAL_VELOCITY, step_s: float = FIT_STEP_S,
+    gravity: float | np.ndarray = GRAVITY,
 ) -> np.ndarray:
     """Like simulate_batch, but faster: RK4 on a uniform grid, positions at the requested times
     by cubic Hermite interpolation from the grid's positions and velocities. At 20 ms steps it is
@@ -87,7 +92,7 @@ def simulate_grid(
 
     def acceleration(vel: np.ndarray) -> np.ndarray:
         a = vel * (-k * np.sqrt(vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2]))
-        a[2] -= GRAVITY
+        a[2] -= gravity
         return a
 
     for step in range(steps):
@@ -135,16 +140,29 @@ class FlightFit:
     p0: np.ndarray  # position at start_ms, court metres
     v0: np.ndarray  # velocity at start_ms, m/s
     terminal_velocity: float
-    covariance: np.ndarray  # of (p0, v0), 6 x 6
+    covariance: np.ndarray  # of (p0, v0), 6 x 6, or of (p0, v0, clock), 7 x 7, when the clock was fitted
     rms_px: float  # of the inliers
     inliers: int
     detections: int
+    # How fast the flight's own time runs against the clip's (geometry.rally_fit.CLOCK_SIGMA). A
+    # flight whose time runs s times as fast is, in the clip's time, one under s^2 g with the same
+    # drag, so it is flown that way: its velocities are the clip's.
+    clock: float = 1.0
+
+    @property
+    def gravity(self) -> float:
+        return GRAVITY * self.clock**2
+
+    def parameters(self) -> np.ndarray:
+        """What `covariance` is of: (p0, v0), and the clock when it was fitted."""
+        x = np.concatenate([self.p0, self.v0])
+        return np.append(x, self.clock) if len(self.covariance) == 7 else x
 
     def positions_at(self, times_ms: Sequence[float]) -> np.ndarray:
         times = (np.asarray(times_ms, dtype=float) - self.start_ms) / 1000.0
         order = np.argsort(times)
         out = np.empty((len(times), 3))
-        out[order] = simulate_batch(self.p0, self.v0, np.maximum(times[order], 0.0), self.terminal_velocity)[0]
+        out[order] = simulate_batch(self.p0, self.v0, np.maximum(times[order], 0.0), self.terminal_velocity, gravity=self.gravity)[0]
         return out
 
     def position_at(self, time_ms: float) -> np.ndarray:
@@ -152,12 +170,13 @@ class FlightFit:
 
     def position_covariance(self, time_ms: float) -> np.ndarray:
         """3 x 3 covariance of the position at time_ms, propagated from the fit."""
-        params = np.concatenate([self.p0, self.v0])
+        params = self.parameters()
         steps = 1e-5 * (1.0 + np.abs(params))
-        batch = np.repeat(params[None], 7, axis=0)
+        batch = np.repeat(params[None], len(params) + 1, axis=0)
         batch[1:] += np.diag(steps)
+        clocks = batch[:, 6] if len(params) == 7 else self.clock
         t = np.array([max(0.0, (time_ms - self.start_ms) / 1000.0)])
-        positions = simulate_batch(batch[:, :3], batch[:, 3:], t, self.terminal_velocity)[:, 0]
+        positions = simulate_batch(batch[:, :3], batch[:, 3:6], t, self.terminal_velocity, gravity=GRAVITY * clocks**2)[:, 0]
         jacobian = ((positions[1:] - positions[0]) / steps[:, None]).T
         return jacobian @ self.covariance @ jacobian.T
 

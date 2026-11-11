@@ -5,7 +5,7 @@ import numpy as np
 
 from evaluation.hits_benchmark import FOCAL_PX, SIZE, VIEWS
 from geometry.camera import Camera
-from geometry.flight_fit import fit_flight, simulate_batch, simulate_grid
+from geometry.flight_fit import FlightFit, fit_flight, simulate_batch, simulate_grid
 from geometry.shuttle_physics import simulate
 from simulation.camera_path import stable_handheld
 from simulation.rally import random_rally
@@ -69,6 +69,21 @@ class SimulateBatchTests(unittest.TestCase):
         batch = simulate_batch(p0, v0, times)
         for k in range(5):
             np.testing.assert_allclose(batch[k], simulate(p0[k], v0[k], times), atol=1e-6)
+
+
+class ClockTests(unittest.TestCase):
+    def test_a_flight_whose_time_runs_faster_is_flown_under_stronger_gravity(self):
+        p0, v0, clock = np.array([1.0, 11.0, 1.4]), np.array([1.0, -20.0, 4.0]), 1.08
+        fit = FlightFit(0.0, p0, v0, 6.7, np.eye(6) * 1e-4, 1.0, 20, 20, clock)
+        times_ms = np.linspace(0.0, 800.0, 9)
+        np.testing.assert_allclose(fit.positions_at(times_ms), simulate(p0, v0 / clock, clock * times_ms / 1000.0, 6.7), atol=1e-3)
+
+    def test_an_unsure_clock_widens_where_the_flight_is_later(self):
+        p0, v0 = np.array([1.0, 11.0, 1.4]), np.array([1.0, -20.0, 4.0])
+        known = FlightFit(0.0, p0, v0, 6.7, np.eye(6) * 1e-4, 1.0, 20, 20)
+        unsure = FlightFit(0.0, p0, v0, 6.7, np.diag([1e-4] * 6 + [0.05**2]), 1.0, 20, 20)
+        np.testing.assert_allclose(unsure.position_covariance(0.0), known.position_covariance(0.0), atol=1e-9)
+        self.assertGreater(np.trace(unsure.position_covariance(700.0)), 10 * np.trace(known.position_covariance(700.0)))
 
 
 class FitFlightTests(unittest.TestCase):

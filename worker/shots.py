@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, replace
+from typing import Callable
 
 import cv2
 import numpy as np
@@ -34,7 +35,7 @@ from geometry.court_model import (
     SINGLES_WIDTH_M,
 )
 from geometry.flight_fit import INLIER_SIGMAS, FlightFit, _Views, fit_flight
-from geometry.rally_fit import Seen, at_terminal_velocity, fit_rally
+from geometry.rally_fit import Reach, Seen, at_terminal_velocity, fit_rally
 from geometry.rally_fit import terminal_velocity as measure_terminal_velocity
 from geometry.shuttle_physics import GRAVITY
 from hits import _plausible_contact, _spread
@@ -62,7 +63,7 @@ LYING_MS = 800.0  # a shuttle that came down lies at least this long before anyo
 HITS_AFTER_THE_END = 2  # the most a rally's end leaves behind (the shuttle falling, picked up, sent back)
 STATE_STEP_S = 0.001
 BACKWARD_LIMIT_S = 0.02  # drag run backwards blows up; never trace a flight back further than this
-DIFFERENCE_STEP = 1e-3  # central-difference step on the flight's position (m) and velocity (m/s)
+DIFFERENCE_STEP = 1e-3  # central-difference step on the flight's position (m), velocity (m/s) and clock
 ONE_FLIGHT_RMS = 2.0  # pieces are one flight when fitting them together misses by at most this much more
 ONE_FLIGHT_SHARE = 0.8  # and still explains this share of every piece's detections
 EXPLAINED_RMS = 3.0  # a flight missing its detections by more than this many noise units is not one flight: its landing is not called
@@ -246,15 +247,15 @@ def _judged(facts: ShotFacts, court: str) -> ShotFacts:
     return replace(facts, landing=replace(landing, call=_verdict(p_in), p_in=p_in, p_over_net=over))
 
 
-def _integrate(p: np.ndarray, v: np.ndarray, duration_s: float, step_s: float, terminal_velocity: float):
+def _integrate(p: np.ndarray, v: np.ndarray, duration_s: float, step_s: float, terminal_velocity: float, gravity: float | np.ndarray = GRAVITY):
     """RK4 under gravity and drag for B flights at once, forwards or (duration < 0, only briefly:
     drag run backwards blows up) backwards. Returns positions and velocities (n + 1, B, 3) at
-    every step, the last at exactly duration."""
+    every step, the last at exactly duration. `gravity` may differ per flight (FlightFit.clock)."""
     k = GRAVITY / terminal_velocity**2
 
     def acceleration(vel: np.ndarray) -> np.ndarray:
         a = -k * np.linalg.norm(vel, axis=1)[:, None] * vel
-        a[:, 2] -= GRAVITY
+        a[:, 2] -= gravity
         return a
 
     count = max(1, int(np.ceil(abs(duration_s) / step_s - 1e-9)))
@@ -274,15 +275,17 @@ def _integrate(p: np.ndarray, v: np.ndarray, duration_s: float, step_s: float, t
 
 
 def _facts(params: np.ndarray, fit: FlightFit, hit_ms: float, ends_ms: float | None) -> list[dict]:
-    """For each row of (p0, v0) at fit.start_ms: the shot's facts as numbers, the first row also
-    its path. A flight that comes down to the floor before it is played again has landed."""
-    p, v = params[:, :3], params[:, 3:]
+    """For each row of fit.parameters() (p0, v0 at fit.start_ms, and the clock if fitted): the
+    shot's facts as numbers, the first row also its path. A flight that comes down to the floor
+    before it is played again has landed."""
+    p, v = params[:, :3], params[:, 3:6]
+    gravity = GRAVITY * (params[:, 6] if params.shape[1] == 7 else np.full(len(params), fit.clock)) ** 2
     to_hit = max((hit_ms - fit.start_ms) / 1000.0, -BACKWARD_LIMIT_S)
     if abs(to_hit) > 1e-9:
-        ps, vs = _integrate(p, v, to_hit, STATE_STEP_S, fit.terminal_velocity)
+        ps, vs = _integrate(p, v, to_hit, STATE_STEP_S, fit.terminal_velocity, gravity)
         p, v = ps[-1], vs[-1]
     duration = MAX_FLIGHT_S if ends_ms is None else max((ends_ms - hit_ms) / 1000.0, PATH_STEP_S)
-    path, _ = _integrate(p, v, duration, PATH_STEP_S, fit.terminal_velocity)  # (n, B, 3)
+    path, _ = _integrate(p, v, duration, PATH_STEP_S, fit.terminal_velocity, gravity)  # (n, B, 3)
     step = duration / (len(path) - 1)
     rows = []
     for b in range(len(params)):
@@ -328,8 +331,8 @@ def flight_facts(
     """A shot's facts from its fitted flight. `ends_ms` is when it was played again; None means
     it ended the rally, so it is followed to the floor and called. The hit is meant to be at or
     after the fit's start (a fit started at its first sighting is refitted from the hit first)."""
-    x0 = np.concatenate([fit.p0, fit.v0])
-    steps = np.eye(6) * DIFFERENCE_STEP
+    x0 = fit.parameters()
+    steps = np.eye(len(x0)) * DIFFERENCE_STEP
     rows = _facts(np.vstack([x0, x0 + steps, x0 - steps]), fit, hit_ms, ends_ms)
     nominal = rows[0]
 
@@ -343,7 +346,7 @@ def flight_facts(
 
     centre = vector(nominal)
     columns = []
-    for plus, minus in zip(rows[1:7], rows[7:]):
+    for plus, minus in zip(rows[1 : len(x0) + 1], rows[len(x0) + 1 :]):
         a, b = vector(plus), vector(minus)
         # Central where both sides have the fact, one-sided where only one does (a perturbed run
         # that just misses the net or the floor), zero where neither.
@@ -402,7 +405,7 @@ def _one_flight(pieces, times: np.ndarray, track, cameras) -> tuple[FlightFit, l
         guesses = []
         for piece in members:
             back = (first.fit.start_ms - piece.fit.start_ms) / 1000.0
-            ps, vs = _integrate(piece.fit.p0[None], piece.fit.v0[None], back, STATE_STEP_S, piece.fit.terminal_velocity)
+            ps, vs = _integrate(piece.fit.p0[None], piece.fit.v0[None], back, STATE_STEP_S, piece.fit.terminal_velocity, piece.fit.gravity)
             guess = np.concatenate([ps[-1, 0], vs[-1, 0]])
             if np.isfinite(guess).all():
                 guesses.append(guess)
@@ -429,7 +432,7 @@ def _one_flight(pieces, times: np.ndarray, track, cameras) -> tuple[FlightFit, l
 
 def rally_shots(
     analysis, track, times_ms, cameras, court: str = "singles", jitter_px: float | None = None,
-    terminal_velocity: tuple[float, float] | None = None,
+    terminal_velocity: tuple[float, float] | None = None, reach_of: Callable[[str, float], Reach | None] | None = None,
 ) -> list[ShotFacts]:
     """Every shot of a rally (hits.find_hits's analysis of these detections): each hit with its
     flight (every piece seen until the next hit), the flights refitted together so neighbours
@@ -438,7 +441,9 @@ def rally_shots(
     shot that came down (_last_of_rally), so what follows it is left out: the shuttle on the
     floor, picked up or sent back.
     `terminal_velocity` is the shuttle's, with its standard deviation, when known (from a whole
-    session's rallies, say); otherwise it is measured from this rally's own flights."""
+    session's rallies, say); otherwise it is measured from this rally's own flights. `reach_of`
+    gives a half's player's reach at a moment (where they stood), when the players are known:
+    each contact is then held within reach of its hitter, the player on its side of the net."""
     times = np.asarray(times_ms, dtype=float)
     jitter = jitter_px if jitter_px is not None else max(float(analysis.noise_px), 2.0)
     hits = sorted(analysis.hits, key=lambda h: h.time_ms)
@@ -477,9 +482,16 @@ def rally_shots(
         (drag, drag_sigma), drag_flights = terminal_velocity, None
     else:
         drag, drag_sigma, drag_flights = measure_terminal_velocity(seen, jitter)
-    middle = fit_rally(at_terminal_velocity(seen, drag, jitter), links, jitter, terminal=drag)
+    alone = at_terminal_velocity(seen, drag, jitter)
+    middle = fit_rally(alone, links, jitter, terminal=drag)
+    if reach_of is not None:
+        reaches = []
+        for (n, _, _, _), fit in zip(shot_flights, middle.flights):
+            contact = fit.position_at(max(hits[n].time_ms, fit.start_ms))
+            reaches.append(reach_of("near" if contact[1] < NET_Y_M else "far", hits[n].time_ms))
+        middle = fit_rally(alone, middle.links, jitter, terminal=drag, reaches=reaches)
     shifted_seen = [Seen(s.times_ms, s.pixels, s.cameras, f) for s, f in zip(seen, middle.flights)]
-    other = fit_rally(at_terminal_velocity(shifted_seen, drag + drag_sigma, jitter), middle.links, jitter, terminal=drag + drag_sigma)
+    other = fit_rally(at_terminal_velocity(shifted_seen, drag + drag_sigma, jitter), middle.links, jitter, terminal=drag + drag_sigma, reaches=middle.reaches)
     meeting_of = {j + 1: middle.meetings[j] for j, _ in middle.links if j in middle.meetings}  # shot j + 1 starts at that meeting
 
     def facts_of(j: int, fit: FlightFit, shifted: FlightFit, hit_ms: float, timing_sigma: float, hitter: str, serve: bool, ends_ms: float | None) -> ShotFacts:
@@ -722,7 +734,7 @@ def _with_timing(facts: ShotFacts, fit: FlightFit, timing_sigma: float, court: s
         velocity = np.full(3, speed)
     # The whole launch moves together: the contact along the flight, the velocity by gravity and drag.
     v = np.asarray(facts.velocity)
-    move = np.concatenate([v, -GRAVITY / fit.terminal_velocity**2 * np.linalg.norm(v) * v - [0.0, 0.0, GRAVITY]]) * seconds
+    move = np.concatenate([v, -GRAVITY / fit.terminal_velocity**2 * np.linalg.norm(v) * v - [0.0, 0.0, fit.gravity]]) * seconds
     return _judged(replace(
         facts,
         launch_covariance=_rows(np.asarray(facts.launch_covariance) + np.outer(move, move)),

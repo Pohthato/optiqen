@@ -13,7 +13,9 @@ from geometry.shuttle_physics import FEATHER_TERMINAL_VELOCITY, simulate, solve_
 from hits import ONSET_GAP_MS, Piece, find_hits
 from shots import CALIBRATION_SCALE, LYING_MS, Estimate, Landing, _a_shot, _judged, _last_of_rally, _may_be_on_the_net, _may_be_sent_back, _not_to_be_called, _played_again, _went_on, call_landing, flight_facts, landing_area, net_height_m, rally_end, rally_shots
 from simulation.audio import SAMPLE_RATE
-from test_hits import RALLY, clip_of, seen, times
+from simulation.clip import make_clip
+from simulation.rally import Shot, build_rally
+from test_hits import CAMERA, FPS, RALLY, SIZE, clip_of, seen, times
 
 
 def exact_fit(p0, v0, start_ms: float = 0.0, sigma: float = 1e-4) -> FlightFit:
@@ -346,12 +348,17 @@ class RallyTests(unittest.TestCase):
         self.assertIsNone(shots[-1].landing)
 
     def test_a_sound_while_the_last_flight_was_out_of_sight_may_be_its_reply(self):
-        clip = clip_of()
+        # A rally ending in a deep clear, lost while still up but seen well beyond the net: surely
+        # over it, whatever the fit says of its clearance (a net shot seen from behind is not).
+        rally = build_rally((3.3, 3.6, 1.0), [Shot("serve", (1.5, 12.9), 1.9, 2.4), Shot("clear", (3.5, 0.6), 1.8, 2.4), Shot("clear", (2.6, 12.4), 1.8, None)])
+        clip = make_clip(CAMERA, SIZE, rally, fps=FPS, handheld=True, seed=3, tail_s=0.5, render=False)
         stamps = times(len(clip.cameras))
-        lost_ms = RALLY.contacts[-1].time * 1000.0 + 600.0  # surely over the net by then, still up
+        lost_ms = rally.contacts[-1].time * 1000.0 + 1000.0
         track = [None if t > lost_ms else point for t, point in zip(stamps, seen(clip))]
         analysis = find_hits(track, stamps, clip.cameras, detect_onsets(clip.audio, SAMPLE_RATE, min_gap_ms=ONSET_GAP_MS))
-        self.assertIsNotNone(rally_shots(analysis, track, stamps, clip.cameras, court="singles")[-1].landing)
+        last = rally_shots(analysis, track, stamps, clip.cameras, court="singles")[-1]
+        self.assertTrue(last.seen_over)
+        self.assertIsNotNone(last.landing)
         analysis.rejected_sounds.append(lost_ms + 100.0)
         self.assertIsNone(rally_shots(analysis, track, stamps, clip.cameras, court="singles")[-1].landing)
 
