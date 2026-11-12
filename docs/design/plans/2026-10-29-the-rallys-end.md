@@ -264,6 +264,21 @@ So a flight now gets its own clock when its contact stays more than two standard
 - **The near contacts' stated uncertainty is too tight.** Their 95 % region holds the truth 91 % of the time. This is the first time it was measured.
 - **The 7 % comes from the same five clips.** Near flights may need a clock too, but nothing shows it, since their hitters' reach is already met. The cause of the far flights' clock is still to be found. A cause found at the camera or the detections would replace the clock.
 
+**A hit that no meeting of flights times now carries its own timing doubt, and the near contacts' regions hold.** The near contacts' 95 % region held the truth 91 % of the time. Part of that was the benchmark's own check. It judged each axis on its own, and that is no 95 % region when the axes move together, as a contact's do along the camera's line of sight. Judged with the contact's full covariance, the region held 89 %. The misses ran along the flight, the way a wrong hit time moves a contact, and most were serves timed without sound. A hit between two flights is timed by where the rally fit has them meet, and the doubt in that time goes into its contact. A serve has no flight before it, so its time was taken as exact. Without sound it is timed half a frame before it is first seen, and at 30 fps a 20 m/s serve flies 0.33 m in half a frame. Serves without sound held the truth 6 times in 14.
+
+Now a hit that no meeting times is as sure as whatever timed it. A hit timed by its sound is as sure as the clip's sounds agree on the audio's offset. They must agree within 10 ms, which is a standard deviation of 2.9 ms. Without a sound, the hit lies somewhere in the frame before its first sighting, a standard deviation of 9.6 ms at 30 fps. When it was given an earlier time than that, by a sound whose offset was never measured or by flights the rally fit did not join, it may lie anywhere back to that time. The benchmark now judges each contact with its full covariance.
+
+| Held-out, stressed (seeds 14000–14059) | Before | With the timing doubt (in the app) |
+| --- | --- | --- |
+| Near contacts inside their 95 % region | 91.4 % of 152 (86–95 %) | 94.7 % (90–97 %) |
+| Near, without sound | 84 % of 45 | 96 % |
+| Near, seen from behind | 88 % of 64 | 91 % |
+| Far contacts inside their 95 % region | 96.9 % of 131 | 96.9 % |
+
+- **Nothing else moved.** The contact, launch speed and landing errors and the calls are the same to the last digit, since only the stated spread changed. Seeds 13000 to 13059 were used to find the cause, and on them the near contacts went from 89 % to 94 %.
+- **On the five clips, only the spread changed.** The ends and the answers on your labels are the same. The serves are a little less sure, since this laptop reads no sound. A few hits between flights the rally fit did not join are much less sure: Clip 10's at 15.55 s now has its depth to 0.68 m, where it claimed 0.10 m.
+- **The fresh seeds show two wrong calls, and neither is new.** The code from before contacts were held within reach called 3 of 19 wrong on these seeds. Now 2 are wrong, the same two with and without the timing doubt. On seed 14005 a third shot was found after a two-shot rally and called out 2 m from where the rally's last shot came down. On seed 14034 the last shot came down 6 mm inside the line and was called out, though its region held the truth. On the same seeds, holding contacts within reach took the landing error from 0.23 to 0.20 m (median), and the landings inside their 95 % region from 88 % to 94 %.
+
 ## Decisions
 
 - **The end comes from the flight.** The players' reactions and the sound could add to it later; the flight is what every camera tier sees.

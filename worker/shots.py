@@ -38,7 +38,7 @@ from geometry.flight_fit import INLIER_SIGMAS, FlightFit, _Views, fit_flight
 from geometry.rally_fit import Reach, Seen, at_terminal_velocity, fit_rally
 from geometry.rally_fit import terminal_velocity as measure_terminal_velocity
 from geometry.shuttle_physics import GRAVITY
-from hits import _plausible_contact, _spread
+from hits import OFFSET_AGREEMENT_MS, Hit, _plausible_contact, _spread
 
 CENTRE_X_M = SINGLES_WIDTH_M / 2  # the centre line is shared by both service courts
 DOUBLES_X_M = (-DOUBLES_MARGIN_M, SINGLES_WIDTH_M + DOUBLES_MARGIN_M)  # the doubles sidelines' outer edges
@@ -556,7 +556,7 @@ def rally_shots(
     racket = []  # the hits a racket could have made: only these end a flight for sure
     doubtful_ms = list(heard_ms)  # with the other hits that have a flight: what they end depends on the flight (left_flight)
     for j, ((n, _, _, _), fit, shifted) in enumerate(zip(shot_flights, middle.flights, other.flights)):
-        hit_ms, timing_sigma = meeting_of.get(j, (hits[n].time_ms, 0.0))
+        hit_ms, timing_sigma = meeting_of.get(j, (hits[n].time_ms, _timing_sigma(hits[n], times, analysis.audio_offset_ms is not None)))
         contact = fit.position_at(max(hit_ms, fit.start_ms))
         if not _plausible_contact(contact, _spread(fit, max(hit_ms, fit.start_ms))):
             continue  # no racket can be there: this flight is not what it seems (a missed hit inside it)
@@ -717,6 +717,18 @@ def _with_drag(facts: ShotFacts, shifted: ShotFacts, court: str) -> ShotFacts:
         landing=landing,
     )
     return _judged(widened_facts, court)
+
+
+def _timing_sigma(hit: Hit, times: np.ndarray, offset_measured: bool) -> float:
+    """How surely a hit the rally fit's meetings do not time (a serve, a hit between flights it
+    did not join) is timed, one standard deviation: by its sound, as closely as the clip's sounds
+    agree on the audio's offset; otherwise only to somewhere in the frame before it was first
+    seen, or between its first sighting and the earlier time it was given (by a sound with no
+    measured offset, or by where flights that were not joined met)."""
+    if hit.heard_ms is not None and offset_measured:
+        return OFFSET_AGREEMENT_MS / math.sqrt(12.0)
+    frame_ms = float(np.median(np.diff(times))) if len(times) > 1 else 0.0
+    return max(frame_ms, float(times[hit.frame]) - hit.time_ms) / math.sqrt(12.0)
 
 
 def _with_timing(facts: ShotFacts, fit: FlightFit, timing_sigma: float, court: str) -> ShotFacts:

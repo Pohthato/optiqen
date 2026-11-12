@@ -4,14 +4,15 @@ from dataclasses import replace
 from unittest import mock
 
 import numpy as np
+from scipy.stats import chi2
 
 from audio.onsets import detect_onsets
 from geometry.camera import Camera
 from geometry.court_model import COURT_LENGTH_M, DOUBLES_MARGIN_M, LONG_SERVICE_INSET_M, NET_Y_M, SHORT_SERVICE_M, SINGLES_WIDTH_M
 from geometry.flight_fit import FlightFit
 from geometry.shuttle_physics import FEATHER_TERMINAL_VELOCITY, simulate, solve_launch, time_at_height
-from hits import ONSET_GAP_MS, Piece, find_hits
-from shots import CALIBRATION_SCALE, LYING_MS, Estimate, Landing, _a_shot, _judged, _last_of_rally, _may_be_on_the_net, _may_be_sent_back, _not_to_be_called, _played_again, _went_on, call_landing, flight_facts, landing_area, net_height_m, rally_end, rally_shots
+from hits import OFFSET_AGREEMENT_MS, ONSET_GAP_MS, Hit, Piece, find_hits
+from shots import CALIBRATION_SCALE, LYING_MS, Estimate, Landing, _a_shot, _judged, _last_of_rally, _may_be_on_the_net, _may_be_sent_back, _not_to_be_called, _played_again, _timing_sigma, _went_on, call_landing, flight_facts, landing_area, net_height_m, rally_end, rally_shots
 from simulation.audio import SAMPLE_RATE
 from simulation.clip import make_clip
 from simulation.rally import Shot, build_rally
@@ -98,6 +99,18 @@ class FlightFactTests(unittest.TestCase):
         facts = flight_facts(exact_fit(p0, v0), hit_ms=0.0, hitter="near", court="singles", ends_ms=None)
         self.assertIsNone(facts.net)
         self.assertEqual(facts.landing.call, "out")
+
+    def test_a_hit_no_meeting_times_is_as_sure_as_what_timed_it(self):
+        stamps = np.arange(30) * 1000.0 / 30.0
+        first_seen = 15
+
+        def hit(time_ms: float, heard: bool) -> Hit:
+            return Hit(time_ms, time_ms + 20.0 if heard else None, stamps[first_seen], "serve", (2.0, 3.0, 1.0), first_seen, np.inf)
+
+        frame_ms = stamps[1]
+        self.assertAlmostEqual(_timing_sigma(hit(stamps[first_seen] - frame_ms / 2, heard=False), stamps, True), frame_ms / np.sqrt(12))  # within the frame before
+        self.assertAlmostEqual(_timing_sigma(hit(stamps[first_seen] - 50.0, heard=True), stamps, True), OFFSET_AGREEMENT_MS / np.sqrt(12))
+        self.assertAlmostEqual(_timing_sigma(hit(stamps[first_seen] - 50.0, heard=True), stamps, False), 50.0 / np.sqrt(12))  # by an unmeasured sound
 
 
 class CallTests(unittest.TestCase):
@@ -305,6 +318,17 @@ class RallyTests(unittest.TestCase):
         known = rally_shots(analysis, seen(clip), times(len(clip.cameras)), clip.cameras, court="singles", terminal_velocity=(6.7, 0.02))
         self.assertEqual((known[0].terminal_velocity.value, known[0].terminal_velocity.sigma), (6.7, 0.02))
         self.assertLessEqual(np.trace(np.asarray(known[-1].landing.covariance)), np.trace(np.asarray(shots[-1].landing.covariance)) + 1e-9)
+
+    def test_a_serve_in_a_silent_video_is_no_surer_than_its_first_sighting_times_it(self):
+        # Timed only to within the frame before it is first seen: at 30 fps the serve flies tenths
+        # of a metre in that time, and its contact must be that unsure along its flight.
+        clip = clip_of()
+        stamps = times(len(clip.cameras))
+        analysis = find_hits(seen(clip), stamps, clip.cameras, None)
+        serve = rally_shots(analysis, seen(clip), stamps, clip.cameras, court="singles")[0]
+        self.assertTrue(serve.serve)
+        miss = np.asarray(serve.contact) - RALLY.contacts[0].position
+        self.assertLess(float(miss @ np.linalg.solve(np.asarray(serve.launch_covariance)[:3, :3], miss)), chi2.ppf(0.95, 3))
 
     def analysed(self):
         clip = clip_of()

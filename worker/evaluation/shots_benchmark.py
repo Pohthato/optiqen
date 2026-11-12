@@ -6,7 +6,7 @@ dropout, false detections, neighbouring courts), with each rally's last shot aim
 of a boundary line, in or out. Per scenario the hits are found (hits.find_hits), the flights
 refitted together and each shot's facts taken (shots.rally_shots). Shots matched to a true hit
 (within ±33 ms) are compared on contact point (by the hitter's half, and whether its stated
-uncertainty covers it), launch speed, apex and net clearance; the rally's last shot on its
+uncertainty, the launch covariance's, covers it), launch speed, apex and net clearance; the rally's last shot on its
 landing and call, and on whether the stated uncertainty covers the truth.
 
 With --players each contact is held within reach of its hitter (shots.rally_shots's reach_of):
@@ -104,11 +104,11 @@ def score_scenario(scenario, session_error: float | None = None, court: str = "s
             matched.append((shots[a], truth[b], b))
     rows = []
     for shot, true, _ in matched:
-        miss = (np.asarray(shot.contact) - true["contact"]) / np.maximum(np.asarray(shot.contact_sigma), 1e-9)
+        miss = np.asarray(shot.contact) - true["contact"]
         rows.append({
             "kind": true["kind"], "half": true["hitter"],
-            "contactErrorM": float(np.linalg.norm(np.asarray(shot.contact) - true["contact"])),
-            "contactCovered": bool(float(miss @ miss) <= chi2.ppf(COVERAGE, 3)),
+            "contactErrorM": float(np.linalg.norm(miss)),
+            "contactCovered": bool(float(miss @ np.linalg.pinv(np.asarray(shot.launch_covariance)[:3, :3]) @ miss) <= chi2.ppf(COVERAGE, 3)),
             "hitterRight": shot.hitter == true["hitter"],
             "speedErrorMS": abs(shot.speed_m_s.value - true["speed"]),
             "apexErrorM": abs(shot.apex_m.value - true["apex"]),
