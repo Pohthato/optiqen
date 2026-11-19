@@ -83,7 +83,9 @@ export const analysisResultSchema = z.object({
   })).max(48).optional(),
   shots: z.array(shotSchema).max(240).optional(),
   // The rally analysis (worker/analyse_rally.py) with the findings coaching may phrase.
-  rally: rallySchema.optional(),
+  rally: rallySchema.nullable().optional(),
+  // Why there is no rally analysis, when there is none.
+  rallyError: z.string().min(1).max(500).nullable().optional(),
   annotatedVideoStorageKey: z.string().min(1).max(768).optional(),
   overlays: z.array(z.object({
     timeMs: z.number().nonnegative(),
@@ -102,6 +104,7 @@ export const analysisResultSchema = z.object({
     racketSampleFps: z.number().positive().max(120).optional(),
     timingsMs: z.object({
       download: z.number().nonnegative(), decode: z.number().nonnegative(), inference: z.number().nonnegative(), render: z.number().nonnegative(), total: z.number().nonnegative(),
+      rally: z.number().nonnegative().optional(),
     }),
     modelVersions: z.record(z.string().min(1).max(64), z.string().min(1).max(128)),
     warnings: z.array(z.string().min(1).max(400)).max(32),

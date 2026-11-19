@@ -102,6 +102,10 @@ describe("coaching from findings", () => {
     expect(parsed.success).toBe(true);
     expect(findingsOf(parsed.data)).toEqual(FINDINGS);
     expect(analysisResultSchema.safeParse({ ...base, rally: { findings: [{ id: "F1" }] } }).success).toBe(false);
+    // A job whose rally analysis could not be made says why, and is coached as before.
+    const without = analysisResultSchema.safeParse({ ...base, rally: null, rallyError: "The rally analysis could not be made: no lines." });
+    expect(without.success).toBe(true);
+    expect(findingsOf(without.data)).toBeNull();
     // The prompt previewed is the one sent: from the findings when there are some, as before when not.
     const context = (result: unknown) => ({ player: "near" as const, calibration: (result as AnalysisResult).calibration, result: result as AnalysisResult });
     expect(coachingPrompt(context(parsed.data))).toContain("End it with the IDs of the findings it rests on");

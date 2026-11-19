@@ -38,9 +38,13 @@ class HandlerCameraSummaryTests(unittest.TestCase):
         write_clip(self.clip)
         self.download = mock.patch.object(handler, "download_source", lambda _url, destination: shutil.copy(self.clip, destination))
         self.download.start()
+        # The rally analysis has its own tests (test_rally_job.py).
+        self.rally = mock.patch.object(handler.rally_job, "analyse", return_value=(None, "not made in this test"))
+        self.rally.start()
 
     def tearDown(self):
         self.download.stop()
+        self.rally.stop()
         shutil.rmtree(self.temp, ignore_errors=True)
 
     def job(self):

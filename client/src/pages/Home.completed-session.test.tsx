@@ -8,6 +8,10 @@ const completedSession = {
   result: {
     calibration: { confidence: "image_space_only", supportsCourtMapping: false },
     overlays: [{ timeMs: 0, errors: { Racket: "occluded by body" }, skeleton: [{ x: 50, y: 45, confidence: 0.9 }] }],
+    rally: {
+      shots: [{ shot: 1, hitter: "near", hitMs: 500, path: [[500, 2, 4, 1], [900, 3, 11, 1.4]], landing: null, players: null, name: { said: "serve" } }],
+      findings: [{ id: "F1", kind: "shot", shots: [1], evidence: [{ frame: 15, timeMs: 500 }], text: "Shot 1, the near player's: serve." }],
+    },
   },
 };
 
@@ -44,5 +48,11 @@ describe("Home completed-session integration", () => {
     expect(markup).toContain("RACKET ERROR");
     expect(markup).toContain("COURT NO DATA");
     expect(markup).toContain("DeepSeek coach");
+  });
+
+  it("draws the rally on the court with its findings when the result has the rally analysis", () => {
+    const markup = renderToStaticMarkup(<Home />);
+    expect(markup).toContain('aria-label="1 shot drawn on the court"');
+    expect(markup).toContain("Shot 1, the near player&#x27;s: serve.");
   });
 });

@@ -14,9 +14,16 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt \
     && pip uninstall -y opencv-python opencv-python-headless opencv-contrib-python opencv-contrib-python-headless \
     && pip install --no-cache-dir --no-deps "$(grep '^opencv-contrib-python-headless==' /tmp/requirements.txt | tr -d '\r')"
 COPY worker/handler.py worker/badminton.py /opt/netoval/
+# The rally analysis (rally_job.py runs analyse_rally.py) and everything it imports.
+COPY worker/rally_job.py worker/analyse_rally.py worker/body.py worker/detect_poses.py worker/detect_shuttle.py worker/find_hits.py worker/findings.py worker/hits.py worker/lift_players.py worker/players.py worker/pressure.py worker/rally_reasoning.py worker/rally_value.py worker/rally_value.json worker/shot_names.py worker/shot_names.json worker/shots.py worker/track_camera.py worker/track_players.py worker/video.py /opt/netoval/
 COPY worker/geometry/ /opt/netoval/geometry/
-COPY worker/best.pt /opt/netoval/models/best.pt
+COPY worker/audio/ /opt/netoval/audio/
+COPY worker/shuttle/ /opt/netoval/shuttle/
+COPY worker/evaluation/__init__.py worker/evaluation/golden.py /opt/netoval/evaluation/
+COPY worker/simulation/__init__.py worker/simulation/people.py /opt/netoval/simulation/
 COPY worker/weights/ /opt/netoval/models/
+# The shuttle detector and the pose model are looked for in weights/ beside the analysis.
+RUN ln -s /opt/netoval/models /opt/netoval/weights
 
 # Fail the image build only when a deliberate production build verifies its
 # private assets. The runtime independently refuses to silently download them.

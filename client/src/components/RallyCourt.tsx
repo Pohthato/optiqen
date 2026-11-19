@@ -133,7 +133,7 @@ export function RallyCourt({ rally, onSeek }: { rally: RallyView; onSeek?: (time
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         className="w-full touch-none select-none rounded-xl bg-[#0e171d]"
         role="img"
-        aria-label={`${rally.shots.length} shots drawn on the court`}
+        aria-label={`${rally.shots.length} ${rally.shots.length === 1 ? "shot" : "shots"} drawn on the court`}
         onPointerDown={(event) => {
           drag.current = { x: event.clientX, y: event.clientY, view };
           (event.target as Element).setPointerCapture?.(event.pointerId);

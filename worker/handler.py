@@ -2,7 +2,9 @@
 
 Pose and shuttle outputs are confidence-gated. Shot labels require observed
 contact plus a post-contact shuttle track. Warmup jobs load models without
-running a video so a customer calibration can hide GPU boot time.
+running a video so a customer calibration can hide GPU boot time. Every job
+also carries the rally analysis with its findings (rally_job.py), or the
+reason it could not be made.
 """
 from __future__ import annotations
 
@@ -27,6 +29,7 @@ from badminton import (
     capture_warnings,
     court_width_m,
 )
+import rally_job
 from geometry.calibration_adapter import summarise_calibration
 
 MODEL_DIR = Path(os.environ.get("MODEL_DIR", "/opt/netoval/models"))
@@ -474,6 +477,17 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
                 frame_index += 1
             capture.release()
             timings["decode"] = elapsed(phase_start) - timings["inference"]
+            # The rally analysis is additive: when it cannot be made, the job still completes
+            # with everything above and says why.
+            runpod.serverless.progress_update(job, {"stage": "rally analysis", "estimatedProgress": 0.97})
+            phase_start = time.perf_counter()
+            try:
+                rally, rally_error = rally_job.analyse(video_path, data["calibration"]["corners"], court_type, (width, height), source_fps, duration, Path(temp))
+            except Exception as exc:  # noqa: BLE001
+                rally, rally_error = None, f"The rally analysis could not be made: {str(exc)[:300]}."
+            timings["rally"] = elapsed(phase_start)
+            if rally_error:
+                warnings.append(rally_error[:400])
         if MODELS.pose is None and "skeleton" in requested:
             warnings.append("No pose model was installed; no technique or movement metrics were created.")
         if MODELS.shuttle is None and "shuttle" in requested:
@@ -500,6 +514,8 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
             "events": events["events"][:240],
             "rallies": events["rallies"][:48],
             "shots": events["shots"][:240],
+            "rally": rally,
+            "rallyError": rally_error,
             "overlays": overlays,
             "diagnostics": {
                 "sampledFrames": sampled,

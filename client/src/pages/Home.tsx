@@ -46,6 +46,7 @@ import {
 import { getCompletedOverlayFrames } from "@/lib/completedAnalysis";
 import { getAuthAction, getAuthButtonLabel } from "@/lib/authUi";
 import { AuthControl } from "@/components/AuthControl";
+import { RallyCourt, type RallyView } from "@/components/RallyCourt";
 import {
   getCalibrationPointLabel,
   getEstimatedCornerLabel,
@@ -74,6 +75,9 @@ type StoredAnalysisResult = {
     warnings?: string[];
   };
   overlays?: VerifiedOverlayFrame[];
+  // The rally analysis with its findings (worker/rally_job.py); null with the reason when it
+  // could not be made, and absent from analyses made before it.
+  rally?: RallyView | null;
   calibration?: {
     confidence?:
       | "unverified"
@@ -364,15 +368,10 @@ export default function Home() {
   const recordCorner = (event: React.MouseEvent<HTMLDivElement>) => {
     if (!calibrationMode || corners.length >= 4 || !stageRef.current) return;
     const box = stageRef.current.getBoundingClientRect();
+    // Anywhere in the frame: a corner near its edge is where it is, not moved inwards.
     const point = {
-      x: Math.max(
-        5,
-        Math.min(95, ((event.clientX - box.left) / box.width) * 100)
-      ),
-      y: Math.max(
-        5,
-        Math.min(95, ((event.clientY - box.top) / box.height) * 100)
-      ),
+      x: Math.max(0, Math.min(100, ((event.clientX - box.left) / box.width) * 100)),
+      y: Math.max(0, Math.min(100, ((event.clientY - box.top) / box.height) * 100)),
     };
     setCorners(previous => [...previous, point]);
   };
@@ -399,11 +398,12 @@ export default function Home() {
     }
   };
 
-  const scrub = (event: ChangeEvent<HTMLInputElement>) => {
-    const nextTime = Number(event.target.value);
+  const seek = (nextTime: number) => {
     setCurrentTime(nextTime);
     if (videoRef.current) videoRef.current.currentTime = nextTime;
   };
+
+  const scrub = (event: ChangeEvent<HTMLInputElement>) => seek(Number(event.target.value));
 
   const submitAnalysis = async () => {
     if (!isAuthenticated) {
@@ -1277,6 +1277,11 @@ export default function Home() {
                 </div>
               )}
             </section>
+            {completedResult?.rally && (
+              <div className="mt-5">
+                <RallyCourt rally={completedResult.rally} onSeek={timeMs => seek(timeMs / 1_000)} />
+              </div>
+            )}
           <section className="panel-surface mt-5 overflow-hidden rounded-2xl">
             <div className="grid lg:grid-cols-[.8fr_1.2fr]">
               <div className="border-b border-white/8 p-6 lg:border-b-0 lg:border-r">
