@@ -59,3 +59,19 @@ On your five clips, from their saved tracks, every finding has its frames:
 - **A number passes when a cited finding holds it as said:** rounded to the digits given, a chance as a percentage (0.99 as 99 %), a time in milliseconds as seconds, and the shot and frame numbers. A heading, or any line with no cite, is dropped like any other sentence.
 - **When nothing passes, the findings' own sentences are shown:** how the rally ended, how it was won, where it turned and the player's own finding, each with its ID. Under the text it says how many sentences were left out.
 - **No reply from the live model has been checked yet.** That comes when app jobs carry findings (8d).
+
+### 8c: the rally on the court
+
+`client/src/components/RallyCourt.tsx` draws a rally analysis by hand in SVG. It shows the court and net, every flight as fitted with its shadow on the floor, coloured by hitter, each contact, and each landing's 95 % region coloured by its call. For a chosen shot or end it adds where both players stood, with their 95 % regions. It turns by dragging, or to four set views: above, behind, side and corner.
+
+| Clip | Shots drawn | Landing drawn | Findings listed |
+| --- | --- | --- | --- |
+| 6 | 15 | the last shot's, too close to call | 21 |
+| 7 | 16 | the last shot's, out | 22 |
+| 8 | 13 | the last shot's, too close to call | 19 |
+| 9 | 8 | the last shot's, too close to call | 14 |
+| 10 | 15 | the last shot's, out | 21 |
+
+- **All five clips' analyses draw in the browser, with no errors and no broken lines.** On Clip 10, choosing shot 4's finding picked out its flight and asked the video for 7.30 s, its first evidence frame.
+- **It draws only what the analysis holds.** Only the last shot of each rally has a landing, since every shot before it was played on. At Clip 10's shot 4 only the near player's region is drawn, because the analysis has no position for the far player at that hit.
+- **It is on no page yet.** The page gets it when app jobs carry the rally analysis (8d).
