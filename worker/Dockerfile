@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt \
     && pip install --no-cache-dir --no-deps "$(grep '^opencv-contrib-python-headless==' /tmp/requirements.txt | tr -d '\r')"
 COPY worker/handler.py worker/badminton.py /opt/netoval/
 # The rally analysis (rally_job.py runs analyse_rally.py) and everything it imports.
-COPY worker/rally_job.py worker/analyse_rally.py worker/body.py worker/detect_poses.py worker/detect_shuttle.py worker/find_hits.py worker/findings.py worker/hits.py worker/lift_players.py worker/players.py worker/pressure.py worker/rally_reasoning.py worker/rally_value.py worker/rally_value.json worker/shot_names.py worker/shot_names.json worker/shots.py worker/track_camera.py worker/track_players.py worker/video.py /opt/netoval/
+COPY worker/rally_job.py worker/analyse_rally.py worker/body.py worker/detect_poses.py worker/detect_shuttle.py worker/find_hits.py worker/findings.py worker/hits.py worker/lift_players.py worker/players.py worker/pressure.py worker/rally_reasoning.py worker/rally_value.py worker/rally_value.json worker/shot_names.py worker/shot_names.json worker/shot_names_simulated.json worker/shot_context.json worker/shots.py worker/track_camera.py worker/track_players.py worker/video.py /opt/netoval/
 COPY worker/geometry/ /opt/netoval/geometry/
 COPY worker/audio/ /opt/netoval/audio/
 COPY worker/shuttle/ /opt/netoval/shuttle/

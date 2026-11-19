@@ -14,13 +14,15 @@ went cross-court, truly and over the draws. Serves are left out: the rally names
 Learning from real play: shots named by hand (evaluation.hand_labels) move the simulated model as
 far as they can show (shot_names.learn), held towards it. Each clip is named by a model learnt
 without it, its hold chosen the same way on the other clips alone, so its score is honest; the
-model kept is learnt from every clip.
+model kept is learnt from every clip. Each clip's names are then taken with the shot before each
+(shot_names.in_context), from ShuttleSet's training matches, which no clip is among.
 
     python -m evaluation.shot_names_benchmark measure --scenarios 120 --workers 12 --out held_out.npz
     python -m evaluation.shot_names_benchmark measure --scenarios 120 --workers 12 --stress --out stressed.npz
     python -m evaluation.shot_names_benchmark learn --rallies 3000 --workers 12
     python -m evaluation.shot_names_benchmark adapt Clips/hittimes.txt "Clip 9=clip9.analysis.json" ... --named named/
     python -m evaluation.shot_names_benchmark score held_out.npz stressed.npz --out names.json
+    python -m evaluation.shot_names_benchmark context ShuttleSet
 """
 from __future__ import annotations
 
@@ -37,9 +39,10 @@ import numpy as np
 
 from evaluation.hand_labels import LabelledHit, match_clip, read_labels, summarise
 from evaluation.hits_benchmark import TOLERANCE_MS, simulate, standard_scenarios
+from evaluation import shuttleset
 from evaluation.metrics import macro_f1, macro_f1_interval, match_events
 from hits import find_hits
-from shot_names import MODEL_PATH, NAMES, SIMULATED_PATH, TOO_CLOSE, Detail, Launch, Model, call_of, chances, detail, learn, measured_facts, name_shot, nominal_facts, true_facts
+from shot_names import CONTEXT_LABELS, CONTEXT_PATH, MODEL_PATH, NAMES, SIMULATED_PATH, TOO_CLOSE, Context, Detail, Launch, Model, call_of, chances, detail, in_context, learn, measured_facts, name_shot, nominal_facts, true_facts
 from shots import rally_shots
 from simulation.rally import random_rally
 
@@ -208,30 +211,47 @@ def choose_hold(prior: Model, rows: list[dict[str, Any]], clips: list[str]) -> t
     return min(tried, key=tried.get), tried
 
 
-def named_again(analysis: dict[str, Any], model: Model) -> dict[str, Any]:
-    """The analysis with every shot named by `model`, the details from the hitter's body kept."""
+def named_again(analysis: dict[str, Any], model: Model, context: Context | None = None) -> dict[str, Any]:
+    """The analysis with every shot named by `model`, with the shot before each when `context`
+    is given, the details from the hitter's body kept."""
     rng = np.random.default_rng(0)
     drag = analysis["summary"]["terminalVelocity"]
-    shots = []
+    names = []
     for shot in analysis["shots"]:
         name = name_shot(Launch.entry(shot, drag), shot["serve"], model, rng)
         kept = {key: Detail(**shot["name"][key]) if shot["name"].get(key) else None for key in ("backhand", "jump")}
-        shots.append({**shot, "name": replace(name, **kept).entry()})
-    return {**analysis, "shots": shots}
+        names.append(replace(name, **kept))
+    if context is not None:
+        names = in_context(names, [shot["hitter"] for shot in analysis["shots"]], context)
+    return {**analysis, "shots": [{**shot, "name": name.entry()} for shot, name in zip(analysis["shots"], names)]}
 
 
-def adapt(prior: Model, labelled: dict[str, list[LabelledHit]], analyses: dict[str, dict]) -> tuple[Model, dict[str, Any], dict[str, dict]]:
+def adapt(prior: Model, labelled: dict[str, list[LabelledHit]], analyses: dict[str, dict], context: Context | None = None) -> tuple[Model, dict[str, Any], dict[str, dict]]:
     """The model learnt from every clip's named shots, a report, and each clip named by a model
-    learnt without it."""
+    learnt without it, with the shot before each when `context` is given."""
     rows = real_set(labelled, analyses)
     clips = list(analyses)
     named, holds = {}, {}
     for clip in clips:
         holds[clip], _ = choose_hold(prior, rows, [c for c in clips if c != clip])
-        named[clip] = named_again(analyses[clip], _learnt(prior, [r for r in rows if r["clip"] != clip], holds[clip]))
+        named[clip] = named_again(analyses[clip], _learnt(prior, [r for r in rows if r["clip"] != clip], holds[clip]), context)
     hold, tried = choose_hold(prior, rows, clips)
     report = {"shots": len(rows), "byClip": dict(Counter(row["clip"] for row in rows)), "holdWithout": holds, "hold": hold, "tried": tried}
     return _learnt(prior, rows, hold), report, named
+
+
+def learn_context(matches: list[shuttleset.Match]) -> Context:
+    """How often each name followed each shot in ShuttleSet's training matches
+    (shuttleset.held_out), one of each added so that nothing is ruled out after anything."""
+    train = set(shuttleset.held_out(matches)["train"])
+    counts = np.ones((len(CONTEXT_LABELS), len(NAMES)))
+    for match in matches:
+        if match.video in train:
+            for rally in match.rallies:
+                for before, hit in zip(rally.hits, rally.hits[1:]):
+                    if before.name in CONTEXT_LABELS and hit.name in NAMES:
+                        counts[CONTEXT_LABELS.index(before.name), NAMES.index(hit.name)] += 1
+    return Context(counts, f"ShuttleSet, the {len(train)} training matches (evaluation.shuttleset.held_out)")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -254,6 +274,9 @@ def main(argv: list[str] | None = None) -> int:
     adapting.add_argument("--out", type=Path, default=MODEL_PATH)
     adapting.add_argument("--named", type=Path, help="a folder for each clip's analysis named by the model learnt without it")
     adapting.add_argument("--report", type=Path)
+    counting = commands.add_parser("context", help="count which names follow which in ShuttleSet's training matches")
+    counting.add_argument("shuttleset", type=Path, help="the folder holding ShuttleSet's set/")
+    counting.add_argument("--out", type=Path, default=CONTEXT_PATH)
     scoring = commands.add_parser("score", help="score the model on held-out shots")
     scoring.add_argument("held_out", type=Path, nargs="+")
     scoring.add_argument("--model", type=Path, default=MODEL_PATH)
@@ -272,7 +295,7 @@ def main(argv: list[str] | None = None) -> int:
         labelled = read_labels(args.labels.read_text(encoding="utf-8"))
         paths = dict(item.partition("=")[::2] for item in args.clips)
         analyses = {clip: json.loads(Path(path).read_text(encoding="utf-8")) for clip, path in paths.items()}
-        model, report, named = adapt(Model.load(args.prior), labelled, analyses)
+        model, report, named = adapt(Model.load(args.prior), labelled, analyses, Context.load())
         model.save(args.out)
         everything = [], []
         for clip, analysis in named.items():
@@ -288,6 +311,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.report:
             args.report.write_text(text, encoding="utf-8")
         print(text)
+    elif args.command == "context":
+        context = learn_context(shuttleset.read(args.shuttleset))
+        context.save(args.out)
+        print(json.dumps({"source": context.source, "rallyShots": int(context.counts.sum() - context.counts.size)}))
     else:
         model = Model.load(args.model)
         report = {path.name: {**score(model, dict(np.load(path))), "crossOrStraight": score_cross(dict(np.load(path)))} for path in args.held_out}

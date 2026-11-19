@@ -4,17 +4,19 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 import numpy as np
 
 from body import hit_body, standing_reach
 from evaluation.hits_benchmark import Scenario
 from evaluation.hand_labels import read_labels
-from evaluation.shot_names_benchmark import REAL_HOLDS, TEST_FIRST_SEED, adapt, learning_set, measure_scenario, named_again, real_set, score_cross
+from evaluation.shot_names_benchmark import REAL_HOLDS, TEST_FIRST_SEED, adapt, learn_context, learning_set, measure_scenario, named_again, real_set, score_cross
 from geometry.court_model import NET_Y_M, SINGLES_WIDTH_M
 from geometry.shuttle_physics import simulate
-from shot_names import (CROSS_M, DRAWS, FACTS, JUMP_M, NAMES, SIMULATED_PATH, SURE, TOO_CLOSE, Detail, Launch, Model, ShotName, backhand, call_of, chances,
-                        detail, facts, jump, learn, measured_facts, name_shot, nominal_facts, racket_arms, true_facts)
+from shot_names import (CONTEXT_LABELS, CROSS_M, DRAWS, FACTS, JUMP_M, NAMES, SIMULATED_PATH, SURE, TOO_CLOSE, Context, Detail, Launch, Model, ShotName, backhand, call_of,
+                        chances, detail, facts, in_context, jump, learn, measured_facts, name_shot, nominal_facts, racket_arms, true_facts)
 from shots import Estimate, flight_facts
 from simulation.rally import SHOT_TYPES, canned_rally
 from test_body import exact, standing
@@ -238,6 +240,42 @@ def canned_clip() -> tuple[str, dict]:
         lines.append(f"{half} player hit times:" + ",".join(f"{c.time}({swapped.get(c.kind, c.kind)})" for c in rally.contacts[1:] if c.hitter == half))
     analysis = {"events": [{"type": "contact", "timeMs": shot["hitMs"], "evidence": "flights"} for shot in shots], "shots": shots, "summary": {"terminalVelocity": {"value": 6.7, "sigma": 0.05}}}
     return "\n".join(lines), analysis
+
+
+class ContextTests(unittest.TestCase):
+    def setUp(self):
+        counts = np.ones((len(CONTEXT_LABELS), len(NAMES)))
+        counts[CONTEXT_LABELS.index("smash"), NAMES.index("block")] = 50.0  # a smash is blocked
+        counts[CONTEXT_LABELS.index("net"), NAMES.index("net")] = 50.0  # a net shot is met at the net
+        self.context = Context(counts, "made up")
+        self.smash, self.net = self.named(smash=1.0), self.named(net=1.0)
+        self.unsure = self.named(net=0.5, block=0.45, push=0.05)  # its flight cannot tell
+
+    @staticmethod
+    def named(**chances_of):
+        p = np.array([chances_of.get(name, 0.0) for name in NAMES])
+        return ShotName(call_of(p), {name: float(c) for name, c in zip(NAMES, p)})
+
+    def test_a_shot_its_flight_cannot_tell_is_told_by_the_shot_before(self):
+        self.assertEqual(in_context([self.smash, self.unsure], ["far", "near"], self.context)[1].call, "block")
+        self.assertEqual(in_context([self.net, self.unsure], ["far", "near"], self.context)[1].call, "net")
+        told = in_context([self.smash, self.unsure], ["far", "near"], self.context)[1].p
+        self.assertAlmostEqual(sum(told.values()), 1.0, places=2)
+
+    def test_a_serve_a_first_shot_and_one_after_a_missed_hit_keep_their_own(self):
+        serve = ShotName("serve", {"serve": 1.0})
+        self.assertIs(in_context([serve, self.unsure], ["far", "near"], self.context)[0], serve)
+        self.assertIs(in_context([self.unsure], ["near"], self.context)[0], self.unsure)
+        self.assertIs(in_context([self.smash, self.unsure], ["near", "near"], self.context)[1], self.unsure)
+
+    def test_only_shuttlesets_training_matches_are_counted(self):
+        rally = SimpleNamespace(hits=[SimpleNamespace(name=name) for name in ("serve", "net", "net", "lift")])
+        matches = [SimpleNamespace(video="train", rallies=[rally]), SimpleNamespace(video="test", rallies=[rally, rally])]
+        with mock.patch("evaluation.shot_names_benchmark.shuttleset.held_out", return_value={"train": ["train"]}):
+            counted = learn_context(matches).counts - 1.0
+        self.assertEqual(counted.sum(), 3)
+        for before, name in (("serve", "net"), ("net", "net"), ("net", "lift")):
+            self.assertEqual(counted[CONTEXT_LABELS.index(before), NAMES.index(name)], 1)
 
 
 class RealTests(unittest.TestCase):

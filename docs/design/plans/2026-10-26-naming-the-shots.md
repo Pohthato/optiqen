@@ -46,6 +46,7 @@ Each step is pushed on its own.
 | 5d | **Into the one command, and the real test.** Each shot in `analyse_rally.py` gets its name with the probabilities. The overlay writes it next to the speed, and the diagram's legend names each flight. Then the five labelled clips are scored. | `worker/analyse_rally.py` | Real macro-F1 by family and by camera (the corner tripod of clips 6–9, Clip 10). It is reported twice: on the shots whose hit was found, and end to end, where a missed hit counts as a wrong name. |
 | 5e | **Learning from your shots.** Your named shots move the simulator's model. Its weights are scaled as a whole, and the intercepts and the single facts' weights move from there, held by a hold chosen on held-out clips. Each clip is named by a model learnt without it. Each analysis keeps each shot's launch, so it can be named again without the video. | `worker/shot_names.py`, `worker/evaluation/shot_names_benchmark.py`, `worker/evaluation/hand_labels.py`, `worker/analyse_rally.py` | Real macro-F1, each clip named by a model learnt without it, beside 5d's. Names given alone are right about as often as they say. |
 | 5f | **Cross or straight, forehand or backhand, from a jump.** Cross: the flight crosses the court diagonally. Backhand: the racket hand meets the shuttle across the body, on the side away from the racket arm, beyond the uncertainty. The racket arm is the one the player hits with on most shots of the clip. Jump: both feet are off the floor at contact (4c already measures it). Each is "too close to call" when the measurements cannot tell. | `worker/shot_names.py` | Simulation: each one right within its stated uncertainty. Real: your labels mark 17 cross shots, 7 backhands and 3 jumps. Unmarked shots are not taken as straight or forehand, so for those the report gives only how often the app said cross or backhand. |
+| 5g | **The shot before.** Each name's chance is multiplied by how much more often it follows the shot before than it is played at all, in ShuttleSet's training matches. | `worker/shot_names.py`, `worker/shot_context.json`, `worker/evaluation/shot_names_benchmark.py`, `worker/analyse_rally.py` | Real macro-F1 as in 5e, beside today's without it. Names given alone are still right about as often as they say. |
 
 **The facts a name rests on (5b):**
 
@@ -213,6 +214,29 @@ The one command writes them into each shot's name, with the name as a coach woul
 - **The racket arm's sureness matters.** Clip 8's near player hit with the right arm on 2 of 5 shots, so every backhand of theirs is too close to call. Taking the arm of most shots instead made them left-handed, and five of their shots were called backhand at 0.98 to 1.00. Clip 9's far player is right on 2 of 3 (0.67). Both of Clip 7's players are right on 0.86 and 0.88 of their shots, so a backhand of theirs is said at no more than that.
 - **Jump is right on the one jump with a body.** That was Clip 7's jump out stop drop at 16.13 s, with the lower foot 0.29 ± 0.03 m up. The other two jumps (Clip 8 at 9.48 s, Clip 6 at 8.66 s) have no body at the hit. Clip 10's high lift at 9.14 s was said to be a jump: the lower foot read 0.19 ± 0.03 m up, either a hop or the pose's foot off the floor. Two shots whose foot read 0.12 to 0.13 m up are too close to call.
 
+### 5g: the shot before (2026-11-18)
+
+A shot's flight does not tell a block from a net shot: a block meets a smash, a net shot meets a net shot or a drop. So each name's chance is now multiplied by how much more often that name follows the shot before than it is played at all. The counts come from ShuttleSet's 29 training matches: 19,983 shots that followed another (`worker/shot_context.json`, written by `evaluation.shot_names_benchmark context`). The shot before is taken by its own chances, already in context, so an unsure shot before says little. A rally's first shot, and a shot from the same half as the one before (a hit between was missed), keep their own chances. Nothing was chosen on your clips: the counts are ShuttleSet's with one of each added, and the rule was fixed before the clips were scored.
+
+Today's analyses were first named again without it, as in 5e, each clip by a model learnt without it.
+
+| Names | Found shots right | Macro-F1 | Corner tripod, clips 6–9 | Clip 10 | End to end |
+| --- | --- | --- | --- | --- | --- |
+| 5e (2026-10-26) | 46 of 66 | 0.65 (0.53–0.72) | 0.67 (0.55–0.76) | 0.54 (0.32–0.75) | 0.61 (0.50–0.69) |
+| Today's analyses | 53 of 65 | 0.81 (0.70–0.89) | 0.80 (0.67–0.89) | 0.70 (0.50–1.00) | 0.75 (0.62–0.84) |
+| With the shot before | 57 of 65 | 0.87 (0.76–0.95) | 0.88 (0.76–0.96) | 0.70 (0.50–1.00) | 0.81 (0.68–0.89) |
+
+Today's analyses are the clips analysed with the drag's share of the uncertainty measured on the rally as it was read, and with the same-side rule (both in the rally's end plan).
+
+- **The gate (0.70 on found shots) is met,** and with the shot before even the interval's low end is above it.
+- **Four shots go from wrong to right and none the other way:** a net shot that was a drop, a push that was a lift, a drive that was a push, and a block after a smash that was a push. On its own that is not much evidence (one-sided sign test, p = 0.06). Three wrong names became other wrong names, among them Clip 7's block at 8.59 s, now a drive instead of a net shot. Scored on the analyses from before the drag fix, a fifth shot gained (Clip 8's drop at 5.59 s, p = 0.03), but the drag fix had already named it right without the shot before.
+- **Blocks and drives: 7 of 11** (5 of 11 without the shot before, 2 of 11 in 5e). Blocks 4 of 7, drives 3 of 4.
+- **Clip 10 does not change.** Its two wrong names are not decided by the shot before.
+- **Most of the gain since 5e came before this step.** Without the shot before, today's analyses are named 53 of 65 right, against 46 of 66 in 5e, by the same method. The launches they are named from have changed since then: the rally's end, the scrap fix and the drag fix all refit the flights. Which change did most was not traced. The kept model (`worker/shot_names.json`) is relearnt from today's analyses: its hold is 0.01 again, with held-out log loss 34.5 (46.2 in 5e), and it comes out the same to its stored digits as the one learnt before the drag fix.
+- **The sureness is still honest.** A name given alone was right 37 of 40 times, at a mean stated chance of 0.93 (without the shot before: 26 of 27 at 0.90). When two names were given, yours was among them 19 of 21 times.
+- **What makes these numbers a little optimistic.** The same 66 shots have now been looked at in four steps, and the hold is chosen on them, one clip left out at a time. ShuttleSet is professional play. Your rallies are not, so its transitions may fit other amateur rallies less well than these. Five rallies from two venues leave the intervals wide.
+- **Simulated shots were not scored again.** The simulator's rallies do not follow professional play's order of shots, so its held-out set says nothing about this step.
+
 ## Decisions
 
 - **The model learns from simulation, then from your shots, and each clip is tested by a model that never saw it.** The 61 real shots are too few to learn names from alone. They are enough to correct the simulator's model: how sure it is, and where its families sit. Leaving one clip out at a time keeps the test honest. More labelled rallies, which the labeller already records, would do more.
@@ -220,14 +244,15 @@ The one command writes them into each shot's name, with the name as a coach woul
 - **The serve comes from the rally, not the model.** The first hit of a rally is the serve.
 - **The details are measured, not learnt.** Cross comes from where the flight went, backhand and jump from the body at contact. Their lines (1.3 m across, the side of the hips, 0.15 m off the floor) come from the court and the body, not from fitting your marks. Your clips' measurements were looked at while they were chosen, so the real scores in 5f are not wholly held out.
 - **"other" is never given by the model.** It is for a person to use.
+- **The shot before comes from professional play, not from your clips.** Learning the order of shots from five rallies would follow them too closely. ShuttleSet's training matches hold some 20,000 shots, and its test matches stay out for Phase 7.
 - **Logistic regression, not a network.** About ten facts and eight families: a linear model on the facts and their products can draw curved boundaries, and its weights can be read. A network would need more data than this phase has.
 
 ## Proposed gate (for you to agree)
 
 - **Held-out simulation:** macro-F1 within 0.05 of what the true facts give, and calibrated as in 5c. The simulator's model meets it (5c), apart from drive in the stressed world (3 of 4).
-- **Your shots:** macro-F1 of at least 0.70 on the shots whose hit was found, both cameras pooled, with each camera reported. Not met: 0.65 (0.53–0.72), each clip named by a model learnt without it (5e).
+- **Your shots:** macro-F1 of at least 0.70 on the shots whose hit was found, both cameras pooled, with each camera reported. Met: 0.87 (0.76–0.95) with the shot before, and 0.81 (0.70–0.89) without it, each clip named by a model learnt without it (5g). In 5e it was 0.65 (0.53–0.72).
 
 ## Not in this phase
 
 - **The rally's end** (who won, out, net, unreturnable) is Phase 6. Half of the extra hits on the real clips come after the rally's last hit, and they belong there.
-- **Learning from public data** (ShuttleSet): its licence needs checking, and it gives positions on the court, not flights in 3D.
+- **Learning flights from public data.** ShuttleSet (MIT licence) gives the order of shots, used in 5g, and positions on the court, but not flights in 3D.

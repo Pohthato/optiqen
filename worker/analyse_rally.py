@@ -53,7 +53,7 @@ from lift_players import fit_players
 from players import HALVES
 from pressure import LEAN_M, Pressure, rally_pressure
 from rally_reasoning import Reasons, rally_reasons
-from shot_names import Launch, Model, ShotName, name_shot, racket_arms
+from shot_names import Context, Launch, Model, ShotName, in_context, name_shot, racket_arms
 from shots import CALL_CONFIDENCE, RallyEnd, ShotFacts, rally_end, rally_shots
 from track_players import players_document
 from video import VideoFile
@@ -426,6 +426,7 @@ def main(argv: list[str] | None = None) -> int:
     model, rng = Model.load(), np.random.default_rng(0)
     arms = racket_arms(facts)
     names = [name_shot(Launch.of(shot), shot.serve, model, rng, fact, arms[shot.hitter]) for shot, fact in zip(shots, facts)]
+    names = in_context(names, [shot.hitter for shot in shots], Context.load())
     ats = rally_value.shot_ats(shots, stood, pressures, [name.p for name in names])
     value_model = rally_value.Model.load()
     values = [rally_value.chances_at(value_model, now, ats[i - 1] if i else None, rng) for i, now in enumerate(ats)]

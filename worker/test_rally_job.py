@@ -170,8 +170,11 @@ class ImageTests(unittest.TestCase):
             if not any(file == source or file.startswith(source + "/") for source in copied):
                 missing.append(file)
         self.assertEqual(missing, [])
-        for data in ("rally_value.json", "shot_names.json"):
-            self.assertIn(data, copied)
+        # And every file of their own they read beside them.
+        files = {"/".join(module.split(".")) + ".py" for module in needed if WORKER.joinpath(*module.split(".")).with_suffix(".py").is_file()}
+        data = {name for file in files for name in re.findall(r'with_name\("([^"]+\.json)"\)', (WORKER / file).read_text(encoding="utf-8"))}
+        self.assertIn("shot_context.json", data)
+        self.assertEqual(sorted(name for name in data if (WORKER / name).is_file() and name not in copied), [])
 
 
 if __name__ == "__main__":

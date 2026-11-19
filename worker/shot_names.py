@@ -20,6 +20,13 @@ families are not real play's. A shot's chance of each name is the model's averag
 draws, so it is as unsure as the measurement. The likeliest name is given alone when it is at
 least `SURE`; otherwise the two likeliest are.
 
+Then the shot before it (`in_context`): a block is played to a smash, a net shot to a net shot or
+a drop, and a shot's flight alone does not tell a block from a net shot. Each name's chance is
+multiplied by how much more often it follows the shot before than it is played at all, in
+professional singles (ShuttleSet's training matches, `shot_context.json`, written by
+`evaluation.shot_names_benchmark context`); the shot before is taken by its own chances, already
+in context.
+
 Then the details a coach adds, each with its chance, said when it is at least `SURE` either way
 and "too close to call" between:
 - Cross or straight: cross when the shot ended on the other side of the court's centre line from
@@ -33,7 +40,7 @@ and "too close to call" between:
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -51,6 +58,8 @@ DRAWS = 200
 CHUNK = 2000  # launches flown at once (each keeps its whole path in memory)
 SURE = 0.8
 MODEL_PATH = Path(__file__).with_name("shot_names.json")
+CONTEXT_PATH = Path(__file__).with_name("shot_context.json")
+CONTEXT_LABELS = ("serve",) + NAMES  # what a shot may follow
 SIMULATED_PATH = Path(__file__).with_name("shot_names_simulated.json")
 CROSS_M = SINGLES_WIDTH_M / 4  # so a shot from the middle that drifts over the line is not cross
 JUMP_M = 0.15  # past what an ankle rises on tiptoe, or in a split step's hop
@@ -255,6 +264,52 @@ class Model:
         if tuple(stored["facts"]) != FACTS or tuple(stored["names"]) != NAMES:
             raise ValueError(f"{path} was learnt on other facts or names")
         return Model(*(np.array(stored[key]) for key in ("low", "high", "mean", "scale", "weights")))
+
+
+@dataclass(frozen=True)
+class Context:
+    """How often each name followed each shot (a serve or a name), in the rallies counted."""
+
+    counts: np.ndarray  # (CONTEXT_LABELS, NAMES)
+    source: str
+
+    @property
+    def lift(self) -> np.ndarray:
+        """How much more often each name followed each shot than it was played at all."""
+        follows = self.counts / self.counts.sum(axis=1, keepdims=True)
+        return follows / (self.counts.sum(axis=0) / self.counts.sum())[None]
+
+    def save(self, path: Path = CONTEXT_PATH) -> None:
+        fields = {"after": CONTEXT_LABELS, "names": NAMES, "counts": self.counts.astype(int).tolist(), "source": self.source}
+        path.write_text(json.dumps(fields, indent=1) + "\n", encoding="utf-8")
+
+    @staticmethod
+    def load(path: Path = CONTEXT_PATH) -> "Context":
+        stored = json.loads(path.read_text(encoding="utf-8"))
+        if tuple(stored["after"]) != CONTEXT_LABELS or tuple(stored["names"]) != NAMES:
+            raise ValueError(f"{path} was counted on other names")
+        return Context(np.array(stored["counts"], dtype=float), stored["source"])
+
+
+def in_context(names: list[ShotName], hitters: list[str], context: Context) -> list[ShotName]:
+    """A rally's names (in order, with each shot's hitter) with the shot before each: its own
+    chances times how much more often each name follows the shot before, taken by that shot's
+    chances. A serve is the rally's; a shot with none before it, or from the same half as the
+    one before (a hit between was missed), keeps its own."""
+    out, before = [], None
+    for i, (name, hitter) in enumerate(zip(names, hitters)):
+        if name.call == "serve":
+            out.append(name)
+            before = np.eye(len(CONTEXT_LABELS))[0]
+            continue
+        own = np.array([name.p[n] for n in NAMES], dtype=float)
+        if before is not None and hitters[i - 1] != hitter:
+            own = own * (before @ context.lift)
+            own = own / own.sum()
+            name = replace(name, call=call_of(own), p={n: round(float(c), 3) for n, c in zip(NAMES, own)})
+        out.append(name)
+        before = np.concatenate([[0.0], own])
+    return out
 
 
 def learn(names: list[str | tuple[str, ...]], rows: np.ndarray, l2: float, prior: Model | None = None) -> Model:
