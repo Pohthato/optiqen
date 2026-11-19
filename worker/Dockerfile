@@ -14,6 +14,8 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt \
     && pip uninstall -y opencv-python opencv-python-headless opencv-contrib-python opencv-contrib-python-headless \
     && pip install --no-cache-dir --no-deps "$(grep '^opencv-contrib-python-headless==' /tmp/requirements.txt | tr -d '\r')"
 COPY worker/handler.py worker/badminton.py /opt/netoval/
+COPY worker/geometry/ /opt/netoval/geometry/
+COPY worker/best.pt /opt/netoval/models/best.pt
 COPY worker/weights/ /opt/netoval/models/
 
 # Fail the image build only when a deliberate production build verifies its

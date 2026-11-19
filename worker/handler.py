@@ -1,4 +1,4 @@
-"""Netoval RunPod worker.
+"""Optiqen RunPod worker.
 
 Pose and shuttle outputs are confidence-gated. Shot labels require observed
 contact plus a post-contact shuttle track. Warmup jobs load models without
@@ -27,16 +27,17 @@ from badminton import (
     capture_warnings,
     court_width_m,
 )
+from geometry.calibration_adapter import summarise_calibration
 
 MODEL_DIR = Path(os.environ.get("MODEL_DIR", "/opt/netoval/models"))
 POSE_MODEL_PATH = MODEL_DIR / os.environ.get("POSE_MODEL_FILE", "badminton_pose.pt")
-SHUTTLE_MODEL_PATH = MODEL_DIR / os.environ.get("SHUTTLE_MODEL_FILE", "shuttlecock_yolov8n.pt")
+SHUTTLE_MODEL_PATH = MODEL_DIR / os.environ.get("SHUTTLE_MODEL_FILE", "best.pt")
 RACKET_MODEL_PATH = MODEL_DIR / os.environ.get("RACKET_MODEL_FILE", "badminton_racket.pt")
 MAX_VIDEO_SECONDS = float(os.environ.get("MAX_VIDEO_SECONDS", "120"))
 POSE_SAMPLE_FPS = float(os.environ.get("POSE_SAMPLE_FPS", "12"))
 SHUTTLE_SAMPLE_FPS = float(os.environ.get("SHUTTLE_SAMPLE_FPS", "30"))
 MIN_CONFIDENCE = float(os.environ.get("MIN_DETECTION_CONFIDENCE", "0.55"))
-PROCESSING_VERSION = os.environ.get("PROCESSING_VERSION", "netoval-badminton-worker-2.0.0")
+PROCESSING_VERSION = os.environ.get("PROCESSING_VERSION", "optiqen-badminton-worker-2.1.0")
 # RunPod workers handle one job per process by default. Setting concurrency lets
 # ONE warm GPU accept several small video analyses in parallel — the three YOLO
 # nano/medium-class models share a 12-24 GB card comfortably at 2-3 processes.
@@ -70,6 +71,17 @@ def initialise_models() -> None:
     MODELS.shuttle = load_model(SHUTTLE_MODEL_PATH, "Shuttlecock")
     MODELS.racket = load_model(RACKET_MODEL_PATH, "Racket")
     MODELS.ready = True
+
+
+def require_requested_models(requested: set[str]) -> None:
+    required = {
+        "skeleton": (MODELS.pose, POSE_MODEL_PATH),
+        "shuttle": (MODELS.shuttle, SHUTTLE_MODEL_PATH),
+        "racket": (MODELS.racket, RACKET_MODEL_PATH),
+    }
+    missing = [f"{layer}: {path.name}" for layer, (model, path) in required.items() if layer in requested and model is None]
+    if missing:
+        raise RuntimeError(f"Requested model layers are unavailable: {', '.join(missing)}. Mount compatible .pt files or change the *_MODEL_FILE settings.")
 
 
 def elapsed(start: float) -> float:
@@ -353,6 +365,7 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
         timings = {"download": 0.0, "decode": 0.0, "inference": 0.0, "render": 0.0, "total": 0.0}
         warnings = list(MODELS.warnings)
         requested = set(data["requestedLayers"])
+        require_requested_models(requested)
         with tempfile.TemporaryDirectory(prefix="netoval-") as temp:
             video_path = Path(temp) / "source.mp4"
             phase_start = time.perf_counter()
@@ -380,6 +393,7 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
             pose_detected = shuttle_detected = 0
             usable = sampled = 0
             homography: np.ndarray | None = None
+            camera_summary: dict[str, Any] | None = None
             accepted_calibration = data["calibration"]
             line_support: float | None = None
             frame_index = 0
@@ -394,6 +408,14 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
                     homography, accepted_calibration, line_support = calibration_homography(data["calibration"], first_frame, court_type)
                     if homography is None:
                         warnings.append(accepted_calibration["guidance"])
+                    # The camera summary is additive: a solver failure must not fail an
+                    # analysis that the planar homography path can still complete.
+                    try:
+                        camera_summary = summarise_calibration(data["calibration"]["corners"], (width, height), court_type)
+                    except Exception as exc:  # noqa: BLE001
+                        warnings.append(f"Camera solution unavailable: {str(exc)[:200]}")
+                    if camera_summary is not None and camera_summary["geometryTier"] != "A":
+                        warnings.extend(camera_summary["reasons"])
                 run_pose = frame_index % pose_stride == 0
                 run_shuttle = frame_index % shuttle_stride == 0
                 if not run_pose and not run_shuttle:
@@ -471,6 +493,7 @@ def handler(job: dict[str, Any]) -> dict[str, Any]:
             "processingVersion": PROCESSING_VERSION,
             "calibration": accepted_calibration,
             "courtType": court_type,
+            "camera": camera_summary,
             "quality": {"usableFrameRatio": round(usable / max(sampled, 1), 3), "poseTrackConfidence": round(float(np.mean([sample["confidence"] for sample in samples])) if samples else 0, 3), "shuttleTrackConfidence": round(shuttle_detected / max(sampled, 1), 3)},
             "metrics": [*calculate_metrics(samples, homography is not None, events["events"]), *events["metrics"]],
             "shotDistribution": events["shotDistribution"],
