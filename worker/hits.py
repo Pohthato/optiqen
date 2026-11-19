@@ -149,10 +149,10 @@ def detector_noise(track, times_ms: Sequence[float], tracklets: list[list[int]])
 class _Fitter:
     def __init__(self, track, times_ms, cameras, jitter_px):
         self.track, self.times, self.cameras, self.jitter = track, np.asarray(times_ms, dtype=float), cameras, jitter_px
-        self.cache: dict[tuple[int, int, float], Piece] = {}
+        self.cache: dict[tuple[tuple[int, ...], float], Piece] = {}
 
     def fit(self, indices: list[int], start_ms: float, initial: Sequence[np.ndarray] = ()) -> Piece:
-        key = (indices[0], indices[-1], start_ms)
+        key = (tuple(indices), start_ms)
         if key in self.cache:
             return self.cache[key]
         piece = Piece(list(indices), start_ms)
@@ -444,20 +444,40 @@ def _read(track, times: np.ndarray, cameras, sounds: list[float] | None, jitter_
         where = a.fit.position_at(low) if a.fit is not None else b.fit.position_at(high)
         return _image_meet(track, times, a.indices, b.indices, jitter_px), where
 
+    def continues(i: int, gain: float = SOUND_SPLIT_GAIN) -> bool:
+        """Whether the last flight before piece i, carried on out of view and past any scraps
+        between (another court's shuttle, say), also explains piece i: at a cost within `gain`,
+        counted in how well this clip's flights explain their own detections (noise), since out
+        of view it is the flight model's error that adds up, not the detector's."""
+        before, after = next((piece for piece in reversed(pieces[:i]) if piece.fit is not None), None), pieces[i]
+        if before is None or after.fit is None or times[after.indices[0]] - times[before.indices[-1]] > MAX_FLIGHT_MS:
+            return False
+        joined = fitter.merged(before, after)
+        if joined.fit is None:
+            return False
+        scale = max(noise, fitter.jitter)
+
+        def cost(piece: Piece) -> float:
+            return float(np.sum(np.minimum(fitter.misfits(piece), OUTLIER_SIGMAS * scale) ** 2)) / scale**2
+
+        return cost(joined) - cost(before) - cost(after) < gain
+
     boundaries = []  # [piece index, met, where, sound]
     for i in range(len(pieces) - 1):
         if joinable[i] and (pieces[i].fit is not None or pieces[i + 1].fit is not None):
+            if pieces[i].fit is None or pieces[i + 1].fit is None:
+                # A scrap between two pieces of one flight is no shuttle being hit, on either side
+                # of it; a sound at either side makes a hit there easier to show.
+                after = next((k for k in range(i + 1, len(pieces)) if pieces[k].fit is not None), None)
+                if after is not None:
+                    before = max((k for k in range(after) if pieces[k].fit is not None), default=0)
+                    heard = any(sound is not None for sound in sound_of[before:after])
+                    if continues(after, SOUND_SPLIT_GAIN if heard else FLIGHT_SPLIT_GAIN):
+                        continue
             met, where = meeting(i)
             seen = pieces[i] if pieces[i].fit is not None else pieces[i + 1]
             if _plausible_contact(where, _spread(seen.fit, met if met is not None else float(times[seen.indices[0]]))):
                 boundaries.append([i, met, where, None])
-    def continues(i: int) -> bool:
-        """Whether the flight before piece i, carried on out of view, also explains piece i."""
-        before, after = pieces[i - 1] if i > 0 else None, pieces[i]
-        if before is None or before.fit is None or times[after.indices[0]] - times[before.indices[-1]] > MAX_FLIGHT_MS:
-            return False
-        joined = fitter.merged(before, after)
-        return joined.fit is not None and joined.cost - before.cost - after.cost < SOUND_SPLIT_GAIN
 
     serves = []  # [piece index, first detection, origin, sound, kind]
     for i, piece in enumerate(pieces):

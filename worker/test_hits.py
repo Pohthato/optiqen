@@ -135,6 +135,24 @@ class SoundTests(unittest.TestCase):
         result = find_hits(track, times(len(track)), clip.cameras, onsets)
         self.assertEqual(near(result.hits, gap[1] * 1000, 200.0), [])
 
+    def test_another_courts_shuttle_seen_while_a_flight_is_out_of_view_does_not_split_it(self):
+        # The clear's peak is out of view for 0.7 s, and late in that time another court's
+        # shuttle is seen for a few frames, then a sound comes just before the clear is seen
+        # again. The clear, carried on past that scrap, explains what is seen after it.
+        clear = RALLY.flights[1]
+        peak = (clear.start_time + clear.end_time) / 2
+        gap = (peak - 0.35, peak + 0.35)
+        clip = clip_of(distractor_times=[gap[1] - 0.06])
+        onsets = detect_onsets(clip.audio, SAMPLE_RATE, min_gap_ms=ONSET_GAP_MS)
+        stamps = times(len(clip.cameras))
+        track = [None if gap[0] * 1000 <= t <= gap[1] * 1000 else point for point, t in zip(seen(clip), stamps)]
+        stray = [i for i, t in enumerate(stamps) if t >= (gap[0] + 0.52) * 1000][:5]
+        for k, i in enumerate(stray):
+            track[i] = (300.0 + 4.0 * k, 120.0 + 1.0 * k)
+        result = find_hits(track, stamps, clip.cameras, onsets)
+        self.assertEqual(near(result.hits, gap[1] * 1000, 300.0), [])
+        self.assertEqual(sum(e <= 33 for e in errors(result.hits)), len(TRUTH_MS))
+
 
 class LongVideoTests(unittest.TestCase):
     def test_rallies_apart_are_read_apart_and_all_their_hits_found(self):

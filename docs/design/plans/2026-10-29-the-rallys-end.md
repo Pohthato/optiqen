@@ -279,6 +279,29 @@ Now a hit that no meeting times is as sure as whatever timed it. A hit timed by 
 - **On the five clips, only the spread changed.** The ends and the answers on your labels are the same. The serves are a little less sure, since this laptop reads no sound. A few hits between flights the rally fit did not join are much less sure: Clip 10's at 15.55 s now has its depth to 0.68 m, where it claimed 0.10 m.
 - **The fresh seeds show two wrong calls, and neither is new.** The code from before contacts were held within reach called 3 of 19 wrong on these seeds. Now 2 are wrong, the same two with and without the timing doubt. On seed 14005 a third shot was found after a two-shot rally and called out 2 m from where the rally's last shot came down. On seed 14034 the last shot came down 6 mm inside the line and was called out, though its region held the truth. On the same seeds, holding contacts within reach took the landing error from 0.23 to 0.20 m (median), and the landings inside their 95 % region from 88 % to 94 %.
 
+**A flight out of view is no longer split by another court's shuttle seen meanwhile.** On seed 14005 the far player's lift went out of view near its top for 1.3 s. Late in that time a white object was seen for five frames, too few to fit a flight to, and a sound from the next court came just before the lift was seen again coming down. The edge between those five frames and the lift's fall was taken for a hit, heard and met by flights, and the fall became a third shot from the near side. It came down on the near player's own side, 2.84 m short of the net. The rally's end took it as the last shot and called it out, 2 m from where the real last shot landed.
+
+Two things let it through. Whether the flight before carries on was asked only of the piece next to it, and that was the five frames, which have no flight. And the cost of joining two pieces was counted in the detector's noise, 1.8 px on this clip. Out of view what adds up is the flight model's own error, and this clip's flight noise (1.2 times the median miss of its flights on their own sightings) is 4.8 px. Fitted as one, the lift's two sides cost 162 more than apart in the detector's noise, well over the 40 a sound needs to split a flight. Counted in the flight noise they cost 28.
+
+Now the flight before a piece is the last one fitted, past any scraps too short to fit, and the cost of joining is counted in the clip's flight noise, each sighting's miss capped at six of it as before. A scrap between two pieces that one flight explains is no hit on either side of it. Both sides are decided together: a sound at either side lowers the bar to 40, as it does for any split. The same check decides whether a flight seen again after a long gap, with a sound before it, was hit. The fitter's cache was keyed on a fit's first and last sightings only, so a fit across a scrap and one through it shared an entry. It is now keyed on every sighting.
+
+| Held-out, stressed | Before | Scraps decided by the flight noise (in the app) |
+| --- | --- | --- |
+| Shots (seeds 15000–15059): shots found | 292 of 387 | 297 of 387 |
+| Contact error, p90 (far hitter) | 0.82 m (1.15 m) | 0.78 m (0.88 m) |
+| Near contacts inside their 95 % region | 96.9 % | 97.5 % |
+| Landing error, median | 0.21 m | 0.19 m |
+| Calls made, right | 18 of 18 | 19 of 19 |
+| Hits (seeds 16000–16059): precision / recall | 0.926 / 0.901 | 0.942 / 0.901 |
+| Hits (seeds 17000–17059): precision / recall | 0.904 / 0.897 | 0.923 / 0.897 |
+| Rally ends (seeds 9240–9359): last shot right | 74 of 120 | 74 of 120 |
+
+- **A first version scaled the cost instead of counting it again, and lost a real hit.** Scaling the detector-noise cost down by the noise ratio also scaled down the cap, so a join missing by 82 px cost little more than a good one. And each side of a scrap had its own bar. On seed 16001 a drop was followed by two sightings and then a sound, heard 115 ms after the drop's contact. The side before the two sightings had no sound and was skipped, so the hit was timed by the sound, 78 ms late. Counted again in the flight noise, that join costs 1,125.
+- **Seeds 16000 to 16059 found that fault, so 17000 to 17059 are the clean check.** There 7 false hits went, in six rallies, and no true hit was lost.
+- **On the stressed rally ends no call changed.** Three calls that were too close to call still are, each a little nearer the truth. Two rallies have one shot fewer. On seed 9320 a false hit is gone.
+- **On seed 9253 a real far hit is lost, and the cause is the drag.** The far player's lift went out of view for 0.77 s, and before, a false hit cut it in two. Now the hits are all found, and the shot is fitted as one flight across the gap, at the drag the rally measured from its own flights: 6.66 ± 0.23 m/s, where the truth is 6.16. At that drag the corner camera's line of sight lets the flight start 2.8 m nearer, on the near side of the net, and a flight from the near side going away from the net is no shot. Fitted at the true drag it starts on the far side and misses its sightings by 2.6 px. A drag measured 2.2 standard deviations off is not fixed here.
+- **On the standard world and on the five clips nothing changed.** The standard hits (seeds 16000–16059) and rally ends are the same to the last digit. The clips have the same hits, shots and answers.
+
 ## Decisions
 
 - **The end comes from the flight.** The players' reactions and the sound could add to it later; the flight is what every camera tier sees.
