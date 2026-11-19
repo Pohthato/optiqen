@@ -76,6 +76,7 @@ class RallyFit:
     links: list[tuple[int, float]]  # the hand-overs kept
     meetings: dict[int, tuple[float, float]]  # per kept hand-over (by its flight i): when the flights meet, ms, and its standard deviation
     reaches: list[Reach | None]  # per flight: its hitter's reach, if kept
+    clocked: frozenset[int] = frozenset()  # the flights whose clocks were let free
 
 
 @dataclass
@@ -189,9 +190,23 @@ def fit_rally(
         if short <= clocked:
             break
         clocked |= short
+    return _read(flights, fits, meetings, links, reaches, frozenset(clocked))
+
+
+def refit_as(flights: Sequence[Seen], read: RallyFit, jitter_px: float = 2.0, terminal: float | None = None) -> RallyFit:
+    """The flights refitted together as `read` joined them: its hand-overs, reaches and free
+    clocks, none dropped or let go. At another terminal velocity this shows what the drag alone
+    changes; fit_rally could instead read the rally another way, and its facts would jump."""
+    terminal = flights[0].fit.terminal_velocity if terminal is None and flights else terminal
+    fits, meetings, _ = _fit_together(flights, read.links, jitter_px, terminal, read.reaches, set(read.clocked))
+    return _read(flights, fits, meetings, list(read.links), list(read.reaches), read.clocked)
+
+
+def _read(flights, fits, meetings, links, reaches, clocked) -> RallyFit:
+    """The joint fits of the flights that hand over or are held by a reach; the rest keep their own."""
     held = {k for i, _ in links for k in (i, i + 1)} | {i for i, reach in enumerate(reaches) if reach is not None}
     chosen = [fit if i in held and fit is not None else seen.fit for i, (seen, fit) in enumerate(zip(flights, fits))]
-    return RallyFit(chosen, links, {i: meetings[i] for i, _ in links if i in meetings}, reaches)
+    return RallyFit(chosen, links, {i: meetings[i] for i, _ in links if i in meetings}, reaches, clocked)
 
 
 def _noise(seen: Seen) -> np.ndarray:

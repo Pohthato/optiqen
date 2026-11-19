@@ -35,7 +35,7 @@ from geometry.court_model import (
     SINGLES_WIDTH_M,
 )
 from geometry.flight_fit import INLIER_SIGMAS, FlightFit, _Views, fit_flight
-from geometry.rally_fit import Reach, Seen, at_terminal_velocity, fit_rally
+from geometry.rally_fit import Reach, Seen, at_terminal_velocity, fit_rally, refit_as
 from geometry.rally_fit import terminal_velocity as measure_terminal_velocity
 from geometry.shuttle_physics import GRAVITY
 from hits import OFFSET_AGREEMENT_MS, Hit, _plausible_contact, _spread
@@ -491,7 +491,8 @@ def rally_shots(
             reaches.append(reach_of("near" if contact[1] < NET_Y_M else "far", hits[n].time_ms))
         middle = fit_rally(alone, middle.links, jitter, terminal=drag, reaches=reaches)
     shifted_seen = [Seen(s.times_ms, s.pixels, s.cameras, f) for s, f in zip(seen, middle.flights)]
-    other = fit_rally(at_terminal_velocity(shifted_seen, drag + drag_sigma, jitter), middle.links, jitter, terminal=drag + drag_sigma, reaches=middle.reaches)
+    # At one standard deviation more drag, the rally as it was read: what moves is what the drag moves.
+    other = refit_as(at_terminal_velocity(shifted_seen, drag + drag_sigma, jitter), middle, jitter, terminal=drag + drag_sigma)
     meeting_of = {j + 1: middle.meetings[j] for j, _ in middle.links if j in middle.meetings}  # shot j + 1 starts at that meeting
 
     def facts_of(j: int, fit: FlightFit, shifted: FlightFit, hit_ms: float, timing_sigma: float, hitter: str, serve: bool, ends_ms: float | None) -> ShotFacts:

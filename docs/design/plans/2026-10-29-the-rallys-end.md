@@ -302,6 +302,18 @@ Now the flight before a piece is the last one fitted, past any scraps too short 
 - **On seed 9253 a real far hit is lost, and the cause is the drag.** The far player's lift went out of view for 0.77 s, and before, a false hit cut it in two. Now the hits are all found, and the shot is fitted as one flight across the gap, at the drag the rally measured from its own flights: 6.66 ± 0.23 m/s, where the truth is 6.16. At that drag the corner camera's line of sight lets the flight start 2.8 m nearer, on the near side of the net, and a flight from the near side going away from the net is no shot. Fitted at the true drag it starts on the far side and misses its sightings by 2.6 px. A drag measured 2.2 standard deviations off is not fixed here.
 - **On the standard world and on the five clips nothing changed.** The standard hits (seeds 16000–16059) and rally ends are the same to the last digit. The clips have the same hits, shots and answers.
 
+**The drag's share of each fact's uncertainty is measured on the rally as it was read (2026-11-18).** Each fact's uncertainty takes in a second fit of the rally at one standard deviation more drag. That fit read the rally afresh, so it could drop a hand-over or a reach, or let a clock go, where the first fit had kept them. It then measured another reading of the rally, not the drag. On Clip 9, set up from four corner taps whose camera is 0.08 px from the labelled one, it dropped two hand-overs and a reach. Shot 4's contact went from ±0.1 m to ±1.4 m while its value agreed to the millimetre. Now the second fit keeps the first fit's hand-overs, reaches and free clocks (`geometry.rally_fit.refit_as`), and both cameras give Clip 9 the same uncertainties to the millimetre.
+
+| Held-out (seen seeds) | Before | Refitted as read |
+| --- | --- | --- |
+| Shots (seeds 15000–15059, stressed): near contacts inside their 95 % region | 97.5 % | 97.5 % |
+| Far contacts inside their 95 % region | 97.1 % | 97.1 % |
+| Rally ends (seeds 9240–9359), stressed and standard | | the same to the last digit |
+
+- **On the shots benchmark only the near contacts' coverage moved, by view:** one fewer inside its region from the corner (54 of 57) and one more from the side (44 of 45).
+- **On your clips no rally's end or winner changed,** and Clips 9 and 10 are the same. On Clips 6, 7 and 8, 14 findings changed their uncertainties, most of them narrower. Clip 7's shot 4 now crosses 0.37 ± 0.05 m over the net (±0.23 before), and Clip 8's shot 5 leaves the racket at 26.6 ± 2.3 m/s (±10.8). Two names moved with them: Clip 7's shot 4 from "net or block" to "block or drive" (your label: block), and Clip 8's shot 5 from "cross drop or net" to "cross drop or block" (yours: cross flat drop).
+- **These seeds were seen before.** The fix fits nothing new; it only stops the second fit from reading the rally another way.
+
 ## Decisions
 
 - **The end comes from the flight.** The players' reactions and the sound could add to it later; the flight is what every camera tier sees.

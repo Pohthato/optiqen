@@ -5,7 +5,7 @@ import numpy as np
 
 from geometry.court_model import NET_Y_M
 from geometry.flight_fit import fit_flight
-from geometry.rally_fit import CONTACT_SIGMA_M, TERMINAL_PRIOR_SIGMA, Reach, Seen, fit_rally, terminal_velocity
+from geometry.rally_fit import CONTACT_SIGMA_M, TERMINAL_PRIOR_SIGMA, RallyFit, Reach, Seen, fit_rally, refit_as, terminal_velocity
 from geometry.shuttle_physics import simulate
 from test_flight_fit import observed_flights
 
@@ -60,6 +60,18 @@ class RallyFitTests(unittest.TestCase):
         alone = fit_rally(self.solo[:2], []).flights
         for seen, fit in zip(self.solo[:2], alone):
             np.testing.assert_allclose(fit.position_at(seen.times_ms[-1]), seen.fit.position_at(seen.times_ms[-1]), atol=0.02)
+
+    def test_a_refit_as_a_fit_was_read_keeps_its_hand_overs_reaches_and_clocks(self):
+        # Refitted as it was read, at its own drag, the rally is the same fit.
+        again = refit_as(self.solo, self.result)
+        for fit, joint, seen in zip(again.flights, self.joint, self.solo):
+            np.testing.assert_allclose(fit.position_at(seen.times_ms[0]), joint.position_at(seen.times_ms[0]), atol=1e-3)
+        # At another drag nothing is dropped or let go, so the facts move only as the drag moves them.
+        read = RallyFit(self.joint, self.result.links[1:], {}, [None] * len(self.solo), frozenset({1}))
+        heavier = refit_as(self.solo, read, terminal=self.solo[0].fit.terminal_velocity + TERMINAL_PRIOR_SIGMA)
+        self.assertEqual((heavier.links, heavier.reaches, heavier.clocked), (read.links, read.reaches, read.clocked))
+        self.assertEqual(set(heavier.meetings), {i for i, _ in read.links})
+        self.assertIs(heavier.flights[0], self.solo[0].fit)  # no longer handing over: its own fit
 
     def test_the_landing_of_the_last_flight_is_within_30_cm(self):
         flight, terminal = self.flights[-1][0], self.flights[-1][1]
