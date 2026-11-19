@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { rallySchema } from "./coaching";
 
 export const cornerSchema = z.object({
   label: z.enum(["nearLeft", "nearRight", "farRight", "farLeft"]),
@@ -81,6 +82,8 @@ export const analysisResultSchema = z.object({
     verifiedShots: z.number().int().nonnegative(),
   })).max(48).optional(),
   shots: z.array(shotSchema).max(240).optional(),
+  // The rally analysis (worker/analyse_rally.py) with the findings coaching may phrase.
+  rally: rallySchema.optional(),
   annotatedVideoStorageKey: z.string().min(1).max(768).optional(),
   overlays: z.array(z.object({
     timeMs: z.number().nonnegative(),

@@ -50,3 +50,12 @@ On your five clips, from their saved tracks, every finding has its frames:
 - **Each clip has one finding per shot and one per player.** A shot's finding holds its name as a coach says it ("cross smash", or "net or block" when neither is sure alone), its speed, height and clearance over the net, how hard it made the receiver work, the hitter's body at the hit, where both stood and each player's chance of winning from it. Its sentence gives only the numbers that are sure: a speed whose standard deviation is under half of it, a clearance known to 0.25 m.
 - **Where the rally turned is too close to call on four clips.** On Clip 10 it did not turn: the winner's last shot left the near player time to spare (100 %).
 - **A shot's sentence does not say how the last shot came down.** The end says it once, from the rally's end, which also knows whether the shuttle got over the net.
+
+### 8b: coaching that cites its findings
+
+`server/coaching.ts` gives the coach the findings and checks its reply. `server/deepseek.ts` uses it whenever a result carries findings (`rally.findings`). A result without them is coached as before, and the prompt preview shows whichever prompt is sent.
+
+- **The written bad replies are dropped in full, each with its reason.** They name no finding, or one the analysis did not find; give a number no cited finding holds; state as fact a finding that was too close to call; or talk of injury. A good reply passes in full.
+- **A number passes when a cited finding holds it as said:** rounded to the digits given, a chance as a percentage (0.99 as 99 %), a time in milliseconds as seconds, and the shot and frame numbers. A heading, or any line with no cite, is dropped like any other sentence.
+- **When nothing passes, the findings' own sentences are shown:** how the rally ended, how it was won, where it turned and the player's own finding, each with its ID. Under the text it says how many sentences were left out.
+- **No reply from the live model has been checked yet.** That comes when app jobs carry findings (8d).

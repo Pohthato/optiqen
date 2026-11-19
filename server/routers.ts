@@ -2,7 +2,7 @@ import { COOKIE_NAME } from "@shared/const";
 import { TRPCError } from "@trpc/server";
 import { nanoid } from "nanoid";
 import { z } from "zod";
-import { AnalysisResult, CourtCorner, CourtType, buildCoachingPrompt, validateCalibration } from "./analysis";
+import { AnalysisResult, CourtCorner, CourtType, validateCalibration } from "./analysis";
 import { analysisResultSchema, cornerSchema } from "./analysisSchema";
 import { submitAnalysisWorkerJob, submitWorkerWarmup } from "./analysisWorker";
 import { reconcileAnalysisWorkerJob } from "./analysisCompletion";
@@ -10,7 +10,7 @@ import { authRouter } from "./auth";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { createAnalysisSession, getAnalysisSessionForUser, listAnalysisSessionsForUser, updateAnalysisSessionForUser } from "./db";
-import { requestDeepSeekCoaching } from "./deepseek";
+import { coachingPrompt, requestDeepSeekCoaching } from "./deepseek";
 import { storageCreateUploadUrl, storageGetSignedUrl } from "./storage";
 
 const permittedVideoTypes = ["video/mp4", "video/quicktime", "video/webm"] as const;
@@ -80,7 +80,7 @@ export const appRouter = router({
   }),
   coach: router({
     previewPrompt: protectedProcedure.input(z.object({ player: z.enum(["near", "far"]), result: analysisResultSchema, question: z.string().trim().max(1_200).optional() })).query(({ input }) => {
-      return buildCoachingPrompt({ player: input.player, calibration: input.result.calibration, result: input.result as AnalysisResult, question: input.question });
+      return coachingPrompt({ player: input.player, calibration: input.result.calibration, result: input.result as AnalysisResult, question: input.question });
     }),
     chat: protectedProcedure.input(z.object({ player: z.enum(["near", "far"]), result: analysisResultSchema, question: z.string().trim().min(1).max(1_200) })).mutation(async ({ input }) => {
       const result = input.result as AnalysisResult;
