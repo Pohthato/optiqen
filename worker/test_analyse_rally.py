@@ -179,6 +179,15 @@ class AnalyseRallyTests(unittest.TestCase):
         self.assertAlmostEqual(sum(turn["pAt"]) + turn["pNoTurn"], 1.0, delta=0.01)
         self.assertTrue(turn["call"] in ("no turn", "too close to call") or 2 <= turn["call"] <= len(shots))
 
+    def test_the_findings_say_what_was_found_and_the_frames_it_was_seen_in(self):
+        found, shots, end = self.result["findings"], self.result["shots"], self.result["summary"]["end"]
+        self.assertEqual([f["id"] for f in found], [f"F{i}" for i in range(1, len(found) + 1)])
+        self.assertEqual([f["shots"] for f in found if f["kind"] == "shot"], [[shot["shot"]] for shot in shots])
+        self.assertEqual([f["call"] for f in found if f["kind"] == "end"], [end["call"]])
+        frames = len(SIM.clip.cameras)
+        for f in found:
+            self.assertTrue(f["evidence"] and all(0 <= e["frame"] < frames for e in f["evidence"]), f)
+
     def test_without_the_pose_model_or_with_poses_of_other_frames_there_are_no_players(self):
         cameras, times_ms = [None] * 3, [0.0, 33.3, 66.7]
         bodies, why = find_players(self.video, self.root / "clip.track.json", self.root / "none.poses.json", True, self.root / "missing.task", cameras, times_ms)

@@ -21,7 +21,8 @@ players stood at each hit, and the end with the landing's uncertainty. The summa
 with its chances, how the rally was won and where it turned (rally_reasoning.py), where it turned
 by the value (rally_value.py), and the hits
 are the rally's own: those after the shot that ended it are left out (the shuttle on the floor,
-picked up or sent back). The shuttle's drag (terminal velocity) is measured from the rally's own
+picked up or sent back). The findings are what coaching may say, each with the frames it was
+seen in (findings.py). The shuttle's drag (terminal velocity) is measured from the rally's own
 long flights unless given: measured once over a whole session's rallies it is surer, and close
 line calls sharpen with it.
 """
@@ -42,6 +43,7 @@ import rally_value
 import track_camera
 from body import BodyFacts, arm_reach, rally_body_facts, standing_at, standing_reach
 from find_hits import hear, hits_document, load_detections, rounded
+from findings import findings
 from geometry.camera import Camera
 from geometry.court_model import COURT_LENGTH_M, DOUBLES_MARGIN_M, NET_Y_M, SINGLES_WIDTH_M, court_lines, net_tape_lines
 from geometry.rally_fit import Reach
@@ -460,7 +462,9 @@ def main(argv: list[str] | None = None) -> int:
         for number, (shot, name, fact, at, on_them, p) in enumerate(zip(shots, names, facts, stood, pressures, values), start=1)
     ]
     result["sources"] = {"track": Path(track_path).name, "shuttle": Path(shuttle_path).name, "poses": Path(poses_path).name if bodies is not None else None}
-    args.out.write_text(json.dumps(_clean(result), allow_nan=False), encoding="utf-8")
+    document = _clean(result)
+    document["findings"] = findings(document, times_ms)
+    args.out.write_text(json.dumps(document, allow_nan=False), encoding="utf-8")
     if args.diagram:
         cv2.imwrite(str(args.diagram), draw_diagram(shots, args.court, stood if bodies is not None else None, names, end))
     if args.overlay:
