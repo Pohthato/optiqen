@@ -9,10 +9,10 @@ from scipy.stats import chi2
 from audio.onsets import detect_onsets
 from geometry.camera import Camera
 from geometry.court_model import COURT_LENGTH_M, DOUBLES_MARGIN_M, LONG_SERVICE_INSET_M, NET_Y_M, SHORT_SERVICE_M, SINGLES_WIDTH_M
-from geometry.flight_fit import FlightFit
+from geometry.flight_fit import FlightFit, fit_flight
 from geometry.shuttle_physics import FEATHER_TERMINAL_VELOCITY, simulate, solve_launch, time_at_height
 from hits import OFFSET_AGREEMENT_MS, ONSET_GAP_MS, Hit, Piece, find_hits
-from shots import CALIBRATION_SCALE, LYING_MS, Estimate, Landing, _a_shot, _judged, _last_of_rally, _may_be_on_the_net, _may_be_sent_back, _not_to_be_called, _played_again, _timing_sigma, _went_on, call_landing, flight_facts, landing_area, net_height_m, rally_end, rally_shots
+from shots import CALIBRATION_SCALE, LYING_MS, Estimate, Landing, _a_shot, _judged, _last_of_rally, _may_be_on_the_net, _may_be_sent_back, _not_to_be_called, _own_shot_still_coming, _played_again, _timing_sigma, _went_on, call_landing, flight_facts, landing_area, net_height_m, rally_end, rally_shots
 from simulation.audio import SAMPLE_RATE
 from simulation.clip import make_clip
 from simulation.rally import Shot, build_rally
@@ -274,6 +274,18 @@ class RallyEndTests(unittest.TestCase):
         self.assertFalse(_a_shot(replace(clear, flight_ms=6.0)))  # it was on the floor already
         self.assertFalse(_a_shot(replace(short, speed_m_s=Estimate(4.0, 0.1), flight_ms=1900.0)))  # nothing takes so long and stops short of the net
 
+    def test_nobody_plays_their_own_shot_again_before_it_crosses_the_net(self):
+        def flight(p0, v0):
+            return FlightFit(0.0, np.array(p0, dtype=float), np.array(v0, dtype=float), FEATHER_TERMINAL_VELOCITY, np.eye(6) * 1e-4, 1.0, 20, 20)
+
+        drop = flight([4.7, 12.4, 2.9], [0.6, -6.0, 0.0])  # the far player's, 0.5 m up and 2.5 m short of the net at 0.8 s
+        smash = flight([4.7, 12.4, 2.9], [0.0, -25.0, -5.0])  # over the net by 0.5 s, still up
+        self.assertTrue(_own_shot_still_coming(drop, "far", "far", 800.0))  # the net, or a kink in the flight
+        self.assertFalse(_own_shot_still_coming(drop, "far", "near", 800.0))  # the reply
+        self.assertFalse(_own_shot_still_coming(smash, "far", "far", 500.0))  # a reply was missed
+        self.assertFalse(_own_shot_still_coming(drop, "far", "far", 1500.0))  # no shot takes this long to the net
+        self.assertFalse(_own_shot_still_coming(flight([2.0, 9.0, 1.0], [0.0, -3.0, -2.0]), "far", "far", 800.0))  # down already
+
     def test_a_shot_short_of_the_net_ended_the_rally_when_its_own_side_hit_long_after(self):
         short = replace(self.landed([2.0, 5.0, 1.0], [0.0, 2.0, 1.0]), landing=None)
         self.assertIsNone(short.net)
@@ -370,6 +382,29 @@ class RallyTests(unittest.TestCase):
         shots = rally_shots(analysis, seen(clip), times(len(clip.cameras)), clip.cameras, court="singles")
         self.assertEqual(shots[-2].hitter, shots[-1].hitter)
         self.assertIsNone(shots[-1].landing)
+
+    def test_a_silent_kink_just_after_a_heard_hit_is_no_hit(self):
+        # The far player's reply seen to bend 250 ms after it was hit, still short of the net, with
+        # no sound there: nobody plays their own shot again before it crosses, and only the first
+        # was heard. Heard too, nothing tells which of the two is false, and both are kept.
+        clip, analysis = self.analysed()
+        track, stamps = seen(clip), np.asarray(times(len(clip.cameras)), dtype=float)
+        hit = analysis.hits[5]
+        k = next(k for k, piece in enumerate(analysis.flights) if hit.frame in piece.indices)
+        piece = analysis.flights[k]
+        cut = next(i for i, frame in enumerate(piece.indices) if stamps[frame] > hit.time_ms + 250.0)
+        before, after = piece.indices[:cut], piece.indices[cut:]
+
+        def fitted(part):
+            return fit_flight(stamps[part], np.array([track[i] for i in part], dtype=float), [clip.cameras[i] for i in part])
+
+        analysis.flights[k : k + 1] = [Piece(before, piece.start_ms, fitted(before)), Piece(after, float(stamps[after[0]]), fitted(after))]
+        kink_ms = float(stamps[after[0]]) - 10.0
+        analysis.hits.append(Hit(kink_ms, None, kink_ms, "flights", None, after[0], 10.0))
+        shots = rally_shots(analysis, track, stamps, clip.cameras, court="singles")
+        self.assertEqual([s.hitter for s in shots], [c.hitter for c in RALLY.contacts])
+        analysis.hits[-1] = replace(analysis.hits[-1], heard_ms=kink_ms)
+        self.assertEqual(len(rally_shots(analysis, track, stamps, clip.cameras, court="singles")), len(RALLY.contacts) + 1)
 
     def test_a_sound_while_the_last_flight_was_out_of_sight_may_be_its_reply(self):
         # A rally ending in a deep clear, lost while still up but seen well beyond the net: surely

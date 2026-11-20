@@ -314,6 +314,22 @@ Now the flight before a piece is the last one fitted, past any scraps too short 
 - **On your clips no rally's end or winner changed,** and Clips 9 and 10 are the same. On Clips 6, 7 and 8, 14 findings changed their uncertainties, most of them narrower. Clip 7's shot 4 now crosses 0.37 ± 0.05 m over the net (±0.23 before), and Clip 8's shot 5 leaves the racket at 26.6 ± 2.3 m/s (±10.8). Two names moved with them: Clip 7's shot 4 from "net or block" to "block or drive" (your label: block), and Clip 8's shot 5 from "cross drop or net" to "cross drop or block" (yours: cross flat drop).
 - **These seeds were seen before.** The fix fits nothing new; it only stops the second fit from reading the rally another way.
 
+**Nobody plays their own shot again before it crosses the net (2026-11-19).** On Clip 7 set up from four corner taps (Phase 8, 8d), a hit by the far player was found at 16.92 s, while the far player's own last shot was still 0.8 m short of the net and 0.7 m up. Its flight was cut there, so it never came down and the rally got no end. Now, when a hit from the same side comes within a second of the shot before it, with that shot still up and short of the net, one of the two is false. The later one is dropped when its own flight more likely stays on its side (the shuttle meeting the net), or when the hit before was heard and it was not (a kink seen in one flight). Otherwise both are kept, since either may be the false one. From the four taps Clip 7 now has 16 shots, ends in the net (100 %) and the near player wins, as from the labelled camera.
+
+| Held-out | Before | Same-side rule |
+| --- | --- | --- |
+| Rally ends, stressed, seeds 9360–9479 (fresh): last shot right | 79 of 120 | 80 of 120 |
+| Rally ends, standard, seeds 9360–9479 (fresh) | | the same to the last digit |
+| Shots, stressed, seeds 18000–18059 (fresh) | | the same to the last digit |
+| Rally ends, stressed, seeds 9240–9359 (seen): last shot right | 74 of 120 | 76 of 120 |
+| Rally ends, standard, seeds 9240–9359 (seen) | | the same to the last digit |
+
+- **A first version dropped every such later hit, and lost a real one.** On seed 9342 a false far hit came first, 0.6 s before the real far hit, and the real one was dropped. Of the two rules now, the first keeps a later hit whose flight gets over the net, and the second needs a sound to tell them apart. Seed 9342 is as before.
+- **On the fresh seeds two rallies change, and no call.** On seed 9379 a false far hit just after the far player's real last shot, its flight going into the net, is gone, and the last shot is now the right one. On seed 9451 a real near hit is dropped: its contact had been read on the far side, so it was a far hit with a flight into the net, already wrong before. Neither rally's end was seen.
+- **On the seen seeds,** seeds 9317 and 9334 now have the right last shot: each lost a kink seen 200 to 300 ms after a heard far hit. The sound rule was written after looking at them.
+- **Your clips with the labelled cameras do not change.** They were analysed without their sound (no ffmpeg on this laptop), so only the first rule can act, and it finds nothing.
+- **The fresh seeds 9360–9479 and 18000–18059 are now seen.** The next fresh rally ends start at 9480, shots and hits at 18060.
+
 ## Decisions
 
 - **The end comes from the flight.** The players' reactions and the sound could add to it later; the flight is what every camera tier sees.

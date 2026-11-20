@@ -99,3 +99,14 @@ From four taps where the labelled camera puts the corners (so this checks the jo
 - **Clip 7: the far player's last shot is cut short by a hit of their own.** At 16.92 s, with the shuttle 0.8 m short of the net and 0.7 m up, a hit by the same far player is found. The flight is cut there, so it never comes down and the rally gets no end. With the labelled camera that moment was not taken for a hit. A player cannot play their own shot again before it has crossed the net, and the shot-building does not yet use that.
 - **Clip 9: some uncertainties jump while the values stay put.** Shot 4's contact agrees to the millimetre, yet its standard deviation went from 0.1 m to 1.4 m, so its sentence lost its speed and clearance. Each fact's uncertainty takes in a refit of the rally at one standard deviation more drag. Under this camera that refit dropped two hand-overs and a reach, so it measured another reading of the rally, not the drag.
 - **No reply from the live model has been checked yet.** That needs a job run on RunPod with the new image.
+
+**Both weaknesses are fixed (2026-11-19), and four taps now give the labelled camera's rallies.** Clip 9's refit at more drag now keeps the rally as it was read, and a hit from the same side before the shot before it has crossed the net is dropped when its flight more likely stays on its side (both in the rally's end plan). The same four taps again, against the labelled cameras' analyses with the same code:
+
+| Clip | Shots | How it ended | Same sentence |
+| --- | --- | --- | --- |
+| 6 | 15 and 15 | the same: too close to call, net 90 % | 18 of 21 |
+| 7 | 16 and 16 | the same: net (100 %), near player won | 8 of 22 |
+| 8 | 13 and 13 | the same: too close to call, out 58 % and 59 % | 14 of 19 |
+| 9 | 8 and 8 | the same: too close to call, out 53 % | 9 of 14 |
+
+- **Every sentence that differs does so only in its numbers,** each by at most a quarter of its stated uncertainty (the largest: Clip 7's shot 14 at 23.8 against 24.7 ± 5.0 m/s). Four taps are not the labelled court points, and a camera a few hundredths of a pixel away moves the last digits. The job's path does not.

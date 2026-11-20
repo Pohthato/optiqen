@@ -562,8 +562,19 @@ def rally_shots(
         if not _plausible_contact(contact, _spread(fit, max(hit_ms, fit.start_ms))):
             continue  # no racket can be there: this flight is not what it seems (a missed hit inside it)
         hitter = "near" if contact[1] < NET_Y_M else "far"
-        if _a_shot(flight_facts(fit, hit_ms, hitter, court)):
-            racket.append((j, n, fit, shifted, hit_ms, timing_sigma, hitter))
+        facts = flight_facts(fit, hit_ms, hitter, court)
+        if not _a_shot(facts):
+            continue
+        if racket and _own_shot_still_coming(racket[-1][2], racket[-1][6], hitter, hit_ms) and (
+            facts.landing is not None and facts.landing.p_over_net < 0.5
+            or hits[racket[-1][1]].heard_ms is not None and hits[n].heard_ms is None
+        ):
+            # Nobody plays their own shot again before it crosses. This hit is no racket's when its
+            # flight more likely stays on its side (the shuttle meeting the net), or when the hit
+            # before was heard and this one was not (a kink seen in one flight). Otherwise both
+            # are kept: either may be the false one.
+            continue
+        racket.append((j, n, fit, shifted, hit_ms, timing_sigma, hitter))
 
     doubtful_ms.extend(hits[n].time_ms for n, _, _, _ in shot_flights if n not in {entry[1] for entry in racket})
     doubtful_ms.sort()
@@ -674,6 +685,17 @@ def _played_again(fit: FlightFit, hit_ms: float, hitter: str, seen: FlightFit | 
         and side * leaving[1] <= -MIN_BACK_M_S
         and np.linalg.norm(leaving) >= MIN_LAUNCH_M_S
     )
+
+
+def _own_shot_still_coming(fit: FlightFit, hitter: str, next_hitter: str, next_ms: float) -> bool:
+    """Whether a hit from `next_hitter`'s side at `next_ms` comes while `hitter`'s own shot (its
+    flight `fit`) is still up and short of the net. A player cannot play their own shot again
+    before it has crossed, so one of the two hits is no racket's: the shuttle meeting the net,
+    or a kink seen in one flight."""
+    if next_hitter != hitter or next_ms - fit.start_ms > TO_THE_NET_S * 1000.0:
+        return False
+    _, y, z = fit.position_at(next_ms)
+    return z > 0.0 and (y - NET_Y_M) * (1.0 if hitter == "near" else -1.0) < 0.0
 
 
 def _a_shot(facts: ShotFacts) -> bool:
