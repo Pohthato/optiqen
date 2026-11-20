@@ -323,12 +323,30 @@ Now the flight before a piece is the last one fitted, past any scraps too short 
 | Shots, stressed, seeds 18000–18059 (fresh) | | the same to the last digit |
 | Rally ends, stressed, seeds 9240–9359 (seen): last shot right | 74 of 120 | 76 of 120 |
 | Rally ends, standard, seeds 9240–9359 (seen) | | the same to the last digit |
+| Shots, stressed, seeds 15000–15059 (seen): net clearances measured | 296 | 297 (seed 15047 lost a false shot) |
 
 - **A first version dropped every such later hit, and lost a real one.** On seed 9342 a false far hit came first, 0.6 s before the real far hit, and the real one was dropped. Of the two rules now, the first keeps a later hit whose flight gets over the net, and the second needs a sound to tell them apart. Seed 9342 is as before.
 - **On the fresh seeds two rallies change, and no call.** On seed 9379 a false far hit just after the far player's real last shot, its flight going into the net, is gone, and the last shot is now the right one. On seed 9451 a real near hit is dropped: its contact had been read on the far side, so it was a far hit with a flight into the net, already wrong before. Neither rally's end was seen.
 - **On the seen seeds,** seeds 9317 and 9334 now have the right last shot: each lost a kink seen 200 to 300 ms after a heard far hit. The sound rule was written after looking at them.
 - **Your clips with the labelled cameras do not change.** They were analysed without their sound (no ffmpeg on this laptop), so only the first rule can act, and it finds nothing.
 - **The fresh seeds 9360–9479 and 18000–18059 are now seen.** The next fresh rally ends start at 9480, shots and hits at 18060.
+
+**The rally's drag states its uncertainty honestly (2026-11-19).** Seed 9253 lost a real far hit because its drag was measured 2.2 standard deviations off, and that raised the question whether the stated deviation is too small. On the 120 seen rally ends, each rally's measured drag against its true one:
+
+| Rally ends, seeds 9240–9359 | Measured | Within 1 sd | Within 2 sd | rms of error / sd | Mean error |
+| --- | --- | --- | --- | --- | --- |
+| Stressed | 113 of 120 | 72 % | 96 % | 0.93 | +0.05 m/s |
+| Standard | 111 of 120 | 86 % | 99 % | 0.62 | +0.09 m/s |
+
+- **The deviation holds in the stressed world and is cautious in the standard one.** Seed 9253 is one of the 4 % beyond two deviations, about as many as there should be. Nothing was changed.
+- **The drag leans a little high,** by a quarter to a third of its deviation. In the standard world every shuttle's drag is 6.7 m/s, the centre of the prior, and the measurement still comes out 0.09 m/s high on average. It is noted, not fixed.
+
+**The fresh seeds called four winners wrong in the stressed world,** the same with and without the same-side rule. Standard (seeds 9360–9479): in 22 of 23, out 24 of 24, net 7 of 7, winner 53 of 53. Stressed: in 20 of 21, out 15 of 15, net 5 of 5, winner 37 of 41. The four:
+
+- **Seeds 9447 and 9459, from behind: the shuttle meeting the net is read as a flight going on,** as on seed 9223. On 9447 the near player's last shot is fitted clearing the net by 0.29 ± 0.07 m and called in at 100 %. On 9459 the far player's last shot clears it by 0.76 ± 0.18 m in the fit, and the shuttle falling down the net becomes a silent near hit into the net.
+- **Seed 9471, from behind: a shot into the net is answered.** The far player's last shot is fitted into the net (−0.89 ± 0.09 m). The near player sends the shuttle back 0.4 s later, after the rally, and that hit is taken for its reply. Nobody can answer a shot that did not cross the net, and the shot-building does not use that yet.
+- **Seed 9470, from the side: the shuttle is seen in 26 of its 216 frames.** Only the serve is found, and the winner is called at 98 % from it.
+- **So the stressed winners miss the proposed gate on fresh seeds:** 37 of 41 is 90 %, against 95 %.
 
 ## Decisions
 
