@@ -348,6 +348,28 @@ Now the flight before a piece is the last one fitted, past any scraps too short 
 - **Seed 9470, from the side: the shuttle is seen in 26 of its 216 frames.** Only the serve is found, and the winner is called at 98 % from it.
 - **So the stressed winners miss the proposed gate on fresh seeds:** 37 of 41 is 90 %, against 95 %.
 
+**Nobody answers a shot read deep in the net (2026-11-22).** Seed 9471 above is now called right. A shot read at least four of its standard deviations below the tape, and not seen beyond the net, ends the rally even when a hit follows from the other side. Where it came down is then followed without asking whether it was played back.
+
+The bar came from a first version that used the call's own 95 %, 1.6 deviations below the tape. On the seeds already looked at, 9240–9599, it changed ten rallies:
+
+| Seed | World | Read below the tape | First version | Four deviations |
+| --- | --- | --- | --- | --- |
+| 9471 | stressed | 0.89 ± 0.09 m (9.9 sd) | wrong winner made right | the same |
+| 9599 | standard | 1.24 ± 0.12 m (10 sd) | net and winner called, both right | the same |
+| 9323 | standard | 1.26 ± 0.23 m (5.5 sd) | wrong winner made right | the same |
+| 9411 | both | 0.32 ± 0.11 m (2.9 sd) | net and winner called, both right | as before |
+| 9415 | standard | 0.48 ± 0.24 m (2.0 sd) | winner called, right | as before: too close |
+| 9543 | standard | 0.68 ± 0.29 m (2.3 sd); it crossed | rally cut two shots short | as before |
+| 9250 | stressed | 0.31 ± 0.15 m (2.1 sd); it crossed | a right out call lost | as before |
+| 9349 | both | 0.34 ± 0.18 m (1.9 sd); a deep clear, out | called net, wrongly, twice | as before: no end |
+
+- **Between 1.9 and 2.9 deviations below the tape, shots that met the net and shots that crossed are read alike.** No bar there separates them, and a shot that crossed but is taken for a net shot is called net at 97 %: the kind of wrong call the gate counts.
+- **The clearance's deviation has long tails.** Of the 607 shots that crossed on the seen shots seeds (15000–15059 and 18000–18059, stressed), 2.8 % were read more than 2.33 deviations low, against 1 % if the deviation held, and 0.7 % more than 4 deviations low, against almost none. Four were read below the tape by more than 1.6 deviations, all of them lifts; the deepest was 2.9.
+- **So the bar is four deviations** (`shots.INTO_THE_NET_SIGMAS`). The hit from the other side counts as evidence that the shot crossed. The three rallies read 5.5 deviations or more below the tape keep their right calls; the rest go back to what they were.
+- **On fresh seeds the rule did not act.** Rally ends 9600–9719, stressed and standard, and shots 18120–18179 come out the same to the last digit with and without it. Stressed: in 15 of 16, out 21 of 21, net 4 of 4, winner 36 of 37 (seed 9634, from a corner, an out called in). Standard: in 22 of 22, out 24 of 24, net 7 of 7, winner 51 of 51. Shots: calls 12 of 12.
+- **So it is worth three rallies in the 720 seen ones, and none in the 240 fresh ones.**
+- **Seeds 9480–9719 and 18060–18179 are now seen.** The next fresh rally ends start at 9720, shots and hits at 18180.
+
 ## Decisions
 
 - **The end comes from the flight.** The players' reactions and the sound could add to it later; the flight is what every camera tier sees.

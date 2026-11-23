@@ -12,7 +12,7 @@ from geometry.court_model import COURT_LENGTH_M, DOUBLES_MARGIN_M, LONG_SERVICE_
 from geometry.flight_fit import FlightFit, fit_flight
 from geometry.shuttle_physics import FEATHER_TERMINAL_VELOCITY, simulate, solve_launch, time_at_height
 from hits import OFFSET_AGREEMENT_MS, ONSET_GAP_MS, Hit, Piece, find_hits
-from shots import CALIBRATION_SCALE, LYING_MS, Estimate, Landing, _a_shot, _judged, _last_of_rally, _may_be_on_the_net, _may_be_sent_back, _not_to_be_called, _own_shot_still_coming, _played_again, _timing_sigma, _went_on, call_landing, flight_facts, landing_area, net_height_m, rally_end, rally_shots
+from shots import CALIBRATION_SCALE, LYING_MS, Estimate, Landing, _a_shot, _judged, _last_of_rally, _may_be_on_the_net, _may_be_sent_back, _not_to_be_called, _own_shot_still_coming, _played_again, _surely_into_the_net, _timing_sigma, _went_on, call_landing, flight_facts, landing_area, net_height_m, rally_end, rally_shots
 from simulation.audio import SAMPLE_RATE
 from simulation.clip import make_clip
 from simulation.rally import Shot, build_rally
@@ -291,6 +291,16 @@ class RallyEndTests(unittest.TestCase):
         self.assertIsNone(short.net)
         self.assertEqual(_last_of_rally([short, replace(short, hit_ms=short.hit_ms + 2000.0)]), 0)  # picked up and sent back
         self.assertEqual(_last_of_rally([short, replace(short, hit_ms=short.hit_ms + 200.0)]), 1)  # a split in the middle of a flight
+
+    def test_nobody_answers_a_shot_that_met_the_net_below_the_tape(self):
+        net = replace(self.landed([2.5, 5.0, 1.0], [0.0, 9.0, 1.2]), landing=None)  # low and flat: it meets the net
+        sent_back = replace(net, hit_ms=net.hit_ms + 400.0, hitter="far")
+        self.assertTrue(_surely_into_the_net(net))
+        self.assertEqual(_last_of_rally([net, sent_back]), 0)  # after the rally
+        self.assertEqual(_last_of_rally([replace(net, seen_over=True), sent_back]), 1)  # seen beyond it: it got over
+        unsure = replace(net, net=replace(net.net, clearance_m=Estimate(-0.3, 0.1)))
+        self.assertFalse(_surely_into_the_net(unsure))  # read 3 sigmas below: low lifts that got over are read so
+        self.assertEqual(_last_of_rally([unsure, sent_back]), 1)  # it may have got over, and been answered
 
     def test_a_shot_did_not_end_the_rally_when_the_hits_went_on(self):
         p0 = np.array([2.5, 3.0, 2.5])

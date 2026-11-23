@@ -58,6 +58,7 @@ SHORT_OF_NET_M = 3.0  # no shot comes down this far short of the net: it is the 
 SEEN_PAST_NET_M = 1.5  # a flight still seen this far beyond the net got over it: the net stops what it meets
 NET_MARGIN_M = 0.3  # how far outside the net's outline, in the image, a sighting may still be on the net
 TO_THE_NET_S = 1.0  # no shot takes longer to reach the net
+INTO_THE_NET_SIGMAS = 4.0  # a shot read this many sigmas below the tape met the net, whatever came after: low lifts that crossed were read up to 2.9 below
 MIN_FLIGHT_MS = 100.0  # no shot comes down sooner
 LYING_MS = 800.0  # a shuttle that came down lies at least this long before anyone picks it up
 HITS_AFTER_THE_END = 2  # the most a rally's end leaves behind (the shuttle falling, picked up, sent back)
@@ -603,9 +604,11 @@ def rally_shots(
         return shots
     if shots[end].landing is None:
         # Nothing after it was a reply (a flight that is no shot, or one from beyond a net it
-        # never crossed): it is followed on to where it came down, unless it was played back.
+        # never crossed): it is followed on to where it came down, unless it was played back,
+        # which one that met the net below the tape was not.
         j, fit, shifted, hit_ms, timing_sigma, hitter, serve = made[end]
-        shots[end] = followed(j, fit, shifted, hit_ms, timing_sigma, hitter, serve, replied(j, fit, hit_ms, hitter))
+        back_ms = None if _surely_into_the_net(shots[end]) else replied(j, fit, hit_ms, hitter)
+        shots[end] = followed(j, fit, shifted, hit_ms, timing_sigma, hitter, serve, back_ms)
     # Before the end the shuttle was played on, so none of those shots landed; nor did the last
     # one found when the rally went on without any more shots being made out, or when it may be
     # the shuttle sent back, which says nothing of the rally.
@@ -647,9 +650,10 @@ def _went_on(shot: ShotFacts, hits_ms: list[float]) -> bool:
 def _last_of_rally(shots: list[ShotFacts], hits_ms: list[float] = ()) -> int | None:
     """The rally's last shot: the first that came down, unless it got over the net and its own
     hitter played again soon after (the other player's hit in between was missed), or the hits
-    went on; or the first that the next could not have replied to, because it never reached the
-    net before the next was hit, from the other side or, later than any shot takes to reach it,
-    from its own (the shuttle stayed on this side), or because the next came too long after;
+    went on; or the first that the next could not have replied to: it never reached the net, or
+    surely met it below the tape, and the next was hit from the other side; it never reached the
+    net and the next came from its own side later than any shot takes to reach it (the shuttle
+    stayed on this side); or the next came too long after;
     otherwise the last one."""
     for i, shot in enumerate(shots):
         after = shots[i + 1] if i + 1 < len(shots) else None
@@ -662,9 +666,19 @@ def _last_of_rally(shots: list[ShotFacts], hits_ms: list[float] = ()) -> int | N
                 return i
         elif after is not None:
             gap_ms = after.hit_ms - shot.hit_ms
-            if (shot.net is None and (after.hitter != shot.hitter or gap_ms > TO_THE_NET_S * 1000.0)) or gap_ms > RALLY_GAP_S * 1000.0:
+            short = shot.net is None or _surely_into_the_net(shot)
+            if (short and after.hitter != shot.hitter) or (shot.net is None and gap_ms > TO_THE_NET_S * 1000.0) or gap_ms > RALLY_GAP_S * 1000.0:
                 return i
     return len(shots) - 1 if shots else None
+
+
+def _surely_into_the_net(shot: ShotFacts) -> bool:
+    """Whether the shot met the net below the tape so surely that a hit from the other side, which
+    says it crossed, was after the rally: nobody there can have answered it."""
+    if shot.net is None or shot.seen_over:
+        return False
+    clearance = shot.net.clearance_m
+    return clearance.value < -INTO_THE_NET_SIGMAS * max(clearance.sigma, 1e-6)
 
 
 def _played_again(fit: FlightFit, hit_ms: float, hitter: str, seen: FlightFit | None, seen_ms: float) -> bool:
