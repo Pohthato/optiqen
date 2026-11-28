@@ -370,6 +370,20 @@ The bar came from a first version that used the call's own 95 %, 1.6 deviations 
 - **So it is worth three rallies in the 720 seen ones, and none in the 240 fresh ones.**
 - **Seeds 9480–9719 and 18060–18179 are now seen.** The next fresh rally ends start at 9720, shots and hits at 18180.
 
+**A shuttle seen lying far from where its flight came down did not land there (2026-11-28).** From behind, a shuttle falling down the net looks like the flight going on beyond it, as on seeds 9447 and 9459. The fit brings it down deep in the far half, and the flight's own sightings then find it lying at the net's foot. When several of them, in the 800 ms after the flight came down, are on the floor more than 3 m from where it did (`shots._lying_elsewhere`, the same 3 m beyond which a landing is not called), the flight did not land there and its landing is not called.
+
+On the 960 seen rally ends, seeds 9240–9719 in both worlds, it changed four rallies and lost no right call:
+
+| Seed | World | True end | Before | Now |
+| --- | --- | --- | --- | --- |
+| 9447 | stressed | net | in at 100 %, wrong winner | no end |
+| 9579 | stressed | net | in at 100 %, wrong winner | no end |
+| 9591 | both | net | in at 100 % (the winner right by chance) | no end |
+| 9495 | standard | net | too close to call | no end |
+
+- **Seed 9459 is not changed.** Its shuttle falling down the net becomes a silent hit of its own, which this rule does not look at.
+- **On the fresh seeds 9720–9839 it changed nothing**, in either world.
+
 ## Decisions
 
 - **The end comes from the flight.** The players' reactions and the sound could add to it later; the flight is what every camera tier sees.

@@ -385,6 +385,23 @@ class RallyTests(unittest.TestCase):
         analysis.flights.append(Piece(frames, float(stamps[frames[0]])))
         self.assertIsNone(rally_shots(analysis, track, stamps, clip.cameras, court="singles")[-1].landing)
 
+    def test_a_flight_whose_own_sightings_find_the_shuttle_lying_far_off_did_not_come_down_there(self):
+        # From behind the court a shuttle falling down the net looks like the flight going on
+        # beyond it: the fit brings it down deep, and the flight's own sightings then find it
+        # lying at the net's foot, further off than any landing is called with.
+        rally = build_rally((3.3, 3.6, 1.0), [Shot("serve", (1.5, 12.9), 1.9, 2.4), Shot("clear", (3.5, 0.6), 1.8, 2.4), Shot("clear", (2.6, 12.4), 1.8, None)])
+        clip = make_clip(CAMERA, SIZE, rally, fps=FPS, handheld=True, seed=3, tail_s=1.0, render=False)
+        track, stamps = seen(clip), times(len(clip.cameras))
+        analysis = find_hits(track, stamps, clip.cameras, detect_onsets(clip.audio, SAMPLE_RATE, min_gap_ms=ONSET_GAP_MS))
+        down = rally_shots(analysis, track, stamps, clip.cameras, court="singles")[-1].landing
+        self.assertEqual(down.call, "in")
+        frames = [i for i, t in enumerate(stamps) if down.time_ms < t < down.time_ms + LYING_MS][:4]
+        self.assertEqual(len(frames), 4)
+        for i in frames:
+            track[i] = tuple(clip.cameras[i].project(np.array([[2.6, NET_Y_M - 0.3, 0.03]]))[0])
+        analysis.flights[-1] = replace(analysis.flights[-1], indices=[*analysis.flights[-1].indices, *frames])
+        self.assertIsNone(rally_shots(analysis, track, stamps, clip.cameras, court="singles")[-1].landing)
+
     def test_a_last_shot_from_the_half_of_the_one_before_says_nothing_of_the_end(self):
         clip, analysis = self.analysed()
         last = analysis.hits.pop(-2)  # the reply before the last shot was missed

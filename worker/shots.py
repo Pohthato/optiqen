@@ -61,6 +61,7 @@ TO_THE_NET_S = 1.0  # no shot takes longer to reach the net
 INTO_THE_NET_SIGMAS = 4.0  # a shot read this many sigmas below the tape met the net, whatever came after: low lifts that crossed were read up to 2.9 below
 MIN_FLIGHT_MS = 100.0  # no shot comes down sooner
 LYING_MS = 800.0  # a shuttle that came down lies at least this long before anyone picks it up
+LYING_HEIGHT_M = 0.03  # the middle of a shuttle lying on the floor
 HITS_AFTER_THE_END = 2  # the most a rally's end leaves behind (the shuttle falling, picked up, sent back)
 STATE_STEP_S = 0.001
 BACKWARD_LIMIT_S = 0.02  # drag run backwards blows up; never trace a flight back further than this
@@ -68,7 +69,7 @@ DIFFERENCE_STEP = 1e-3  # central-difference step on the flight's position (m), 
 ONE_FLIGHT_RMS = 2.0  # pieces are one flight when fitting them together misses by at most this much more
 ONE_FLIGHT_SHARE = 0.8  # and still explains this share of every piece's detections
 EXPLAINED_RMS = 3.0  # a flight missing its detections by more than this many noise units is not one flight: its landing is not called
-LOST_LANDING_M = 3.0  # nor is one known no better than this: a spread wider than the court makes anything look out
+LOST_LANDING_M = 3.0  # nor is one known no better than this (its spread, or the shuttle then seen lying this far off): a spread wider than the court makes anything look out
 MIN_LAUNCH_M_S = 3.5  # even a soft net shot leaves the racket faster than this
 # The court calibration's own error, which the flight fit does not see: the camera-tracking
 # gate's budget (median floor error under 5 cm) until labelled real clips measure it; for speeds,
@@ -524,12 +525,19 @@ def rally_shots(
     def left_flight(j: int, fit: FlightFit, until_ms: float) -> float | None:
         """When, with shot j's flight still up or just down, the shuttle is first found
         elsewhere: at a sound or a hit after its last sighting that was no shot by the look of
-        its flight, or in several sightings of what was seen after it, off the flight or moving
-        before anyone could have picked it up; None when it never is."""
+        its flight; in several of the flight's own sightings after it came down, on the floor
+        far from where it did (the shuttle falling down the net, seen from behind, looks like
+        the flight going on beyond it, and then lies at the net's foot); or in several
+        sightings of what was seen after it, off the flight or moving before anyone could have
+        picked it up. None when it never is."""
         last_seen_ms = float(times[shot_flights[j][3][-1]])
         for time_ms in doubtful_ms:
             if last_seen_ms < time_ms < until_ms:
                 return time_ms
+        down = fit.position_at(until_ms)[:2]
+        elsewhere = [i for i in shot_flights[j][3] if until_ms <= times[i] < until_ms + LYING_MS and _lying_elsewhere(cameras[i], track[i], down)]
+        if len(elsewhere) >= OFF_FLIGHT_SIGHTINGS:
+            return float(times[elsewhere[0]])
         for piece in analysis.flights[shot_flights[j][1][-1] + 1 :]:
             off = [
                 i for i in piece.indices
@@ -622,6 +630,14 @@ def _not_to_be_called(landing: Landing, rms_px: float, jitter: float) -> bool:
     """Whether a landing says too little for a call: one flight does not explain what was seen,
     or it could be almost anywhere."""
     return rms_px > EXPLAINED_RMS * jitter or max(landing.covariance[0][0], landing.covariance[1][1]) > LOST_LANDING_M**2
+
+
+def _lying_elsewhere(camera, pixel, down: np.ndarray) -> bool:
+    """Whether a sighting after a flight came down at `down` cannot be the shuttle lying there:
+    on the floor, it is further from there than any landing is called with, or its ray never
+    meets the floor at all."""
+    floor = camera.pixel_to_plane(np.asarray(pixel, dtype=float)[None], z=LYING_HEIGHT_M)[0]
+    return not np.all(np.isfinite(floor)) or float(np.hypot(*(floor - down))) > LOST_LANDING_M
 
 
 def _may_be_sent_back(shots: list[ShotFacts], i: int, hits_ms: list[float]) -> bool:
