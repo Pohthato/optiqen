@@ -402,6 +402,33 @@ class RallyTests(unittest.TestCase):
         analysis.flights[-1] = replace(analysis.flights[-1], indices=[*analysis.flights[-1].indices, *frames])
         self.assertIsNone(rally_shots(analysis, track, stamps, clip.cameras, court="singles")[-1].landing)
 
+    def test_a_racket_heard_while_a_shot_that_may_have_met_the_net_was_still_up_played_it(self):
+        # Falling down the net makes no sound: a racket heard during a shot read as maybe meeting
+        # the net played it, its flight read too low to get over. A kink there with no sound may
+        # be the shuttle meeting the net, and keeps the landing.
+        clip, analysis = self.analysed()
+        track, stamps = seen(clip), times(len(clip.cameras))
+        last_hit_ms = max(hit.time_ms for hit in analysis.hits)
+        judged = _judged
+
+        def low(facts, court):  # the last shot read as maybe meeting the net
+            facts = judged(facts, court)
+            if facts.landing is None or facts.hit_ms < last_hit_ms - 50.0:
+                return facts
+            return replace(facts, landing=replace(facts.landing, p_over_net=0.6))
+
+        with mock.patch("shots._judged", side_effect=low):
+            down = rally_shots(analysis, track, stamps, clip.cameras, court="singles")[-1].landing
+            self.assertAlmostEqual(down.p_over_net, 0.6)
+            last = analysis.flights[-1]
+            frame = [i for i in last.indices if stamps[i] < down.time_ms][-4]
+            kink_ms = float(stamps[frame]) - 10.0
+            split = [*analysis.flights[:-1], replace(last, indices=[i for i in last.indices if i < frame]), replace(last, indices=[i for i in last.indices if i >= frame])]
+            silent, heard = (replace(analysis, flights=split, hits=[*analysis.hits, Hit(kink_ms, sound, kink_ms, "flights", None, frame, 40.0)]) for sound in (None, kink_ms))
+            with mock.patch("shots._a_shot", side_effect=lambda facts: facts.hit_ms < kink_ms - 1.0 and _a_shot(facts)):  # what it sent off is no shot
+                self.assertIsNotNone(rally_shots(silent, track, stamps, clip.cameras, court="singles")[-1].landing)
+                self.assertIsNone(rally_shots(heard, track, stamps, clip.cameras, court="singles")[-1].landing)
+
     def test_a_last_shot_from_the_half_of_the_one_before_says_nothing_of_the_end(self):
         clip, analysis = self.analysed()
         last = analysis.hits.pop(-2)  # the reply before the last shot was missed

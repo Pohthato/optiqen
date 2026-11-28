@@ -555,11 +555,18 @@ def rally_shots(
         """A shot's facts, to where it was played or came down. A flight that surely got over the
         net but was seen elsewhere (left_flight) did not come down where it says; one that may
         have met the net is judged by its clearance, since the shuttle then falls down the net.
-        When the other side hit next, after this flight was down (`answered`), what was seen off
-        it was no missed hit: that hit would have been answered by this side."""
+        But falling down the net makes no sound: with a racket heard after its last sighting and
+        before it came down, it was played (a reply its flight was read too low to reach) and
+        did not land, unless it surely met the net. When the other side hit next, after this
+        flight was down (`answered`), what was seen off it was no missed hit: that hit would
+        have been answered by this side."""
         facts = facts_of(j, fit, shifted, hit_ms, timing_sigma, hitter, serve, ends_ms)
-        if facts.landing is None or facts.landing.p_over_net < CALL_CONFIDENCE or answered:
+        if facts.landing is None or answered:
             return facts
+        if facts.landing.p_over_net < CALL_CONFIDENCE:
+            last_seen_ms = float(times[shot_flights[j][3][-1]])
+            heard_up = any(last_seen_ms < t < facts.landing.time_ms for t in heard_hits_ms)
+            return replace(facts, landing=None) if heard_up and not _surely_into_the_net(facts) else facts
         off_ms = left_flight(j, fit, facts.landing.time_ms)
         return facts if off_ms is None else facts_of(j, fit, shifted, hit_ms, timing_sigma, hitter, serve, min(off_ms, facts.landing.time_ms))
 
@@ -585,8 +592,10 @@ def rally_shots(
             continue
         racket.append((j, n, fit, shifted, hit_ms, timing_sigma, hitter))
 
-    doubtful_ms.extend(hits[n].time_ms for n, _, _, _ in shot_flights if n not in {entry[1] for entry in racket})
+    made_shots = {entry[1] for entry in racket}
+    doubtful_ms.extend(hits[n].time_ms for n, _, _, _ in shot_flights if n not in made_shots)
     doubtful_ms.sort()
+    heard_hits_ms = [hit.time_ms for n, hit in enumerate(hits) if n not in made_shots and hit.heard_ms is not None]  # rackets heard that made no shot
 
     shots, made = [], []  # made: what each shot's facts were worked out from
     for i, (j, n, fit, shifted, hit_ms, timing_sigma, hitter) in enumerate(racket):

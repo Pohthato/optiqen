@@ -384,6 +384,21 @@ On the 960 seen rally ends, seeds 9240–9719 in both worlds, it changed four ra
 - **Seed 9459 is not changed.** Its shuttle falling down the net becomes a silent hit of its own, which this rule does not look at.
 - **On the fresh seeds 9720–9839 it changed nothing**, in either world.
 
+**A racket heard while a shot that may have met the net was still up played it (2026-11-28).** A flight read too low to be sure of getting over (`p_over_net` under 0.95) may still have been played: a hit the finder heard, after the flight's last sighting and before it came down, which made no shot of its own. Falling down the net makes no sound, so that hit was a racket and the shot did not land. Its landing is not called, unless it surely met the net.
+
+On the 960 seen rally ends it changed ten rallies and lost no right call:
+
+| Seed | True end | Before | Now |
+| --- | --- | --- | --- |
+| 9470 | out | too close to call, wrong winner at 98 % | no end |
+| 9242, 9278, 9525 | out | too close to call | no end |
+| 9264 | in | too close to call | no end |
+| 9487 (both worlds), 9535, 9559 | net | too close to call | no end |
+| 9600 | in | no end, 3 shots | no end, 1 shot |
+
+- **Seed 9535 loses its right last shot** in the one world where it had it. Its end was not called either way.
+- **On the fresh seeds 9720–9839 it changed nothing**, in either world.
+
 ## Decisions
 
 - **The end comes from the flight.** The players' reactions and the sound could add to it later; the flight is what every camera tier sees.
