@@ -399,6 +399,19 @@ On the 960 seen rally ends it changed ten rallies and lost no right call:
 - **Seed 9535 loses its right last shot** in the one world where it had it. Its end was not called either way.
 - **On the fresh seeds 9720–9839 it changed nothing**, in either world.
 
+**A hit from the other side long after a shot came down answered nothing (2026-11-28).** When the next hit found is from the other side, a shot read as down was not looked at again: that side would have answered any hit missed in between. That holds only while the shuttle could not yet have been lying there. A hit from the other side more than 800 ms after the shot came down answered nothing, since the shuttle seen flying in between was played by two hits that were missed. Such a shot is now judged like any other, by where its shuttle was seen after it came down.
+
+On the 960 seen rally ends it changed three rallies:
+
+| Seed | True end | Before | Now |
+| --- | --- | --- | --- |
+| 9634 | out | in at 100 %, wrong winner | out at 100 %, right winner, right last shot |
+| 9375 | net | in at 100 % (the winner right by chance) | no end |
+| 9451 | net | no end, 5 shots | no end, 2 shots |
+
+- **On the fresh seeds 9720–9839 it changed one rally.** Seed 9825's last shot was wrong and its end in at 99.9 %, with the winner right by chance. It now has the right last shot and its end is too close to call (0.89 in).
+- **Seeds 9720–9839 are now seen**, for rally ends. The next fresh rally ends start at 9840, shots and hits still at 18180.
+
 ## Decisions
 
 - **The end comes from the flight.** The players' reactions and the sound could add to it later; the flight is what every camera tier sees.

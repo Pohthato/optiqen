@@ -550,18 +550,20 @@ def rally_shots(
         return None
 
     def followed(
-        j: int, fit: FlightFit, shifted: FlightFit, hit_ms: float, timing_sigma: float, hitter: str, serve: bool, ends_ms: float | None, answered: bool = False
+        j: int, fit: FlightFit, shifted: FlightFit, hit_ms: float, timing_sigma: float, hitter: str, serve: bool, ends_ms: float | None, answered_ms: float | None = None
     ) -> ShotFacts:
         """A shot's facts, to where it was played or came down. A flight that surely got over the
         net but was seen elsewhere (left_flight) did not come down where it says; one that may
         have met the net is judged by its clearance, since the shuttle then falls down the net.
         But falling down the net makes no sound: with a racket heard after its last sighting and
         before it came down, it was played (a reply its flight was read too low to reach) and
-        did not land, unless it surely met the net. When the other side hit next, after this
-        flight was down (`answered`), what was seen off it was no missed hit: that hit would
-        have been answered by this side."""
+        did not land, unless it surely met the net. When the other side hit next (at
+        `answered_ms`), after this flight was down but before the shuttle could have lain there,
+        what was seen off it was no missed hit: that hit would have been answered by this side.
+        A hit from the other side later than that answered nothing: the shuttle seen flying in
+        between was played by two hits that were missed."""
         facts = facts_of(j, fit, shifted, hit_ms, timing_sigma, hitter, serve, ends_ms)
-        if facts.landing is None or answered:
+        if facts.landing is None or answered_ms is not None and answered_ms < facts.landing.time_ms + LYING_MS:
             return facts
         if facts.landing.p_over_net < CALL_CONFIDENCE:
             last_seen_ms = float(times[shot_flights[j][3][-1]])
@@ -613,7 +615,7 @@ def rally_shots(
         ends_ms = min((t for t in ending if t is not None), default=None)
         still_up = bool(shots) and shots[-1].landing is None and hit_ms - shots[-1].hit_ms <= RALLY_GAP_S * 1000.0
         serve = hits[n].evidence.endswith("serve") and not still_up
-        shots.append(followed(j, fit, shifted, hit_ms, timing_sigma, hitter, serve, ends_ms, soon and following[6] != hitter))
+        shots.append(followed(j, fit, shifted, hit_ms, timing_sigma, hitter, serve, ends_ms, following[4] if soon and following[6] != hitter else None))
         made.append((j, fit, shifted, hit_ms, timing_sigma, hitter, serve))
     hits_ms = [hit.time_ms for hit in hits]
     end = _last_of_rally(shots, hits_ms)

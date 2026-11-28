@@ -429,6 +429,18 @@ class RallyTests(unittest.TestCase):
                 self.assertIsNotNone(rally_shots(silent, track, stamps, clip.cameras, court="singles")[-1].landing)
                 self.assertIsNone(rally_shots(heard, track, stamps, clip.cameras, court="singles")[-1].landing)
 
+    def test_a_hit_from_the_other_side_long_after_a_shot_came_down_answered_nothing(self):
+        # Two hits in a row were missed: the shot before them reads as down, but the shuttle is
+        # seen flying on long after, and the next hit found, from the other side, comes later
+        # than anyone picks up a shuttle that came down. It was played, not answered.
+        clip, analysis = self.analysed()
+        analysis.hits = [hit for k, hit in enumerate(analysis.hits) if k not in (3, 4)]
+        with mock.patch("shots._played_again", return_value=False):  # what followed could not be told for a reply
+            shots = rally_shots(analysis, seen(clip), times(len(clip.cameras)), clip.cameras, court="singles")
+        self.assertEqual([s.hitter for s in shots], [RALLY.contacts[k].hitter for k in (0, 1, 2, 5, 6)])
+        self.assertTrue(all(s.landing is None for s in shots[:-1]))
+        self.assertEqual(shots[-1].landing.call, "in")
+
     def test_a_last_shot_from_the_half_of_the_one_before_says_nothing_of_the_end(self):
         clip, analysis = self.analysed()
         last = analysis.hits.pop(-2)  # the reply before the last shot was missed
